@@ -1,0 +1,13 @@
+#!/bin/tcsh -f #-X -V
+#% open your browser in a search
+#% eliminates spaces
+#% turns / (for dates) into url-formatted /
+#
+# ex https://docs.google.com/#search/projects
+
+set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'` 
+#echo $str
+#set cmd="open -a ~/bin/chrome https://docs.google.com/#search/"$str
+#set cmd="open -a ~/bin/chrome 'https://drive.google.com/"
+#echo $cmd
+open -a ~/mise/bin/chrome 'https://drive.google.com/?authuser=0#search/'$str
