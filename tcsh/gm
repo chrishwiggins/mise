@@ -24,6 +24,7 @@
  
 set str=`echo $* | sed -e 's/\ /+/g' -e 's/\:/%3a/g' -e 's/\//%2F/g' -e 's/@/%40/g'`
 echo $str
-set cmd="open -a ~/mise/bin/chrome http://mail.google.com/mail/u/0/#search/"$str
+#set cmd="open -a ~/mise/bin/chrome http://mail.google.com/mail/u/0/#search/"$str
+set cmd="open http://mail.google.com/mail/u/0/#search/"$str
 echo $cmd
 $cmd

@@ -10,3 +10,10 @@ alias mi 'mv -i'
 alias up "cd .."
 alias cd-htm cd /Users/wiggins/Documents/public_html
 alias cd-mise cd $mise
+alias dump "learn;pbpaste > `datestr`"
+alias please sudo
+alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Resources/jsc
+alias dusort "learn;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`"
+alias rstudio open /Applications/RStudio.app/
+alias permute "perl -MList::Util=shuffle -e 'print shuffle <>'"
+alias hai open http://example.com
