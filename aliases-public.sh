@@ -17,3 +17,6 @@ alias dusort "learn;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`"
 alias rstudio open /Applications/RStudio.app/
 alias permute "perl -MList::Util=shuffle -e 'print shuffle <>'"
 alias hai open http://example.com
+alias chrome "open ~/mise/bin/chrome"
+alias gread "fox  'http://www.google.com/reader/view/#overview-page'"
+alias fox "open -a 'Firefox' \!:*"
