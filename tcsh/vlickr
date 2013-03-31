@@ -1,0 +1,21 @@
+#!/bin/tcsh -f #-X -V
+#% turns spaces into +
+#% turns + into %2B
+set str=`echo $* | sed -e 's/+/%2B/g' | sed -e 's/ /+/g' `
+open 'http://www.flickr.com/search/show/?q='$str'&ss=0&ct=0&mt=videos&adv=1'
+
+#WAS 
+#open 'http://flickr.com/search/?q='$str'&w=all'
+#open 'http://www.flickr.com/search/show/?q='$str
+#is (restricts to video only, no photo)
+
+# example: http://flickr.com/search/?q=%22folding%20bike%22&w=all
+# example: http://www.flickr.com/search/show/?q=bearshark&ss=0&ct=0&mt=photos&adv=1
+# http://www.flickr.com/search/show/?q=killer+whale&ss=0&ct=0&mt=videos&adv=1
+#
+# http://www.flickr.com/search/show/?q=humpback%20whale&ss=0&ct=0&mt=videos&adv=1
+# http://www.flickr.com/search/show/?q=humpback+whale&ss=0&ct=0&mt=videos&adv=1
+#
+#
+# a phrase+special what " about quotes"
+# http://www.flickr.com/search/?mt=videos&adv=1&w=all&q=a+phrase%2Bspecial+what+%22+about+quotes%22&m=text
