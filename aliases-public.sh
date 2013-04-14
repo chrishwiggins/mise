@@ -20,3 +20,5 @@ alias hai open http://example.com
 alias chrome "open ~/mise/bin/chrome"
 alias gread "fox  'http://www.google.com/reader/view/#overview-page'"
 alias fox "open -a 'Firefox' \!:*"
+alias mm "open https://mail.google.com/mail/u/0/x/"
+alias inpr "open http://www.npr.org/infiniteplayer/"
