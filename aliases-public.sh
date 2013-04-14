@@ -22,3 +22,18 @@ alias gread "fox  'http://www.google.com/reader/view/#overview-page'"
 alias fox "open -a 'Firefox' \!:*"
 alias mm "open https://mail.google.com/mail/u/0/x/"
 alias inpr "open http://www.npr.org/infiniteplayer/"
+
+# google stuff
+#alias gcal fox http://www.google.com/calendar/render
+#alias gcal camino http://www.google.com/calendar/render
+#alias gcal camino https://www.google.com/calendar/
+#alias gcal fox https://www.google.com/calendar/
+#alias gcal chrome http://www.google.com/calendar/render
+alias gcal fox https://www.google.com/calendar/b/0/render
+# NB meant for google <- /usr/local/bin/google
+alias gc google calendar add
+
+# taking/using quicknotes:
+alias v 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`; vi $vstr; echo vstr=$vstr'
+alias pv 'pbcopy < $vstr'
+alias sv 'source $vstr'
