@@ -1,0 +1,2 @@
+#!/bin/tcsh -f #-X -V
+grep -v -e '^[ ]*$'

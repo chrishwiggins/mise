@@ -1,0 +1,15 @@
+/usr/bin/perl -pe 's/[^[:ascii:]]/+/g' \
+    | expand \
+    | sed -e 's/^[ ]*//' -e 's/[ ]*$//' -e 's/ [ ]*/ /g' \
+    | sed -e 's/^[> ]*//' \
+    | sed -e 's/ =$//' \
+    | sed -e 's/=$/-/' \
+    | sed -e 's/[ ]*=20$//'\
+    | sed -e 's/=91/'"'"'/g' \
+    | sed -e 's/=92/`/g' \
+    | sed -e 's/=96/-/g' \
+    | tr '\r' '\n'  \
+    | uniq
+
+
+# cf http://www.w3schools.com/TAGS/ref_urlencode.asp

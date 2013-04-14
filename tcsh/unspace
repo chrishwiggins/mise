@@ -1,0 +1,6 @@
+#/bin/tcsh -f -X -V
+
+# replace contents of clipboard with something in ascii w/o spaces
+# ex: Jan-Willem Van de Meent
+ 
+pbpaste | /usr/bin/perl -pe 's/[^[:ascii:]]/-/g' | sed 's/[ ,][ ,]*/_/g' | sed -e 's/^[ ]*//' -e 's/[ ]*$//' -e 's/^_//' -e 's/_$//' | pbcopy
