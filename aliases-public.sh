@@ -33,7 +33,25 @@ alias gcal fox https://www.google.com/calendar/b/0/render
 # NB meant for google <- /usr/local/bin/google
 alias gc google calendar add
 
+#news
+#alias npr "open -a RealPlayer rtsp://real.npr.na-central.speedera.net/real.npr.na-central/news.db.rm"
+#alias npr "open 'http://www.npr.org/player/v2/mediaPlayer.html?action=1&t=4&islist=false';osascript -e 'set volume 3'"
+#alias npr "open 'http://stitcher.com/listen.php?fid=4801'"
+#alias bbc "open -a RealPlayer http://www.bbc.co.uk/worldservice/news/summary.ram"
+#alias bbc "open -a RealPlayer http://www.bbc.co.uk/worldservice/meta/tx/nb/summary5min_au_nb.ram"
+#alias bbc "open 'http://www.bbc.co.uk/worldservice/audioconsole/?stream=news_bulletin';osascript -e 'set volume 5'"
+alias bbc "open 'http://www.bbc.co.uk/worldservice/audioconsole/?stream=news_bulletin'"
+#alias 1010 "open 'http://infinity.wm.llnwd.net/infinity_wins-am?MSWMExt=.asf'"
+alias 1010 "open 'http://69.28.176.133:80/infinity_wins-am?MSWMExt=.asf'"
+#alias 880 "open 'http://infinity.wm.llnwd.net/infinity_wbcs-am?MSWMExt=.asf'"
+
 # taking/using quicknotes:
 alias v 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`; vi $vstr; echo vstr=$vstr'
 alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
+
+# meta
+alias aalias 'echo "alias \!*" >> $cwaliases ; learn '
+alias palias 'echo "alias \!*" >> $paliases ; learn '
+
+
