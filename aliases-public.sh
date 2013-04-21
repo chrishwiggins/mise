@@ -43,17 +43,21 @@ alias bbc "open 'http://www.bbc.co.uk/worldservice/audioconsole/?stream=news_bul
 alias 1010 "open 'http://69.28.176.133:80/infinity_wins-am?MSWMExt=.asf'"
 #alias 880 "open 'http://infinity.wm.llnwd.net/infinity_wbcs-am?MSWMExt=.asf'"
 
-# taking/using quicknotes:
-alias v 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`; vi $vstr; echo vstr=$vstr'
-alias pv 'pbcopy < $vstr'
-alias sv 'source $vstr'
+
 
 # meta (aliases to help make aliases) 
 alias aalias 'echo "alias \!*" >> $cwaliases ; learn '
 alias palias 'echo "alias \!*" >> $paliases ; learn '
 alias learn "source $cwaliases ; source $cwpaliases"
 alias teach "vi + $cwaliases;vi + $cwpaliases"
+alias miseup "cd-mise;gugc"
 
 # misc:
 alias sniff open /Applications/iStumbler.app/
 alias estrip "pbpaste | fix | tr ' , :;[]=<>' '\n' | grep @ | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' | pbcopy"
+## misc auxfile tricks:
+alias avail "vi ~/available.txt; pbcopy < ~/available.txt"
+### taking/using quicknotes:
+alias v 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`; vi $vstr; echo vstr=$vstr'
+alias pv 'pbcopy < $vstr'
+alias sv 'source $vstr'
