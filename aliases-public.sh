@@ -25,6 +25,8 @@ alias gcomp 'open https://mail.google.com/mail/u/0/#compose/\!*'
 alias mcomp "open 'https://mail.google.com/mail/u/0/x/?&v=b&eot=1&pv=tl&cs=b'"
 alias mm "open https://mail.google.com/mail/u/0/x/"
 alias gread "fox  'http://www.google.com/reader/view/#overview-page'"
+alias frm "gm from:\!*"
+alias to "gm to:\!*"
 #alias gcal fox http://www.google.com/calendar/render
 #alias gcal camino http://www.google.com/calendar/render
 #alias gcal camino https://www.google.com/calendar/
@@ -54,11 +56,11 @@ alias palias 'echo "alias \!*" >> $paliases ; learn '
 alias learn "source $cwaliases ; source $cwpaliases"
 alias teach "vi + $cwaliases;vi + $cwpaliases"
 alias gugc "git pull origin master;git commit -a;git push origin master"
-alias miseup "cd-mise;gugc"
+alias miseup "cd-mise;gugc;cd -"
 
 # misc:
 alias sniff open /Applications/iStumbler.app/
-alias estrip "pbpaste | fix | tr ' , :;[]=<>' '\n' | grep @ | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' | pbcopy"
+alias estrip "pbpaste | fix | tr ' , {}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v wiggins@tantanmen | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' | pbcopy"
 ## misc auxfile tricks:
 alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
 alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
