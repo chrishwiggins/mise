@@ -4,5 +4,5 @@ open 'http://c.brightcove.com/services/viewer/federated_f9?&width=320&height=180
 
 #reference (look here if they change their url):
 #
-#wiggins@tantanmen{doc}93: curl -silent http://www.weather.com/weather/hourbyhour/graph/10011 | grep playerID
+#wiggins@tantanmen{doc}93: curl -silent http://www.weather.com/weather/hourbyhour/graph/10027 | grep playerID
         #<div style="display: none;" class="wx-video-player-attributes" data-player-attr='{"adposition":"","auto":"false","gridSize":"wx-grid2of6","description":"false", "relatedLinks":"false", "forceAutoplay":"","primary":"true","headline":"true","playlist":"false","companionAdPos":""}' data-video-player='{"width":"320","height":"180","playerID":"1543561925001","playerKey":"AQ~~,AAAAAAQxtuk~,N9g8AOtC12cVY38ImD90BQgAYKWuO0xm","videoID":"ref:","adServerURL":"http://pubads.g.doubleclick.net/gampad/ads?env=vp&gdfp_req=1&output=xml_vast2&unviewed_position_start=1"}'></div>
