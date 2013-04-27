@@ -70,3 +70,5 @@ alias avail "vi ~/available.txt; pbcopy < ~/available.txt"
 alias v 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`; vi $vstr; echo vstr=$vstr'
 alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
+#alias hg 'history 99999999999999 | grep \!:1 | grep -v hg'
+alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
