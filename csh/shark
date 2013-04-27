@@ -1,0 +1,9 @@
+#!/bin/tcsh -f #-X -V
+#% turns + into URL spaces (%22)
+#% turns spaces into +
+
+set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
+echo $str
+open 'http://grooveshark.com/#!/search?q='$str'&btnG=Search'
+# example:
+# open 'http://grooveshark.com/#!/search?q=stuff+%22a+phrase%22'$str'&btnG=Search'
