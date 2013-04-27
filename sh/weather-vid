@@ -1,0 +1,8 @@
+#target url:
+
+open 'http://c.brightcove.com/services/viewer/federated_f9?&width=320&height=180&flashID=player_TWC_element_1&id=player_TWC_element_1&bgcolor=%23FFFFFF&playerID=1543561925001&playerKey=AQ~~%2CAAAAAAQxtuk~%2CN9g8AOtC12cVY38ImD90BQgAYKWuO0xm&isVid=true&wmode=transparent&isUI=true&dynamicStreaming=true&videoID=ref%3A647&autoStart=true&includeAPI=true&templateLoadHandler=TWC.players%5B0%5D.templateLoaded&adServerURL=http%3A%2F%2Fpubads.g.doubleclick.net%2Fgampad%2Fads%3Fenv%3Dvp%26gdfp_req%3D1%26output%3Dxml_vast2%26unviewed_position_start%3D1&debuggerID=&startTime=1350561136302'
+
+#reference (look here if they change their url):
+#
+#wiggins@tantanmen{doc}93: curl -silent http://www.weather.com/weather/hourbyhour/graph/10011 | grep playerID
+        #<div style="display: none;" class="wx-video-player-attributes" data-player-attr='{"adposition":"","auto":"false","gridSize":"wx-grid2of6","description":"false", "relatedLinks":"false", "forceAutoplay":"","primary":"true","headline":"true","playlist":"false","companionAdPos":""}' data-video-player='{"width":"320","height":"180","playerID":"1543561925001","playerKey":"AQ~~,AAAAAAQxtuk~,N9g8AOtC12cVY38ImD90BQgAYKWuO0xm","videoID":"ref:","adServerURL":"http://pubads.g.doubleclick.net/gampad/ads?env=vp&gdfp_req=1&output=xml_vast2&unviewed_position_start=1"}'></div>
