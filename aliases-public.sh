@@ -55,6 +55,7 @@ alias aalias 'echo "alias \!*" >> $cwaliases ; learn '
 alias palias 'echo "alias \!*" >> $paliases ; learn '
 alias learn "source $cwaliases ; source $cwpaliases"
 alias teach "vi + $cwaliases;vi + $cwpaliases"
+alias pteach "vi + $cwpaliases"
 alias gugc "git pull origin master;git commit -a;git push origin master"
 alias miseup "cd-mise;gugc;cd -"
 
@@ -72,3 +73,6 @@ alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
 #alias hg 'history 99999999999999 | grep \!:1 | grep -v hg'
 alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
+alias similar "go related:\!:*"
+#alias repof "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/; touch mat/.DS_store dat/.DS_store doc/.DS_store fig/.DS_store log/.DS_store ref/.DS_store src/.DS_store out/.DS_store aux/.DS_store "
+alias repo "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/"
