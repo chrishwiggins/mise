@@ -14,13 +14,16 @@ setenv odir "sent/`date +%yy%mm%dd_%Hh%Mm%Ss`"
 mkdir -pv $odir
 
 foreach thing (*.eml)
-    echo "sending" $thing "..."
     if ($#argv > 0) then
       if ( -e $afile ) then
+        echo "sending" $thing "with attachment file" $afile "..."
         cat /dev/null | mutt -H $thing -a $afile
-       else
-        cat /dev/null | mutt -H $thing 
+      else
+        echo "error: "$afile" does not exist"
       endif
+      else
+        echo "sending" $thing "with no attachment..."
+        cat /dev/null | mutt -H $thing 
     endif
     echo "... $thing done"
     mv -f $thing $odir
