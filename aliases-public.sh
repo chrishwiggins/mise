@@ -80,3 +80,5 @@ alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nol
 alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
 alias dsnyc "open -a safari https://plus.google.com/u/0/communities/102074015406128769868"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
+alias http "open http://\!*"
+
