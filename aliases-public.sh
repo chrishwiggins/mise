@@ -15,7 +15,7 @@ alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/R
 alias dusort "learn;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`"
 alias rstudio open /Applications/RStudio.app/
 alias permute "perl -MList::Util=shuffle -e 'print shuffle <>'"
-alias hai open http://example.com
+alias hai clean-browser http://example.com
 alias chrome "open ~/mise/bin/chrome"
 alias fox "open -a 'Firefox' \!:*"
 alias inpr "open http://www.npr.org/infiniteplayer/"
@@ -81,4 +81,4 @@ alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2c
 alias dsnyc "open -a safari https://plus.google.com/u/0/communities/102074015406128769868"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
 alias http "open http://\!*"
-
+alias clean-browser 'open /Applications/Camino.app \!*'
