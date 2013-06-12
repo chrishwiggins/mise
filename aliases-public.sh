@@ -82,3 +82,5 @@ alias dsnyc "open -a safari https://plus.google.com/u/0/communities/102074015406
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
 alias http "open http://\!*"
 alias clean-browser 'open /Applications/Camino.app \!*'
+alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
+alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
