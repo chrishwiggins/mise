@@ -15,7 +15,7 @@ alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/R
 alias dusort "learn;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`"
 alias rstudio open /Applications/RStudio.app/
 alias permute "perl -MList::Util=shuffle -e 'print shuffle <>'"
-alias hai clean-browser http://example.com
+alias hai open http://example.com
 alias chrome "open ~/mise/bin/chrome"
 alias fox "open -a 'Firefox' \!:*"
 alias inpr "open http://www.npr.org/infiniteplayer/"
@@ -84,3 +84,5 @@ alias http "open http://\!*"
 alias clean-browser 'open /Applications/Camino.app \!*'
 alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
 alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
+alias mdkir mkdir
+alias mkddir mkdir
