@@ -1,7 +1,7 @@
 umask 022
 
 # cw-specific aliases
-alias learn "source ~//Documents/Scripts/aux/aliases.sh;source  ~/mise/aliases-public.sh"
+alias learn "source $cwaliases; source  ~/mise/aliases-public.sh"
 alias cset "set path = ( /usr/local/bin ~//Documents/Scripts/perl ~//Documents/Scripts/osa ~//Documents/Scripts/sh/csh ~//bin /opt/local/bin /usr/local/mysql/bin $path /opt/local/libexec/gnubin    /usr/local/sbin ~/mise/* )"
 
 # set some variables
