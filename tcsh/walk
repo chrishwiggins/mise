@@ -1,8 +1,0 @@
-#!/bin/tcsh -f #-X -V
-#% wraps around google maps, turns + into quotes
-#% turns spaces into URL spaces (%22)
-#% walk. (cf http://stackoverflow.com/questions/5700669/how-do-you-default-to-walking-directions-when-you-open-a-google-maps-url )
-
-set str=`echo $* | sed -e 's/ /%20/g'`
-echo $str
-open 'http://maps.google.com/maps?um=1&dirflg=w&tab=wl&hl=en&lr=&q='$str
