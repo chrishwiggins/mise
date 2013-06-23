@@ -86,3 +86,4 @@ alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
 alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias mdkir mkdir
 alias mkddir mkdir
+alias json-grep jgrep
