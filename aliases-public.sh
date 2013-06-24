@@ -87,4 +87,3 @@ alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias mdkir mkdir
 alias mkddir mkdir
 alias json-grep jgrep
-alias jc "open 'http://grooveshark.com/#\!/album/Handel+G+F+Giulio+Cesare+In+Egitto+Opera+Disc+1/7672445'"
