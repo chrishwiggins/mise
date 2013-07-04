@@ -73,7 +73,7 @@ alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
 #alias hg 'history 99999999999999 | grep \!:1 | grep -v hg'
 alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
-alias similar "go related:\!:*"
+alias similar "gsearch related:\!:*"
 #alias repof "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/; touch mat/.DS_store dat/.DS_store doc/.DS_store fig/.DS_store log/.DS_store ref/.DS_store src/.DS_store out/.DS_store aux/.DS_store "
 alias repo "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/"
 alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
@@ -87,3 +87,4 @@ alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias mdkir mkdir
 alias mkddir mkdir
 alias json-grep jgrep
+alias g gsearch
