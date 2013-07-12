@@ -88,3 +88,4 @@ alias mdkir mkdir
 alias mkddir mkdir
 alias json-grep jgrep
 alias g gsearch
+alias casc "open 'https://www.cascadeproject.com/#/dashboard'"
