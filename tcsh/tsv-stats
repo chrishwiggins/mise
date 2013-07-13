@@ -43,7 +43,7 @@ else
 
   #wc -l $outfile
 
-  echo "++ starting awk-sort-uniq-sort over "$nrows" rows at "`date`
+  echo "++ starting awk-sort-uniq-sort over "$nrows" rows of "$ncols" cols at "`date`
   source $outfile
   echo "++ ending awk-sort-uniq-sort at "`date`
   #rm $outfile
