@@ -2,6 +2,10 @@
 
 # little script to make sense of tsv files by awking sorting counting
 # 
+# when i get my hands on a TSV someone else made I always start with
+# the same exploratory data analysis, so I wrote a script to do it.
+# not yet done: compute min/max/mean for each column (valid only for numerical columns)
+#
 # NB:
 # 1. assumes tsv
 # 2. you must be in the directory with the input (.tsv) file
