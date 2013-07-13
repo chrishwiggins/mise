@@ -89,3 +89,5 @@ alias mkddir mkdir
 alias json-grep jgrep
 alias g gsearch
 alias casc "open 'https://www.cascadeproject.com/#/dashboard'"
+alias tend "supdate;backup-tantanmen &;brew-tend"
+alias brew-tend "brew upgrade; brew update;brew doctor"
