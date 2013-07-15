@@ -65,11 +65,11 @@ else
 
   mv $auxdir/* $outdir
 
+  # check for duplicate columns using dupseek
+  dupseek -b report -f hn $outdir/*-stats.asc >> $outdir/$report
+
   # OUTPUT:
   more $outdir/$report
-
-  # check for duplicate columns using dupseek
-  dupseek -b report -f hn $outdir/*-stats.asc
 
 # end of the '2 arguments?' if 
 endif 
