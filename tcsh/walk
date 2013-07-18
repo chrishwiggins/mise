@@ -1,0 +1,11 @@
+#!/bin/tcsh -f #-X -V
+
+# example:
+# wiggins@tantanmen{cli-fu}144: walk "united nations, nyc" "time square, nyc"
+# "23 mins"
+# wiggins@tantanmen{cli-fu}145: 
+
+
+set orig=`echo $1|sed -e 's/ /+/g'`
+set dest=`echo $2|sed -e 's/ /+/g'`
+curl --silent 'http://maps.googleapis.com/maps/api/directions/json?origin='$orig'&destination='$dest'&sensor=true&mode=walking' | jq '.routes|.[0]|.legs|.[0]|.duration|.text'
