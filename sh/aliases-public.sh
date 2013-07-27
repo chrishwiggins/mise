@@ -21,10 +21,14 @@ alias fox "open -a 'Firefox' \!:*"
 alias inpr "open http://www.npr.org/infiniteplayer/"
 
 # google-fu
+alias drive "open /Applications/Google\ Drive.app/"
+alias filter "open 'https://mail.google.com/mail/u/0/#settings/filters'"
+alias dsnyc "open -a safari https://plus.google.com/u/0/communities/102074015406128769868"
+alias star "open 'https://mail.google.com/mail/u/0/?tab=mm#starred'"
 alias gcomp 'open https://mail.google.com/mail/u/0/#compose/\!*'
 alias mcomp "open 'https://mail.google.com/mail/u/0/x/?&v=b&eot=1&pv=tl&cs=b'"
 alias mm "open https://mail.google.com/mail/u/0/x/"
-alias gread "fox  'http://www.google.com/reader/view/#overview-page'"
+#alias gread "fox  'http://www.google.com/reader/view/#overview-page'"
 alias frm "gm from:\!*"
 alias to "gm to:\!*"
 #alias gcal fox http://www.google.com/calendar/render
@@ -78,23 +82,29 @@ alias similar "gsearch related:\!:*"
 alias repo "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/"
 alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
 alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
-alias dsnyc "open -a safari https://plus.google.com/u/0/communities/102074015406128769868"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
 alias http "open http://\!*"
 alias clean-browser 'open /Applications/Camino.app \!*'
 alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
 alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
-alias mdkir mkdir
-alias mkddir mkdir
 alias json-grep jgrep
 alias g gsearch
 alias casc "open 'https://www.cascadeproject.com/#/dashboard'"
-alias tend "supdate;backup-tantanmen &;brew-tend"
-alias brew-tend "brew upgrade; brew update;brew doctor; cabal update;  ghc-pkg check --simple-output"
-alias filter "open 'https://mail.google.com/mail/u/0/#settings/filters'"
+alias tend "backup-tantanmen&;supdate&;sweep&;brew-tend&;cd ~;dusort"
+alias brew-tend "brew upgrade; brew update;brew doctor" 
+alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 alias ogit "open 'https://github.com/chrishwiggins?tab=repositories'"
 alias normalize "sed -f $mise/sed/normalize "
 alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
 alias cdc "pwd | normalize | pbcopy"
 alias cdp 'cd `pbpaste`'
 alias mise "open https://github.com/chrishwiggins/mise"
+
+# typing is hard
+alias mdkir mkdir
+alias mkddir mkdir
+alias oepn open
+
+
+#alias onion 'open http://www.theonion.com/content/index'
+alias onion echo "back to work"
