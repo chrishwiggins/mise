@@ -90,9 +90,11 @@ alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
 alias casc "open 'https://www.cascadeproject.com/#/dashboard'"
-alias tend "backup-tantanmen&;supdate&;sweep&;brew-tend&;cd ~;dusort"
+alias tend "backup-tantanmen&;supdate&;sweep&;brew-tend&pip-tend&;conda-tend&;cd ~;dusort"
 alias brew-tend "brew upgrade; brew update;brew doctor" 
+alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
+alias conda-tend "/tools/anaconda/bin/conda update conda"
 alias ogit "open 'https://github.com/chrishwiggins?tab=repositories'"
 alias normalize "sed -f $mise/sed/normalize "
 alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
@@ -108,3 +110,4 @@ alias oepn open
 
 #alias onion 'open http://www.theonion.com/content/index'
 alias onion echo "back to work"
+alias citibike open http://www.citibikenyc.com/stations
