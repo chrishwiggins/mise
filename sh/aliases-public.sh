@@ -90,7 +90,7 @@ alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
 alias casc "open 'https://www.cascadeproject.com/#/dashboard'"
-alias tend "backup-tantanmen&;supdate&;sweep&;brew-tend&pip-tend&;conda-tend&;cd ~;dusort"
+alias tend "backup-tantanmen&;supdate&;sweep&;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 alias brew-tend "brew upgrade; brew update;brew doctor" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
@@ -101,13 +101,21 @@ alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
 alias cdc "pwd | normalize | pbcopy"
 alias cdp 'cd `pbpaste`'
 alias mise "open https://github.com/chrishwiggins/mise"
+alias citibike open http://www.citibikenyc.com/stations
 
 # typing is hard
 alias mdkir mkdir
 alias mkddir mkdir
 alias oepn open
+alias fidn find
+alias gttp http
 
 
 #alias onion 'open http://www.theonion.com/content/index'
 alias onion echo "back to work"
-alias citibike open http://www.citibikenyc.com/stations
+
+alias appstore "open /Applications/App\ Store.app/"
+alias st 'open /Applications/Sublime\ Text\ 2.app/'
+alias st2 '/Applications/Sublime\ Text\ 2.app/Contents/SharedSupport/bin/subl'
+
+alias get git clone

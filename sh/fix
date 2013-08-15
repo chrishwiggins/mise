@@ -1,5 +1,5 @@
-/usr/bin/perl -pe 's/[^[:ascii:]]/+/g' \
-    | expand \
+# /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' \
+expand \
     | sed -e 's/^[ ]*//' -e 's/[ ]*$//' -e 's/ [ ]*/ /g' \
     | sed -e 's/^[> ]*//' \
     | sed -e 's/ =$//' \
