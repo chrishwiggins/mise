@@ -60,7 +60,7 @@ alias palias 'echo "alias \!*" >> $paliases ; learn '
 alias learn "source $cwaliases ; source $cwpaliases"
 alias teach "vi + $cwaliases;vi + $cwpaliases"
 alias pteach "vi + $cwpaliases"
-alias gugc "git pull origin master;git commit ;git push origin master"
+alias gugc "git pull origin master;git commit -a ;git push origin master"
 alias miseup "cd-mise;gugc;cd -"
 
 # misc:
@@ -89,7 +89,6 @@ alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
 alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
-alias casc "open 'https://www.cascadeproject.com/#/dashboard'"
 alias tend "backup-tantanmen&;supdate&;sweep&;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 alias brew-tend "brew upgrade; brew update;brew doctor" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
