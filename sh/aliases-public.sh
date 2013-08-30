@@ -118,3 +118,6 @@ alias st 'open /Applications/Sublime\ Text\ 2.app/'
 alias st2 '/Applications/Sublime\ Text\ 2.app/Contents/SharedSupport/bin/subl'
 
 alias get git clone
+
+#alias airport 'open /Applications/Utilities/AirPort\ Admin\ Utility.app/'
+alias airport 'open /Applications/Utilities/AirPort\ Utility.app/'
