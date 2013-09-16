@@ -1,5 +1,5 @@
 #/bin/tcsh -f -X -V
-ls -1 | grep ' ' | sed -e 's/ /_/g' | sed -f ~/Documents/Scripts/sed/normallscript >! /tmp/new_$$
-ls -1 | grep ' ' | sed -f ~/Documents/Scripts/sed/normallscript >! /tmp/old_$$
+ls -1 | grep ' ' | sed -e 's/ /_/g' | sed -f /Users/wiggins/mise//sed/normalize  >! /tmp/new_$$
+ls -1 | grep ' ' | sed -f /Users/wiggins/mise//sed/normalize  >! /tmp/old_$$
 paste /tmp/old_$$ /tmp/new_$$ | awk '{print "mv -i "$0}' >! /tmp/mvs.sh
 source /tmp/mvs.sh

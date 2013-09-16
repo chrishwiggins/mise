@@ -8,8 +8,7 @@ expand \
     | sed -e 's/=91/'"'"'/g' \
     | sed -e 's/=92/`/g' \
     | sed -e 's/=96/-/g' \
-    | tr '\r' '\n'  \
-    | uniq
+    | tr '\r' '\n'  
 
 
 # cf http://www.w3schools.com/TAGS/ref_urlencode.asp
