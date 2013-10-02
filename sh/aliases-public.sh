@@ -102,12 +102,21 @@ alias cdp 'cd `pbpaste`'
 alias mise "open https://github.com/chrishwiggins/mise"
 alias citibike open http://www.citibikenyc.com/stations
 
-# typing is hard
+# spelling while typing is hard
 alias mdkir mkdir
 alias mkddir mkdir
 alias oepn open
 alias fidn find
 alias gttp http
+alias alais alias
+alias moer more
+alias mroe more
+alias pbvx "pbpaste >! /tmp/$$_pbcx; source /tmp/$$_pbcx; rm -f /tmp/$$_pbcx"
+alias pbcx "pbcopy;pbvx"
+alias mor more
+alias omail open /Applications/Mail.app/
+alias poen open
+alias pu up
 
 
 #alias onion 'open http://www.theonion.com/content/index'
@@ -123,3 +132,4 @@ alias get git clone
 alias airport 'open /Applications/Utilities/AirPort\ Utility.app/'
 alias els "echo 'For reasons explained in detail at http://bactra.org/weblog/864.html, I will not review for any Elsevier publication. I look forward to assisting your journal in the future, after it switches publishers.' | pbcopy"
 alias duplist 'dupseek -f hn .'
+alias hh history -h
