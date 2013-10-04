@@ -133,3 +133,4 @@ alias airport 'open /Applications/Utilities/AirPort\ Utility.app/'
 alias els "echo 'For reasons explained in detail at http://bactra.org/weblog/864.html, I will not review for any Elsevier publication. I look forward to assisting your journal in the future, after it switches publishers.' | pbcopy"
 alias duplist 'dupseek -f hn .'
 alias hh history -h
+alais grr g rstats
