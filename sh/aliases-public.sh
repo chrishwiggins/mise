@@ -103,6 +103,8 @@ alias mise "open https://github.com/chrishwiggins/mise"
 alias citibike open http://www.citibikenyc.com/stations
 
 # spelling while typing is hard
+alias mdkdir mkdir
+alias duff diff
 alias mdkir mkdir
 alias mkddir mkdir
 alias oepn open
@@ -134,3 +136,7 @@ alias els "echo 'For reasons explained in detail at http://bactra.org/weblog/864
 alias duplist 'dupseek -f hn .'
 alias hh history -h
 alais grr g rstats
+alias urls "fix | tr ' <>[]()\\' '\n' | G http"
+alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
+alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
+alias deck onion
