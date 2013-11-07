@@ -37,6 +37,7 @@ alias to "gm to:\!*"
 #alias gcal fox https://www.google.com/calendar/
 #alias gcal chrome http://www.google.com/calendar/render
 alias gcal fox https://www.google.com/calendar/b/0/render
+alias ccal chrome https://www.google.com/calendar/b/0/render
 # NB: 'gc' intended for use with google <- /usr/local/bin/google
 alias gc google calendar add
 
@@ -72,7 +73,7 @@ alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's
 alias no "pbcopy < ~/.no.txt"
 alias avail "vi ~/available.txt; pbcopy < ~/available.txt"
 ### taking/using quicknotes:
-alias v 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`; vi $vstr; echo vstr=$vstr'
+alias v 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`; vi $vstr; echo vstr=$vstr'
 alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
 #alias hg 'history 99999999999999 | grep \!:1 | grep -v hg'
@@ -89,7 +90,8 @@ alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
 alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
-alias tend "backup-tantanmen&;supdate&;sweep&;brew-tend;pip-tend;conda-tend;cd ~;dusort"
+alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
+alias datestr date +%Y-%m-%dT%H:%M:%S
 alias brew-tend "brew upgrade; brew update;brew doctor" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
