@@ -1,0 +1,8 @@
+#!/bin/tcsh -f #-X -V
+#% script for google images
+#% wraps around google, turns + into quotes
+#% turns spaces into URL spaces (%22)
+
+set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
+echo $str
+open 'http://www.google.com/images?hl=en&lr=&safe=off&c2coff=1&q='$str'&um=1&ie=UTF-8&source=og&sa=N&tab=wi&biw=1255&bih=668'
