@@ -1,0 +1,19 @@
+#!/bin/tcsh -f #-X -V
+#% turns + into quotes
+#% turns spaces into URL spaces (%22)
+
+set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /%20/g' `
+echo $str
+#WAS 
+#open 'http://flickr.com/search/?q='$str'&w=all'
+#open 'http://www.flickr.com/search/show/?q='$str
+
+#is (restricts to photo only, no video)
+#open -a /Applications/Google\ Chrome.app/ --args --kiosk 'http://www.flickr.com/search/show/?q='$str'&ss=0&ct=0&mt=photos&adv=1'
+open 'http://www.flickr.com/search/show/?q='$str'&ss=0&ct=0&mt=photos&adv=1'
+
+
+# example: http://www.google.com/search?hl=en&lr=&safe=off&c2coff=1&q=%22albert+einstein%22+site%3Acolumbia.edu&btnG=Search
+# http://www.flickr.com/search/show/?q=killer+whale&ss=0&ct=0&mt=videos&adv=1
+#
+# see also: vlickr
