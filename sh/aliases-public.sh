@@ -138,6 +138,7 @@ alias els "echo 'For reasons explained in detail at http://bactra.org/weblog/864
 alias duplist 'dupseek -f hn .'
 alias hh history -h
 alais grr g rstats
+alias rstack "open 'http://stats.stackexchange.com/search?q=%5Br%5D+'"
 alias urls "fix | tr ' <>[]()\\' '\n' | G http"
 alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
 alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
