@@ -143,3 +143,6 @@ alias urls "fix | tr ' <>[]()\\' '\n' | G http"
 alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
 alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
 alias deck onion
+alias otb fox http://www.onetimebox.org/
+alias sql "mysql.server start;mysql -uroot;mysql.server stop"
+alias sheet "open https://docs.google.com/spreadsheet/"
