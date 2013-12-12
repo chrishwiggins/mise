@@ -146,3 +146,8 @@ alias deck onion
 alias otb fox http://www.onetimebox.org/
 alias sql "mysql.server start;mysql -uroot;mysql.server stop"
 alias sheet "open https://docs.google.com/spreadsheet/"
+
+#phone aliases
+alias call "echo \!* >> $phonefile"
+alias ph "grep -i \!* $phonefile | tr '/' '\n'"
+alias phone "vi + $phonefile"
