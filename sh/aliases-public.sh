@@ -139,7 +139,7 @@ alias duplist 'dupseek -f hn .'
 alias hh history -h
 alais grr g rstats
 alias rstack "open 'http://stats.stackexchange.com/search?q=%5Br%5D+'"
-alias urls "fix | tr ' <>[]()\\' '\n' | G http"
+alias urls "fix | tr ' <>[]\\' '\n' | G http"
 alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
 alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
 alias deck onion
@@ -151,3 +151,5 @@ alias sheet "open https://docs.google.com/spreadsheet/"
 alias call "echo \!* >> $phonefile"
 alias ph "grep -i \!* $phonefile | tr '/' '\n'"
 alias phone "vi + $phonefile"
+alias mtg-no "grep -v '^%' /Users/wiggins/mise/aux/rp-decline.asc| pbcopy"
+alias mtg-q "grep -v '^%' /Users/wiggins/mise/aux/rp-mtg.asc| pbcopy"
