@@ -63,6 +63,7 @@ alias teach "vi + $cwaliases;vi + $cwpaliases"
 alias pteach "vi + $cwpaliases"
 alias gugc "git pull origin master;git commit -a ;git push origin master"
 alias miseup "cd-mise;gugc;cd -"
+alias remise "cd-mise;git pull origin master;cd -"
 
 # misc:
 alias sniff open /Applications/iStumbler.app/
