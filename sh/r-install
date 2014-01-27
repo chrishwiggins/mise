@@ -1,0 +1,5 @@
+#!/bin/tcsh -f #-X -V
+
+# usage: r-install foo
+ 
+R -e 'install.packages("'$1'", dependencies = c("Depends", "Suggests"),repos="http://cran.us.r-project.org")'
