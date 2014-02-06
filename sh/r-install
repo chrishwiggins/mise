@@ -2,4 +2,14 @@
 
 # usage: r-install foo
  
-R -e 'install.packages("'$1'", dependencies = c("Depends", "Suggests"),repos="http://cran.us.r-project.org")'
+#R -e 'install.packages("'$1'", dependencies = c("Depends", "Suggests"),repos="http://cran.us.r-project.org")'
+R -e 'install.packages("'$1'", verbose=TRUE, dependencies = TRUE, repos="http://cran.us.r-project.org")'
+
+# dependencies  
+# logical indicating to also install uninstalled packages which these packages depend on/link to/import/suggest (and so on recursively). Not used if repos = NULL. Can also be a character vector, a subset of c("Depends", "Imports", "LinkingTo", "Suggests", "Enhances").
+#  
+# Only supported if lib is of length one (or missing), so it is unambiguous where to install the dependent packages. If this is not the case it is ignored, with a warning.
+# 
+# The default, NA, means c("Depends", "Imports", "LinkingTo").
+# 
+# TRUE means (as from R 2.15.0) to use c("Depends", "Imports", "LinkingTo", "Suggests") for pkgs and c("Depends", "Imports", "LinkingTo") for added dependencies: this installs all the packages needed to run pkgs, their examples, tests and vignettes (if the package author specified them correctly).
