@@ -1,0 +1,12 @@
+#!/bin/tcsh -f #-X -V
+# wraps around twitter search
+#   turns + into quotes
+#   turns spaces into URL spaces (%22)
+# http://search.twitter.com/search?q=this+is+%22a+phrase%22
+# chris.wiggins@gmail.com
+
+set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
+# comment me out for unverbose
+echo $str
+#was: open 'http://search.twitter.com/search?q='$str
+open 'http://twitter.com/#\!/search/'$str
