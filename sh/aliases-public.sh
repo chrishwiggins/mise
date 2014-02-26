@@ -66,6 +66,7 @@ alias miseup "cd-mise;gugc;cd -"
 alias remise "cd-mise;git pull origin master;cd -"
 
 # misc:
+alias att gm has:attachment
 alias sniff open /Applications/iStumbler.app/
 alias estrip "pbpaste | fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v wiggins@tantanmen | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' | pbcopy"
 ## misc auxfile tricks:
@@ -161,3 +162,7 @@ alias lat "latex \!:*:r ; bibtex \!:*:r ; latex \!:*:r ; latex \!:*:r ; grep Cit
 alias plath "pdflatex -halt-on-error \!:*:r ; bibtex \!:*:r ; pdflatex -halt-on-error \!:*:r ; pdflatex -halt-on-error \!:*:r "
 alias platf "pdff \!:*:r ; bibtex \!:*:r ; pdff \!:*:r ; pdff \!:*:r ; grep Citation \!:*:r.log "
 alias pdff pdflatex -interaction=nonstopmode
+
+# more misc
+alias asciify "/usr/bin/perl -pe 's/[^[:ascii:]]/+/g'"
+alias bow "asciify | fix | lower | words | nodud | sort -bfd | uniq -c | sort -nr"
