@@ -166,4 +166,4 @@ alias pdff pdflatex -interaction=nonstopmode
 # more misc
 alias asciify "/usr/bin/perl -pe 's/[^[:ascii:]]/+/g'"
 alias bow "asciify | fix | lower | words | nodud | sort -bfd | uniq -c | sort -nr"
-alias newdoc "open https://docs.google.com/document/'
+alias newdoc "open https://docs.google.com/document/"
