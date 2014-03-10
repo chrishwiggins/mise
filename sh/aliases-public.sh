@@ -169,4 +169,4 @@ alias bow "asciify | fix | lower | words | nodud | sort -bfd | uniq -c | sort -n
 alias newdoc "open https://docs.google.com/document/"
 #alias addy "open /Applications/Address\ Book.app/"
 alias addy "open /Applications/Contacts.app/"
-alias skindle "open /Applications/Send\ to\ Kindle/"
+alias skindle "open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ \!:*"
