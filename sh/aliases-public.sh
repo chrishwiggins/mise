@@ -74,10 +74,15 @@ alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gt
 alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
 alias no "pbcopy < ~/.no.txt"
 alias avail "vi ~/available.txt; pbcopy < ~/available.txt"
+
 ### taking/using quicknotes:
-alias v 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`; vi $vstr; echo vstr=$vstr'
+# alias setv 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`'
+alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`'
+alias vv 'setv; pbpaste >! $vstr; vi $vstr'
+alias v 'setv; vi $vstr; echo vstr=$vstr'
 alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
+
 #alias hg 'history 99999999999999 | grep \!:1 | grep -v hg'
 alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
 alias similar "gsearch related:\!:*"
@@ -170,3 +175,4 @@ alias newdoc "open https://docs.google.com/document/"
 #alias addy "open /Applications/Address\ Book.app/"
 alias addy "open /Applications/Contacts.app/"
 alias skindle "open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ \!:*"
+alias mute-fix sudo killall coreaudiod

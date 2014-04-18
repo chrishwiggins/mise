@@ -10,7 +10,7 @@ sleep 2
 
 
 setenv odir "sent/`date +%yy%mm%dd_%Hh%Mm%Ss`"
-#echo $odir
+echo $odir
 mkdir -pv $odir
 
 foreach thing (*.eml)
