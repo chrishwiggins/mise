@@ -176,3 +176,4 @@ alias newdoc "open https://docs.google.com/document/"
 alias addy "open /Applications/Contacts.app/"
 alias skindle "open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ \!:*"
 alias mute-fix sudo killall coreaudiod
+alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
