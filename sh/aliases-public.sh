@@ -98,6 +98,7 @@ alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
 alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
+alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 alias datestr date +%Y-%m-%dT%H:%M:%S
 alias brew-tend "brew upgrade; brew update;brew doctor" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
@@ -177,3 +178,5 @@ alias addy "open /Applications/Contacts.app/"
 alias skindle "open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ \!:*"
 alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
+alias dir-nyt 'pbcopy < ~/dir-nyt.txt'
+alias muttf "cat /dev/null | mutt -H \!:*"
