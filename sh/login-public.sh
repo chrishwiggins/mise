@@ -7,6 +7,7 @@ alias cset "set path = ( $path /usr/local/bin ~//Documents/Scripts/perl ~//Docum
 # set some variables
 setenv EDITOR /usr/bin/vi
 setenv HOMEBREW_TEMP /usr/local/Cellar
+#setenv DYLD_INSERT_LIBRARIES /usr/local/lib/libvecLibFortI.dylib 
 set savehist=1000
 set prompt="%n@%m{%c1}%\!: "
 

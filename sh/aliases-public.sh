@@ -12,7 +12,7 @@ alias cd-mise cd $mise
 
 alias dump "learn;pbpaste > `datestr`"
 alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Resources/jsc
-alias dusort "learn;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`"
+alias dusort "learn;date;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`;date"
 alias rstudio open /Applications/RStudio.app/
 alias permute "perl -MList::Util=shuffle -e 'print shuffle <>'"
 alias hai open http://example.com
@@ -70,8 +70,8 @@ alias att gm has:attachment
 alias sniff open /Applications/iStumbler.app/
 alias estrip "pbpaste | fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v wiggins@tantanmen | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' | pbcopy"
 ## misc auxfile tricks:
-alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
-alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
+#alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
+#alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
 alias no "pbcopy < ~/.no.txt"
 alias avail "vi ~/available.txt; pbcopy < ~/available.txt"
 
@@ -113,6 +113,7 @@ alias mise "open https://github.com/chrishwiggins/mise"
 alias citibike open http://www.citibikenyc.com/stations
 
 # spelling while typing is hard
+alias gcmop gcomp
 alias mdkdir mkdir
 alias duff diff
 alias mdkir mkdir
@@ -180,3 +181,9 @@ alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
 alias dir-nyt 'pbcopy < ~/dir-nyt.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
+alias mail "open mailto:\!*"
+alias distract "boxes;ichat;adium;skype;voice"
+alias brews "brew list > $seiton/aux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $seiton/aux/homebrew-*.asc"
+alias pb2gist gist -o -P
+
+alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocket.com"
