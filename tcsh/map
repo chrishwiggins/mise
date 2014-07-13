@@ -5,4 +5,4 @@
 set str=`echo $* | sed -e 's/ /%20/g'`
 echo $str
 # firefox no good for gmap as of 2014-06-27
-chrome 'http://maps.google.com/maps?um=1&tab=wl&hl=en&lr=&q='$str
+~/mise/bin/chrome 'http://maps.google.com/maps?um=1&tab=wl&hl=en&lr=&q='$str

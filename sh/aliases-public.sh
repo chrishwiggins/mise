@@ -16,7 +16,6 @@ alias dusort "learn;date;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`;dat
 alias rstudio open /Applications/RStudio.app/
 alias permute "perl -MList::Util=shuffle -e 'print shuffle <>'"
 alias hai open http://example.com
-alias chrome "open $mise/bin/chrome"
 alias fox "open -a 'Firefox' \!:*"
 alias inpr "open http://www.npr.org/infiniteplayer/"
 
@@ -187,3 +186,4 @@ alias brews "brew list > $seiton/aux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdu
 alias pb2gist gist -o -P
 
 alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocket.com"
+alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-bin/weather/weather.cgi?daysonly=0&maxdays=11&zipcode=10027' | asciify | fix | awk '/^Daily/,/^Sunset/'"
