@@ -1,8 +1,0 @@
-#!/bin/tcsh -f #-X -V
-#% open your browser in a mobile-formatted gmail search
-#% eliminates spaces
-#% turns / (for dates) into url-formatted /
-#% presumes ~/bin/chrome is location of exe (sorry; for me that's a soft link to /Applications/Google Chrome.app)
-
-set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'` 
-open -a ~/bin/chrome 'https://mail.google.com/mail/u/0/x/?ie=UTF-8&s=q&q='$str'&nvp_site_mail=Search+Mail'
