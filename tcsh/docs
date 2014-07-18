@@ -6,8 +6,5 @@
 # ex https://docs.google.com/#search/projects
 
 set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'` 
-#echo $str
-#set cmd="open -a ~/bin/chrome https://docs.google.com/#search/"$str
-#set cmd="open -a ~/bin/chrome 'https://drive.google.com/"
-#echo $cmd
-open -a ~/mise/bin/chrome 'https://drive.google.com/?authuser=0#search/'$str
+# echo $str
+open 'https://drive.google.com/?authuser=0#search/'$str
