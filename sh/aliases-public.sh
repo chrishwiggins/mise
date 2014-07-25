@@ -112,6 +112,8 @@ alias mise "open https://github.com/chrishwiggins/mise"
 alias citibike open http://www.citibikenyc.com/stations
 
 # spelling while typing is hard
+alias docus focus
+alias aalais aalias
 alias gcmop gcomp
 alias mdkdir mkdir
 alias duff diff
@@ -126,7 +128,6 @@ alias mroe more
 alias pbvx "pbpaste >! /tmp/$$_pbcx; source /tmp/$$_pbcx; rm -f /tmp/$$_pbcx"
 alias pbcx "pbcopy;pbvx"
 alias mor more
-alias omail open /Applications/Mail.app/
 alias poen open
 alias pu up
 
@@ -187,3 +188,4 @@ alias pb2gist gist -o -P
 
 alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocket.com"
 alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-bin/weather/weather.cgi?daysonly=0&maxdays=11&zipcode=10027' | asciify | fix | awk '/^Daily/,/^Sunset/'"
+alias omail open /Applications/Mail.app/
