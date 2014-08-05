@@ -102,7 +102,7 @@ alias datestr date +%Y-%m-%dT%H:%M:%S
 alias brew-tend "brew upgrade; brew update;brew doctor" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
-alias conda-tend "/tools/anaconda/bin/conda update conda"
+alias conda-tend "/sw/anaconda/bin/conda update conda"
 alias ogit "open 'https://github.com/chrishwiggins?tab=repositories'"
 alias normalize "sed -f $mise/sed/normalize "
 alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
@@ -190,4 +190,4 @@ alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocke
 alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-bin/weather/weather.cgi?daysonly=0&maxdays=11&zipcode=10027' | asciify | fix | awk '/^Daily/,/^Sunset/'"
 alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
-alias mypy /usr/bin/python
+#alias mypy /usr/bin/python
