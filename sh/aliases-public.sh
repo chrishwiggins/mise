@@ -71,12 +71,12 @@ alias estrip "pbpaste | fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | g
 ## misc auxfile tricks:
 #alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
 #alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
-alias no "pbcopy < ~/.no.txt"
+alias no "pbcopy < $setup/aux/no.txt"
 alias avail "vi ~/available.txt; pbcopy < ~/available.txt"
 
 ### taking/using quicknotes:
 # alias setv 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`'
-alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`'
+alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
 alias vv 'setv; pbpaste >! $vstr; vi $vstr'
 alias v 'setv; vi $vstr; echo vstr=$vstr'
 alias pv 'pbcopy < $vstr'
@@ -86,7 +86,7 @@ alias sv 'source $vstr'
 alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
 alias similar "gsearch related:\!:*"
 #alias repof "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/; touch mat/.DS_store dat/.DS_store doc/.DS_store fig/.DS_store log/.DS_store ref/.DS_store src/.DS_store out/.DS_store aux/.DS_store "
-alias repo "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/"
+alias repo "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/"
 alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
 alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
@@ -148,7 +148,7 @@ alias duplist 'dupseek -f hn .'
 alias hh history -h
 alais grr g rstats
 alias rstack "open 'http://stats.stackexchange.com/search?q=%5Br%5D+'"
-alias urls "fix | tr ' <>[]\\' '\n' | G http"
+alias urls "asciify| fix | tr '<>[]\ ' '\n' | grep -i 'http'"
 alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
 alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
 alias deck onion
@@ -183,7 +183,7 @@ alias dir-nyt 'pbcopy < ~/dir-nyt.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
 alias mail "open mailto:\!*"
 alias distract "boxes;ichat;adium;skype;voice"
-alias brews "brew list > $seiton/aux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $seiton/aux/homebrew-*.asc"
+alias brews "brew list > $setup/aux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $setup/aux/homebrew-*.asc"
 alias pb2gist gist -o -P
 
 alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocket.com"
@@ -191,3 +191,6 @@ alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-
 alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 #alias mypy /usr/bin/python
+alias conf "cat  $setup/aux/conf.txt /Users/wiggins/Documents/Life/PR/doc/press/ds-idse-nyt-lede.txt $setup/dotfiles/.sig | pbcopy"
+alias smutt "cat /dev/null | mutt -H \!:*"
+alias mbo "skype; boxes ; voice ; ichat; focus"
