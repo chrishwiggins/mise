@@ -1,0 +1,36 @@
+#!/bin/tcsh -f #-X -V
+
+setenv tex $1:r.tex
+setenv pdf $tex:r.pdf
+
+setenv owd $cwd
+
+setenv dir /tmp/md2tex2pdf-$$
+setenv aux aux.asc
+
+
+echo owd $owd
+
+# mk dir & mv stuff there
+mkdir $dir
+cp -f $1 $dir
+cd $dir
+
+# do work
+pandoc -f markdown -t latex $1 -o $aux
+
+# add header & footer
+echo "\documentclass{article}\begin{document}" >! $tex
+cat $aux >> $tex
+echo "\end{document}" >> $tex
+
+# tex it
+pdflatex $tex
+mv -i $tex $owd
+mv -i $tex:r.pdf $owd
+
+# go back
+cd $owd
+
+# look at result
+open $pdf
