@@ -194,3 +194,4 @@ alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 alias conf "cat  $setup/aux/conf.txt /Users/wiggins/Documents/Life/PR/doc/press/ds-idse-nyt-lede.txt $setup/dotfiles/.sig | pbcopy"
 alias smutt "cat /dev/null | mutt -H \!:*"
 alias mbo "skype; boxes ; voice ; ichat; focus"
+alias md2pdf "pandoc \!:1 -s -o \!:1:r.pdf"
