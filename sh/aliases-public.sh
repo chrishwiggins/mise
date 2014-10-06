@@ -71,7 +71,6 @@ alias estrip "pbpaste | fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | g
 ## misc auxfile tricks:
 #alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
 #alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
-alias no "pbcopy < $setup/aux/no.txt"
 alias avail "vi ~/available.txt; pbcopy < ~/available.txt"
 
 ### taking/using quicknotes:
@@ -97,7 +96,7 @@ alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
 alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
-alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
+alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort;backup"
 alias datestr date +%Y-%m-%dT%H:%M:%S
 alias brew-tend "brew upgrade; brew update;brew doctor" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
@@ -191,7 +190,8 @@ alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-
 alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 #alias mypy /usr/bin/python
-alias conf "cat  $setup/aux/conf.txt /Users/wiggins/Documents/Life/PR/doc/press/ds-idse-nyt-lede.txt $setup/dotfiles/.sig | pbcopy"
 alias smutt "cat /dev/null | mutt -H \!:*"
 alias mbo "skype; boxes ; voice ; ichat; focus"
 alias md2pdf "pandoc \!:1 -s -o \!:1:r.pdf"
+alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
+alias clio "fox 'http://clio.cul.columbia.edu'"
