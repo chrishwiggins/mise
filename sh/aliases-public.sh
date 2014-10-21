@@ -98,7 +98,7 @@ alias g gsearch
 alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort;backup"
 alias datestr date +%Y-%m-%dT%H:%M:%S
-alias brew-tend "brew upgrade; brew update;brew doctor" 
+alias brew-tend "brew upgrade; brew update;brew doctor;brew linkapps" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 alias conda-tend "/sw/anaconda/bin/conda update conda"
@@ -147,7 +147,7 @@ alias duplist 'dupseek -f hn .'
 alias hh history -h
 alais grr g rstats
 alias rstack "open 'http://stats.stackexchange.com/search?q=%5Br%5D+'"
-alias urls "asciify| fix | tr '<>[]\ ' '\n' | grep -i 'http'"
+alias urls "asciify| fix | tr '<>[]()\ ' '\n' | grep -i 'http'"
 alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
 alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
 alias deck onion
@@ -195,3 +195,6 @@ alias mbo "skype; boxes ; voice ; ichat; focus"
 alias md2pdf "pandoc \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias clio "fox 'http://clio.cul.columbia.edu'"
+alias roi "open /Users/wiggins/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a"
+alias pbpate pbpaste
+alias acal fox http://registrar.columbia.edu/event/academic-calendar
