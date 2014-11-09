@@ -1,5 +1,4 @@
 
-
 # unix essentials
 alias l '/bin/ls -ltrFsA'
 alias mi 'mv -i'
@@ -198,3 +197,5 @@ alias clio "fox 'http://clio.cul.columbia.edu'"
 alias roi "open /Users/wiggins/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a"
 alias pbpate pbpaste
 alias acal fox http://registrar.columbia.edu/event/academic-calendar
+alias omutts "cd $odir;mutts;cd -"
+alias lock "/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend"
