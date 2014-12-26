@@ -100,7 +100,7 @@ alias datestr date +%Y-%m-%dT%H:%M:%S
 alias brew-tend "brew upgrade; brew update;brew doctor;brew linkapps" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
-alias conda-tend "/sw/anaconda/bin/conda update conda"
+alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
 alias ogit "open 'https://github.com/chrishwiggins?tab=repositories'"
 alias normalize "sed -f $mise/sed/normalize "
 alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
@@ -179,7 +179,8 @@ alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
 alias dir-nyt 'pbcopy < ~/dir-nyt.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
-alias mail "open mailto:\!*"
+alias omail "open mailto:\!*"
+alias mail "mutt \!*"
 alias distract "boxes;ichat;adium;skype;voice"
 alias brews "brew list > $setup/aux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $setup/aux/homebrew-*.asc"
 alias pb2gist gist -o -P
@@ -199,3 +200,5 @@ alias pbpate pbpaste
 alias acal fox http://registrar.columbia.edu/event/academic-calendar
 alias omutts "cd $odir;mutts;cd -"
 alias lock "/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend"
+
+alias zip4 "open 'https://tools.usps.com/go/ZipLookupAction'!'input.action?mode=0&refresh=true'"
