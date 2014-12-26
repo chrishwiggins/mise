@@ -7,4 +7,8 @@
 
 set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'` 
 # echo $str
-open 'https://drive.google.com/?authuser=0#search/'$str
+#
+# changed 2014-12-19
+# open 'https://drive.google.com/?authuser=0#search/'$str
+#
+open 'https://drive.google.com/drive/u/0/#search?q='$str
