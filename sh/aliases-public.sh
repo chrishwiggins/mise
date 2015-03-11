@@ -84,7 +84,7 @@ alias sv 'source $vstr'
 alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
 alias similar "gsearch related:\!:*"
 #alias repof "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/; touch mat/.DS_store dat/.DS_store doc/.DS_store fig/.DS_store log/.DS_store ref/.DS_store src/.DS_store out/.DS_store aux/.DS_store "
-alias repo "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/"
+alias repo "mkdir dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/"
 alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
 alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
@@ -94,10 +94,11 @@ alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
 alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
-alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
-alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort;backup"
+#alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
+alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
+alias qtend "brew-tend;pip-tend;conda-tend"
 alias datestr date +%Y-%m-%dT%H:%M:%S
-alias brew-tend "brew upgrade; brew update;brew doctor;brew linkapps" 
+alias brew-tend "brew upgrade; brew update;brew doctor;brew linkapps;brew prune" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
@@ -180,7 +181,7 @@ alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:descr
 alias dir-nyt 'pbcopy < ~/dir-nyt.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
 alias omail "open mailto:\!*"
-alias mail "mutt \!*"
+#alias mail "mutt \!*"
 alias distract "boxes;ichat;adium;skype;voice"
 alias brews "brew list > $setup/aux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $setup/aux/homebrew-*.asc"
 alias pb2gist gist -o -P
@@ -191,7 +192,7 @@ alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 #alias mypy /usr/bin/python
 alias smutt "cat /dev/null | mutt -H \!:*"
-alias mbo "skype; boxes ; voice ; ichat; focus"
+alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
 alias md2pdf "pandoc \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias clio "fox 'http://clio.cul.columbia.edu'"
@@ -202,3 +203,8 @@ alias omutts "cd $odir;mutts;cd -"
 alias lock "/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend"
 
 alias zip4 "open 'https://tools.usps.com/go/ZipLookupAction'!'input.action?mode=0&refresh=true'"
+# alias rest sudo shutdown -s now
+alias rest pmset sleepnow
+alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
+alias thus "echo ∴|pbcopy"
+alias sheets "open 'https://drive.google.com/drive/u/0/#search?q=type%3Aspreadsheet'"
