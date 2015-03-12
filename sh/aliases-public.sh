@@ -66,7 +66,7 @@ alias remise "cd-mise;git pull origin master;cd -"
 # misc:
 alias att gm has:attachment
 alias sniff open /Applications/iStumbler.app/
-alias estrip "pbpaste | fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v wiggins@tantanmen | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' | pbcopy"
+alias estrip "fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v wiggins@tantanmen | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' "
 ## misc auxfile tricks:
 #alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
 #alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
