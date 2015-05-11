@@ -98,7 +98,7 @@ alias g gsearch
 alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 alias qtend "brew-tend;pip-tend;conda-tend"
 alias datestr date +%Y-%m-%dT%H:%M:%S
-alias brew-tend "brew upgrade; brew update;brew doctor;brew linkapps;brew prune" 
+alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
@@ -179,6 +179,7 @@ alias skindle "open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ \!:*
 alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
 alias dir-nyt 'pbcopy < ~/dir-nyt.txt'
+alias dir-205 'pbcopy < ~/dir-205.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
 alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
