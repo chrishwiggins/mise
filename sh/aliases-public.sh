@@ -209,3 +209,4 @@ alias rest pmset sleepnow
 alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
 alias thus "echo ∴|pbcopy"
 alias sheets "open 'https://drive.google.com/drive/u/0/#search?q=type%3Aspreadsheet'"
+alias hamming "pbcopy < /Users/wiggins/Documents/Science/Advising/Ideas/Hamming/hamming-you-and-your-research.txt"
