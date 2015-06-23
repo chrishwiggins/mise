@@ -10,6 +10,7 @@ alias cd-htm cd /Users/wiggins/Documents/public_html
 alias cd-mise cd $mise
 
 alias dump "learn;pbpaste > `datestr`"
+alias mdump "learn;pbpaste > `datestr`;pbmunpack;mv mail-dump `datestr`-files"
 alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Resources/jsc
 alias dusort "learn;date;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`;date"
 alias rstudio open /Applications/RStudio.app/
@@ -70,7 +71,8 @@ alias estrip "fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v wig
 ## misc auxfile tricks:
 #alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
 #alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
-alias avail "vi ~/available.txt; pbcopy < ~/available.txt"
+alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | pbcopy"
+
 
 ### taking/using quicknotes:
 # alias setv 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`'
@@ -210,4 +212,4 @@ alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
 alias thus "echo ∴|pbcopy"
 alias sheets "open 'https://drive.google.com/drive/u/0/#search?q=type%3Aspreadsheet'"
 alias hamming "pbcopy < /Users/wiggins/Documents/Science/Advising/Ideas/Hamming/hamming-you-and-your-research.txt"
-alias kreps "echo https://twitter.com/jaykreps/status/219977241839411200|pbcopy"
+alias kreps "echo 'https://twitter.com/jaykreps/status/219977241839411200' | pbcopy "
