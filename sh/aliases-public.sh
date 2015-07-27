@@ -134,7 +134,7 @@ alias pu up
 
 
 #alias onion 'open http://www.theonion.com/content/index'
-alias onion echo "back to work"
+alias onion echo "try mindful breathing instead. go ahead"
 
 alias appstore "open /Applications/App\ Store.app/"
 alias st 'open /Applications/Sublime\ Text\ 2.app/'
