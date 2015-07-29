@@ -1,0 +1,8 @@
+#!/bin/tcsh -f #-X -V
+#% github search
+#% turns + into quotes
+#% turns spaces into URL spaces (%22)
+
+set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
+echo $str
+open 'http://github.com/search?q='$str'&type=Everything&repo=&langOverride=&start_value=1'

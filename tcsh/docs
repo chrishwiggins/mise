@@ -4,6 +4,7 @@
 #% turns / (for dates) into url-formatted /
 #
 # ex https://docs.google.com/#search/projects
+# ex https://drive.google.com/drive/u/0/search?q=Charlotte
 
 set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'` 
 # echo $str
