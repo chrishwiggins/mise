@@ -159,7 +159,7 @@ alias sheet "open https://docs.google.com/spreadsheet/"
 
 #phone aliases
 alias call "echo \!* >> $phonefile"
-alias ph "grep -i \!* $phonefile | tr '/' '\n'"
+alias ph "grep -i \!* $phonefile | tr '\' '\n'"
 alias phone "vi + $phonefile"
 alias mtg-no "grep -v '^%' /Users/wiggins/mise/aux/rp-decline.asc| pbcopy"
 alias mtg-q "grep -v '^%' /Users/wiggins/mise/aux/rp-mtg.asc| pbcopy"
@@ -187,6 +187,7 @@ alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
 alias distract "boxes;ichat;adium;skype;voice"
 alias brews "brew list > $setup/aux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $setup/aux/homebrew-*.asc"
+alias r-installed "which-r > $setup/aux/r-installed-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $setup/aux/r-installed-*.asc"
 alias pb2gist gist -o -P
 
 alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocket.com"
@@ -213,3 +214,5 @@ alias thus "echo ∴|pbcopy"
 alias sheets "open 'https://drive.google.com/drive/u/0/#search?q=type%3Aspreadsheet'"
 alias hamming "pbcopy < /Users/wiggins/Documents/Science/Advising/Ideas/Hamming/hamming-you-and-your-research.txt"
 alias kreps "echo 'https://twitter.com/jaykreps/status/219977241839411200' | pbcopy "
+alias pbstrip "pbpaste|estrip|pbcopy"
+alias reline "tr '\n' ' ' | tr '+' '\n' | fix "
