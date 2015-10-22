@@ -216,3 +216,4 @@ alias hamming "pbcopy < /Users/wiggins/Documents/Science/Advising/Ideas/Hamming/
 alias kreps "echo 'https://twitter.com/jaykreps/status/219977241839411200' | pbcopy "
 alias pbstrip "pbpaste|estrip|pbcopy"
 alias reline "tr '\n' ' ' | tr '+' '\n' | fix "
+alias ngit "open https://github.com/new"
