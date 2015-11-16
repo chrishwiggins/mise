@@ -180,8 +180,8 @@ alias addy "open /Applications/Contacts.app/"
 alias skindle "open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ \!:*"
 alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
-alias dir-nyt 'pbcopy < ~/dir-nyt.txt'
-alias dir-205 'pbcopy < ~/dir-205.txt'
+alias dir-nyt 'pbcopy < $setup/aux/dir-nyt.txt'
+alias dir-205 'pbcopy < $setup/aux/dir-205.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
 alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
