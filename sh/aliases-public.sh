@@ -10,7 +10,7 @@ alias cd-htm cd /Users/wiggins/Documents/public_html
 alias cd-mise cd $mise
 
 alias dump "learn;pbpaste > `datestr`"
-alias mdump "learn;pbpaste > `datestr`;pbmunpack;mv mail-dump `datestr`-files"
+alias mdump "learn;pbpaste > `datestr`.eml;pbmunpack;mv mail-dump `datestr`-files"
 alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Resources/jsc
 alias dusort "learn;date;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`;date"
 alias rstudio open /Applications/RStudio.app/
@@ -77,7 +77,7 @@ alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | p
 ### taking/using quicknotes:
 # alias setv 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`'
 alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
-alias vv 'setv; pbpaste >! $vstr; vi $vstr'
+alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr=$vstr'
 alias v 'setv; vi $vstr; echo vstr=$vstr'
 alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
@@ -87,8 +87,8 @@ alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
 alias similar "gsearch related:\!:*"
 #alias repof "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/; touch mat/.DS_store dat/.DS_store doc/.DS_store fig/.DS_store log/.DS_store ref/.DS_store src/.DS_store out/.DS_store aux/.DS_store "
 alias repo "mkdir dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/"
-alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
-alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
+#alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
+#alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
 alias http "open http://\!*"
 alias clean-browser 'open /Applications/Camino.app \!*'
@@ -97,13 +97,14 @@ alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
 #alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
-alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
+alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort;brew link openssl --force"
 alias qtend "brew-tend;pip-tend;conda-tend"
 alias datestr date +%Y-%m-%dT%H:%M:%S
 alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
-alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
+#alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
+alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda"
 alias ogit "open 'https://github.com/chrishwiggins?tab=repositories'"
 alias normalize "sed -f $mise/sed/normalize "
 alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
@@ -180,14 +181,14 @@ alias addy "open /Applications/Contacts.app/"
 alias skindle "open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ \!:*"
 alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
-alias dir-nyt 'pbcopy < $setup/aux/dir-nyt.txt'
-alias dir-205 'pbcopy < $setup/aux/dir-205.txt'
+alias dir-nyt 'pbcopy < $cwaux/dir-nyt.txt'
+alias dir-205 'pbcopy < $cwaux/dir-205.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
 alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
 alias distract "boxes;ichat;adium;skype;voice"
-alias brews "brew list > $setup/aux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $setup/aux/homebrew-*.asc"
-alias r-installed "which-r > $setup/aux/r-installed-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $setup/aux/r-installed-*.asc"
+alias brews "brew list > $cwaux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/homebrew-*.asc"
+alias r-installed "which-r > $cwaux/r-installed-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/r-installed-*.asc"
 alias pb2gist gist -o -P
 
 alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocket.com"
