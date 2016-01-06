@@ -18,3 +18,8 @@ autocmd BufReadPost *.docx %!docx2txt.pl
 
 " show line #s
 set number
+
+" from https://github.com/tpope/vim-markdown
+autocmd BufNewFile,BufReadPost *.md set filetype=markdown
+let g:markdown_fenced_languages = ['html', 'python', 'bash=sh']
+
