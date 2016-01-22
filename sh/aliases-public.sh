@@ -196,7 +196,6 @@ alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-
 alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 #alias mypy /usr/bin/python
-alias smutt "cat /dev/null | mutt -H \!:*"
 alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
 alias md2pdf "pandoc \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
