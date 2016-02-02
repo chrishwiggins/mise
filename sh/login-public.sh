@@ -24,8 +24,8 @@ set infopath = ( /usr/local/texlive/2011/texmf/doc/info )
 #  Most importantly, add /usr/local/texlive/2011/bin/universal-darwin
 #  to your PATH for current and future sessions.
 set path = ( $path /usr/local/texlive/2011/bin/universal-darwin )
-# CWADD: add /usr/texbin
-set path = ( $path /usr/texbin )
+# CWADD: add /usr/texbin, mise
+set path = ( $path /usr/texbin  )
 
 # CWADD: i like it here.
 set path = ( $path . )
