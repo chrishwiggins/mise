@@ -1,0 +1,8 @@
+#!/bin/tcsh -f #-X -V
+#% wraps around online etymology dictionary, turns + into quotes (%22)
+#% turns spaces into +
+
+set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
+echo $str
+echo done
+open 'http://www.etymonline.com/index.php?allowed_in_frame=0&search='$str
