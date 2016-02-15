@@ -97,8 +97,8 @@ alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
 #alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
-alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort;brew link openssl --force"
-alias qtend "brew-tend;pip-tend;conda-tend"
+alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force"
+alias qtend "brew-tend;pip-tend;conda-tend;brews"
 alias datestr date +%Y-%m-%dT%H:%M:%S
 alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune" 
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
@@ -217,3 +217,4 @@ alias kreps "echo 'https://twitter.com/jaykreps/status/219977241839411200' | pbc
 alias pbstrip "pbpaste|estrip|pbcopy"
 alias reline "tr '\n' ' ' | tr '+' '\n' | fix "
 alias ngit "open https://github.com/new"
+alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
