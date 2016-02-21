@@ -78,7 +78,7 @@ alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | p
 # alias setv 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`'
 alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
 alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr=$vstr'
-alias v 'setv; vi $vstr; echo vstr=$vstr'
+alias v 'setv; vi +star $vstr; echo vstr=$vstr'
 alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
 
@@ -196,8 +196,9 @@ alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-
 alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 #alias mypy /usr/bin/python
-alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
-alias md2pdf "pandoc \!:1 -s -o \!:1:r.pdf"
+#alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
+alias mbo "skype; boxes ; voice ; ichat; telegram;slack;DECK;focus"
+alias md2pdf "pandoc --number-sections \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias clio "fox 'http://clio.cul.columbia.edu'"
 alias roi "open /Users/wiggins/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a"
@@ -218,3 +219,5 @@ alias pbstrip "pbpaste|estrip|pbcopy"
 alias reline "tr '\n' ' ' | tr '+' '\n' | fix "
 alias ngit "open https://github.com/new"
 alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
+alias cwnotes "head `ls -1t $ndir/cwnote_201*` | more"
+
