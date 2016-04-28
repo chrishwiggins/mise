@@ -226,3 +226,4 @@ alias cwnotes "head `ls -1t $ndir/cwnote_201* | grep -v -e '(' -e ')'` | more"
 # add commodore basic
 alias basic cbmbasic
 alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
+alias shrug "echo ¯\_(ツ)_/¯ | pbcopy"
