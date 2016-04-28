@@ -98,13 +98,14 @@ alias json-grep jgrep
 alias g gsearch
 #alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force"
-alias qtend "brew-tend;pip-tend;conda-tend;brews"
+alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend"
 alias datestr date +%Y-%m-%dT%H:%M:%S
-alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune" 
+alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force"
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 #alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
 alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda"
+alias cabal-tend "cabal update"
 alias ogit "open 'https://github.com/chrishwiggins?tab=repositories'"
 alias normalize "sed -f $mise/sed/normalize "
 alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
@@ -183,6 +184,7 @@ alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
 alias dir-nyt 'pbcopy < $cwaux/dir-nyt.txt'
 alias dir-205 'pbcopy < $cwaux/dir-205.txt'
+alias dir-428 'pbcopy < $cwaux/dir-428.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
 alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
@@ -219,5 +221,8 @@ alias pbstrip "pbpaste|estrip|pbcopy"
 alias reline "tr '\n' ' ' | tr '+' '\n' | fix "
 alias ngit "open https://github.com/new"
 alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
-alias cwnotes "head `ls -1t $ndir/cwnote_201*` | more"
+alias cwnotes "head `ls -1t $ndir/cwnote_201* | grep -v -e '(' -e ')'` | more"
 
+# add commodore basic
+alias basic cbmbasic
+alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
