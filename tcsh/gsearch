@@ -4,6 +4,7 @@
 
 set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
 echo $str
+# open -a safari 'http://encrypted.google.com/search?hl=en&lr=&safe=off&c2coff=1&q='$str'&btnG=Search'
 open 'http://encrypted.google.com/search?hl=en&lr=&safe=off&c2coff=1&q='$str'&btnG=Search'
 
 
