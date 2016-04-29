@@ -104,7 +104,7 @@ alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 #alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
-alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda"
+alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda;conda clean -tipsy"
 alias cabal-tend "cabal update"
 alias ogit "open 'https://github.com/chrishwiggins?tab=repositories'"
 alias normalize "sed -f $mise/sed/normalize "
