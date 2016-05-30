@@ -14,6 +14,10 @@ set prompt="%n@%m{%c1}%\!: "
 # Don't overwrite existing files with the redirection character ">"
 set noclobber
 
+# actually do stuff
+## set path
+cset
+
 ### TEXSTUFF
 # Add /usr/local/texlive/2011/texmf/doc/man to MANPATH, if not dynamically determined.
 # set manpath = ( $manpath /usr/local/texlive/2011/texmf/doc/man )
@@ -26,12 +30,10 @@ set infopath = ( /usr/local/texlive/2011/texmf/doc/info )
 set path = ( $path /usr/local/texlive/2011/bin/universal-darwin )
 # CWADD: add /usr/texbin, mise
 set path = ( $path /usr/texbin  )
-
-# CWADD: i like it here.
+# CWADD: i like it here
 set path = ( $path . )
+# CWADD: add some google
+set path = ( $path ~/google-cloud-sdk/bin )
 
-# actually do stuff
-## set path
-cset
 ## learn my aliases
 learn
