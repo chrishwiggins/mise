@@ -6,7 +6,7 @@ alias up "cd .."
 alias please sudo
 
 # places to go
-alias cd-htm cd /Users/wiggins/Documents/public_html
+alias cd-htm cd ~/Documents/public_html
 alias cd-mise cd $mise
 
 alias dump "learn;pbpaste > `datestr`"
@@ -162,8 +162,8 @@ alias sheet "open https://docs.google.com/spreadsheet/"
 alias call "echo \!* >> $phonefile"
 alias ph "grep -i \!* $phonefile | tr '\' '\n'"
 alias phone "vi + $phonefile"
-alias mtg-no "grep -v '^%' /Users/wiggins/mise/aux/rp-decline.asc| pbcopy"
-alias mtg-q "grep -v '^%' /Users/wiggins/mise/aux/rp-mtg.asc| pbcopy"
+alias mtg-no "grep -v '^%' ~/mise/aux/rp-decline.asc| pbcopy"
+alias mtg-q "grep -v '^%' ~/mise/aux/rp-mtg.asc| pbcopy"
 
 # LaTeX stuff
 alias plat "pdflatex \!:*:r ; bibtex \!:*:r ; pdflatex \!:*:r ; pdflatex \!:*:r ; grep Citation \!:*:r.log "
@@ -200,7 +200,7 @@ alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
 alias md2pdf "pandoc \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias clio "fox 'http://clio.cul.columbia.edu'"
-alias roi "open /Users/wiggins/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a"
+alias roi "open ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a"
 alias pbpate pbpaste
 alias acal fox http://registrar.columbia.edu/event/academic-calendar
 alias omutts "cd $odir;mutts;cd -"
@@ -212,7 +212,7 @@ alias rest pmset sleepnow
 alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
 alias thus "echo ∴|pbcopy"
 alias sheets "open 'https://drive.google.com/drive/u/0/#search?q=type%3Aspreadsheet'"
-alias hamming "pbcopy < /Users/wiggins/Documents/Science/Advising/Ideas/Hamming/hamming-you-and-your-research.txt"
+alias hamming "pbcopy < ~/Documents/Science/Advising/Ideas/Hamming/hamming-you-and-your-research.txt"
 alias kreps "echo 'https://twitter.com/jaykreps/status/219977241839411200' | pbcopy "
 alias pbstrip "pbpaste|estrip|pbcopy"
 alias reline "tr '\n' ' ' | tr '+' '\n' | fix "
