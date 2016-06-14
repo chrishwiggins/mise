@@ -7,3 +7,5 @@
 set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'` 
 set cmd="open -a ~/bin/chrome http://mail.google.com/mail/#search/"$str
 $cmd
+
+# https://mail.google.com/mail/u/0/#search/equinox
