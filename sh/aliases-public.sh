@@ -78,7 +78,7 @@ alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | p
 # alias setv 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`'
 alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
 alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr=$vstr'
-alias v 'setv; vi $vstr; echo vstr=$vstr'
+alias v 'setv; vi +star $vstr; echo vstr=$vstr'
 alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
 
@@ -86,7 +86,7 @@ alias sv 'source $vstr'
 alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
 alias similar "gsearch related:\!:*"
 #alias repof "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/; touch mat/.DS_store dat/.DS_store doc/.DS_store fig/.DS_store log/.DS_store ref/.DS_store src/.DS_store out/.DS_store aux/.DS_store "
-alias repo "mkdir dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/"
+alias repo "mkdir dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/anonymous/4fa592e17f1bdfd79e6dbdb0cf820df5/raw/9f0e81a77d94d74257641eb8279303b65fa0a85e/a.rb"
 #alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
 #alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
@@ -98,13 +98,14 @@ alias json-grep jgrep
 alias g gsearch
 #alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force"
-alias qtend "brew-tend;pip-tend;conda-tend;brews"
+alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend"
 alias datestr date +%Y-%m-%dT%H:%M:%S
-alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune" 
+alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force"
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 #alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
-alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda"
+alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda;conda clean -tipsy"
+alias cabal-tend "cabal update"
 alias ogit "open 'https://github.com/chrishwiggins?tab=repositories'"
 alias normalize "sed -f $mise/sed/normalize "
 alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
@@ -183,6 +184,7 @@ alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
 alias dir-nyt 'pbcopy < $cwaux/dir-nyt.txt'
 alias dir-205 'pbcopy < $cwaux/dir-205.txt'
+alias dir-428 'pbcopy < $cwaux/dir-428.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
 alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
@@ -196,8 +198,9 @@ alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-
 alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 #alias mypy /usr/bin/python
-alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
-alias md2pdf "pandoc \!:1 -s -o \!:1:r.pdf"
+#alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
+alias mbo "skype; boxes ; voice ; ichat; telegram;slack;DECK;focus"
+alias md2pdf "pandoc --number-sections \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias clio "fox 'http://clio.cul.columbia.edu'"
 alias roi "open ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a"
@@ -218,3 +221,9 @@ alias pbstrip "pbpaste|estrip|pbcopy"
 alias reline "tr '\n' ' ' | tr '+' '\n' | fix "
 alias ngit "open https://github.com/new"
 alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
+alias cwnotes "head `ls -1t $ndir/cwnote_201* | grep -v -e '(' -e ')'` | more"
+
+# add commodore basic
+alias basic cbmbasic
+alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
+alias shrug "echo ¯\_(ツ)_/¯ | pbcopy"
