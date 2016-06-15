@@ -1,0 +1,7 @@
+#!/bin/tcsh -f #-X -V
+#% wraps around site, turns + into quotes
+#% turns spaces into URL spaces (%22)
+
+set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
+echo $str
+open 'https://en.wiktionary.org/wiki/Special:Search?search='$str
