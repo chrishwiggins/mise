@@ -228,3 +228,4 @@ alias cwnotes "head `ls -1t $ndir/cwnote_201* | grep -v -e '(' -e ')'` | more"
 alias basic cbmbasic
 alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
 alias shrug "echo ¯\_(ツ)_/¯ | pbcopy"
+alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
