@@ -67,7 +67,7 @@ alias remise "cd-mise;git pull origin master;cd -"
 # misc:
 alias att gm has:attachment
 alias sniff open /Applications/iStumbler.app/
-alias estrip "fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v -e wiggins@tantanmen -e wiggins@karaage | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' "
+alias estrip "fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v -e wiggins@tantanmen -e wiggins@karaage -e '^@' -e git@github.com | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' "
 ## misc auxfile tricks:
 #alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
 #alias dv "setv;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
@@ -229,3 +229,7 @@ alias basic cbmbasic
 alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
 alias shrug "echo ¯\_(ツ)_/¯ | pbcopy"
 alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
+alias vi-null vim -u NONE
+
+alias nterm 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -\!:* | normalize`'
+alias term 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -1 | normalize`'
