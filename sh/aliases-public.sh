@@ -233,3 +233,5 @@ alias vi-null vim -u NONE
 
 alias nterm 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -\!:* | normalize`'
 alias term 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -1 | normalize`'
+# good fu: exploits quick add but adds browser to edit event, send invitesjj
+alias oslow 'fox `slow \!:* | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`'
