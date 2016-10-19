@@ -11,12 +11,11 @@ expand \
       -e 's/^[> ]*//' \
       -e 's/ =$//' \
       -e 's/=$/-/' \
-      -e 's/,[ ]*$//' \
       -e 's/[ ]*=20$//'\
       -e 's/=91/'"'"'/g' \
       -e 's/=92/`/g' \
       -e 's/=96/-/g'  \
-      -e 's/[,]*$//g' \
+      -e 's/,[,]*$/,/g' \
       -e 's/^[,]*//g' 
 
 # cf http://www.w3schools.com/TAGS/ref_urlencode.asp

@@ -87,7 +87,8 @@ alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
 alias similar "gsearch related:\!:*"
 #alias repof "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/; touch mat/.DS_store dat/.DS_store doc/.DS_store fig/.DS_store log/.DS_store ref/.DS_store src/.DS_store out/.DS_store aux/.DS_store "
 #alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
-alias repo "mkdir dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/anonymous/4fa592e17f1bdfd79e6dbdb0cf820df5/raw/9f0e81a77d94d74257641eb8279303b65fa0a85e/a.rb"
+#alias repo "mkdir dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/anonymous/4fa592e17f1bdfd79e6dbdb0cf820df5/raw/9f0e81a77d94d74257641eb8279303b65fa0a85e/a.rb"
+alias repo "mkdir git/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md"
 #alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
 alias http "open http://\!*"
@@ -98,7 +99,8 @@ alias json-grep jgrep
 alias g gsearch
 #alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force"
-alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend"
+alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend;gc-tend"
+alias gc-tend "gcloud components update"
 alias gem-tend "gem cleanup;gem update"
 alias datestr date +%Y-%m-%dT%H:%M:%S
 #alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
@@ -201,7 +203,9 @@ alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 #alias mypy /usr/bin/python
 #alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
-alias mbo "skype; boxes ; voice ; ichat; telegram;slack;DECK;focus"
+#alias mbo "skype; boxes ; voice ; ichat; telegram;slack;DECK;focus"
+# alias mbo "iboxes; ichat; voice"
+alias mbo "f;boxes; ichat; voice"
 alias md2pdf "pandoc --number-sections \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias clio "fox 'http://clio.cul.columbia.edu'"
@@ -237,3 +241,5 @@ alias nterm 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -\!:
 # alias term 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -1 | normalize`'
 # good fu: exploits quick add but adds browser to edit event, send invitesjj
 alias oslow 'fox `slow \!:* | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`'
+alias logo open /Applications/ACSLogo.app/
+alias remake 'vi makefile'
