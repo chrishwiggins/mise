@@ -98,8 +98,9 @@ alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 alias json-grep jgrep
 alias g gsearch
 #alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
-alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force"
-alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend;gc-tend"
+#alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force;mas upgrade"
+alias tend "sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force"
+alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias gc-tend "gcloud components update"
 alias gem-tend "gem cleanup;gem update"
 alias datestr date +%Y-%m-%dT%H:%M:%S
@@ -233,7 +234,7 @@ alias cwnotes 'head `ls -1t $ndir/cwnote_201* | normalize` | more'
 # add commodore basic
 alias basic cbmbasic
 alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
-alias shrug "echo ¯\_(ツ)_/¯ | pbcopy"
+alias shrug "echo '¯\_(ツ)_/¯' | pbcopy"
 alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
 alias vi-null vim -u NONE
 
@@ -243,3 +244,4 @@ alias nterm 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -\!:
 alias oslow 'fox `slow \!:* | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`'
 alias logo open /Applications/ACSLogo.app/
 alias remake 'vi makefile'
+alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forecast/?ex_cid=rrpromo' | grep -A 2 'Hillary Clinton' | more | head -3 | grep '%'; lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
