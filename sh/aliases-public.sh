@@ -103,7 +103,10 @@ alias tend "sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew lin
 alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias gc-tend "gcloud components update"
 alias gem-tend "gem cleanup;gem update"
-alias datestr date +%Y-%m-%dT%H:%M:%S
+# ":" is read as "%" or "/" and is bad for makefile variables:
+# alias datestr date +%Y-%m-%dT%H-%M-%S
+# alias datestr date +%Y-%m-%dT%H-%M-%S
+alias datestr date +%Y-%m-%dT%Hh%Mm%S
 #alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
 alias brew-tend "brew upgrade ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
@@ -211,6 +214,7 @@ alias md2pdf "pandoc --number-sections \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias clio "fox 'http://clio.cul.columbia.edu'"
 alias roi "open ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a"
+alias beet "open /Users/wiggins/Music/iTunes/iTunes\ Media/Music/Compilations/7\ Conductors\ vs.\ Beethoven\'s\ 7th/06\ Symphony\ No.\ 7\ in\ A\ Major,\ Op.\ 92_\ II.\ Allegretto.m4a"
 alias pbpate pbpaste
 alias acal fox http://registrar.columbia.edu/event/academic-calendar
 alias omutts "cd $odir;mutts;cd -"
@@ -244,5 +248,5 @@ alias nterm 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -\!:
 alias oslow 'fox `slow \!:* | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`'
 alias logo open /Applications/ACSLogo.app/
 alias remake 'vi makefile'
-#alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forecast/?ex_cid=rrpromo#plus' | grep -A 2 'Hillary Clinton' | more | head -3 | grep '%'; lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
-alias polls "lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
+alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forecast/?ex_cid=rrpromo#plus' | grep -A 2 'Hillary Clinton' | more | head -3 | grep '%'; lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
+#alias polls "lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"

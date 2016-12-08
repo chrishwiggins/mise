@@ -1,0 +1,22 @@
+#!/bin/tcsh -f #-X -V
+#
+# gmail recently changed the UX around
+# "download original"
+# now defining the file as original msg.txt
+# with a space
+# which is annoying
+# so you end up with a bunch of files called
+# original\ msg\ \({n}\).txt
+# in osx
+#
+# ugh
+#
+# so this script calls unspace-mvs then
+# renames after the date in the email
+
+# cw defined:
+unspace-mvs
+foreach efile ( original_msg*.txt )                    
+  echo $efile
+  mv -i $efile `grep '^Date:' $efile | tr ',\r' ' ' | sed -e 's/Date: //' -e 's/[0-9,_ -]*$//' | head -1 | sed -e 's/ [ ]*/_/g'`.eml
+end
