@@ -38,5 +38,5 @@ set path = ( $path . )
 set path = ( $path ~/google-cloud-sdk/bin )
 
 ## learn my aliases
-learn
+# learn
 source $paliases
