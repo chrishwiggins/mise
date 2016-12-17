@@ -4,7 +4,7 @@
 set cwhome=$home
 set mise=$cwhome/mise/
 ## FILES
-set paliases=$mise/sh/aliases-public.sh
+set cwpaliases=$mise/sh/aliases-public.sh
 
 # unix essentials
 alias l '/bin/ls -ltrFsA'
