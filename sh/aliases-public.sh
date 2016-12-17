@@ -9,6 +9,7 @@ set cwpaliases=$mise/sh/aliases-public.sh
 ## conditionals
 if (! $?ndir) then
   set ndir=$cwhome/Documents/ndir/
+  touch $ndir/cwnote_201y_mm_ddThh_mm_ss.md
 endif
 if (! $?phonefile) then
   set phonefile=$cwhome/Documents/phonebook.txt
