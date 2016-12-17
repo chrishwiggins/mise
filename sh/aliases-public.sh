@@ -1,3 +1,5 @@
+set cwhome=$home
+set mise=$cwhome/mise/
 
 # unix essentials
 alias l '/bin/ls -ltrFsA'
