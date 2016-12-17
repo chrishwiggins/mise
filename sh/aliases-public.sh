@@ -14,7 +14,7 @@ if (! $?phonefile) then
   set phonefile=$cwhome/Documents/phonebook.txt
 endif
 if (! $?cwaux) then
-  set phonefile=$cwhome/Documents/aux/
+  set cwaux=$cwhome/Documents/aux/
 endif
 
 # unix essentials
