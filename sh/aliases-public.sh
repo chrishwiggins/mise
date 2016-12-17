@@ -1,5 +1,10 @@
+# SET VARIABLES
+
+## DIRECTORIES
 set cwhome=$home
 set mise=$cwhome/mise/
+## FILES
+set paliases=$mise/sh/aliases-public.sh
 
 # unix essentials
 alias l '/bin/ls -ltrFsA'
@@ -10,6 +15,10 @@ alias please sudo
 # places to go
 alias cd-htm cd ~/Documents/public_html
 alias cd-mise cd $mise
+
+# handy, needed below
+alias datestr 'date +%Y-%m-%dT%H:%M:%S'
+
 
 alias dump "learn;pbpaste > `datestr`"
 alias mdump "learn;pbpaste > `datestr`.eml;pbmunpack;mv mail-dump `datestr`-files"
@@ -252,4 +261,3 @@ alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forec
 #alias polls "lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
 
 
-alias datestr 'date +%Y-%m-%dT%H:%M:%S'
