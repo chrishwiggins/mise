@@ -57,7 +57,7 @@ alias 1010 "open 'http://69.28.176.133:80/infinity_wins-am?MSWMExt=.asf'"
 # meta (aliases to help make aliases) 
 alias aalias 'echo "alias \!*" >> $cwaliases ; learn '
 alias palias 'echo "alias \!*" >> $paliases ; learn '
-alias learn "source $cwaliases ; source $cwpaliases"
+# alias learn "source $cwaliases ; source $cwpaliases"
 alias teach "vi + $cwaliases;vi + $cwpaliases"
 alias pteach "vi + $cwpaliases"
 alias gugc "git pull origin master;git commit -a ;git push origin master"
