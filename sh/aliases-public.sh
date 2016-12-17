@@ -250,3 +250,6 @@ alias logo open /Applications/ACSLogo.app/
 alias remake 'vi makefile'
 alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forecast/?ex_cid=rrpromo#plus' | grep -A 2 'Hillary Clinton' | more | head -3 | grep '%'; lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
 #alias polls "lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
+
+
+alias datestr 'date +%Y-%m-%dT%H:%M:%S'
