@@ -6,6 +6,11 @@ set mise=$cwhome/mise/
 ## FILES
 set cwpaliases=$mise/sh/aliases-public.sh
 
+## conditionals
+if (! $?ndir) then
+  set ndir=$cwhome/Documents/ndir
+endif
+
 # unix essentials
 alias l '/bin/ls -ltrFsA'
 alias mi 'mv -i'
