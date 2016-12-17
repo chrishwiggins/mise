@@ -8,10 +8,13 @@ set cwpaliases=$mise/sh/aliases-public.sh
 
 ## conditionals
 if (! $?ndir) then
-  set ndir=$cwhome/Documents/ndir
+  set ndir=$cwhome/Documents/ndir/
 endif
 if (! $?phonefile) then
   set phonefile=$cwhome/Documents/phonebook.txt
+endif
+if (! $?cwaux) then
+  set phonefile=$cwhome/Documents/aux/
 endif
 
 # unix essentials
