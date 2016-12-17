@@ -10,6 +10,9 @@ set cwpaliases=$mise/sh/aliases-public.sh
 if (! $?ndir) then
   set ndir=$cwhome/Documents/ndir
 endif
+if (! $?phonefile) then
+  set phonefile=$cwhome/Documents/phonebook.txt
+endif
 
 # unix essentials
 alias l '/bin/ls -ltrFsA'
