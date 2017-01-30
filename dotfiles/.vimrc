@@ -7,7 +7,8 @@ endif
 " causes problems on pasting:
 " set smartindent
 set tabstop=2
-set shiftwidth=4
+" for '>', e.g., set shiftwidth=4
+set shiftwidth=2
 " causes problems with makefiles:
 set expandtab
 filetype plugin on 
