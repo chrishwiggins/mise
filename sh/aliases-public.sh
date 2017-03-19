@@ -274,3 +274,4 @@ alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forec
 #alias polls "lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
 
 
+alias pdfjoin gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=final.pdf
