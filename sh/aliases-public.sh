@@ -279,3 +279,10 @@ alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forec
 # alias pycharm open /Applications/PyCharm.app/
 alias lower "tr '[A-Z]' '[a-z]'"
 alias upper "tr '[a-z]' '[A-Z]'"
+alias refine open /Applications/OpenRefine.app/
+
+# aliases for PPF class
+alias des "echo Alain Desrosières"
+alias pbdes "echo Desrosières|pbcopy"
+alias ppf-server open http://104.196.215.242:8000 
+alias ppf-server open http://data-ppf.dsi.columbia.edu:8000
