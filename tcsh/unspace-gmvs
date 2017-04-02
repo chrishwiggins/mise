@@ -9,5 +9,5 @@ find . | grep -e ' ' -e ',' -e '-' -e '_' | sed -e 's/[, _-][, _-]*/_/g' | sed -
 find . | grep -e ' ' -e ',' -e '-' -e '_' | sed -f /Users/wiggins/mise//sed/normalize  >! /tmp/old_$$
 
 
-paste /tmp/old_$$ /tmp/new_$$ | awk '{print "git mv -i "$0}' >! /tmp/mvs.sh
+paste /tmp/old_$$ /tmp/new_$$ | awk '{print "git mv  "$0}' >! /tmp/mvs.sh
 source /tmp/mvs.sh
