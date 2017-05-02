@@ -101,8 +101,12 @@ alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | p
 alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
 alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr=$vstr'
 alias v 'setv; vi +star $vstr; echo vstr=$vstr'
-alias pv 'pbcopy < $vstr'
 alias sv 'source $vstr'
+# v & b (quicknotes+longnotes)
+alias pv 'pbcopy < $vstr'
+alias pb 'pbcopy < $bstr'
+alias iv 'ispell $vstr'
+alias ib 'ispell $bstr'
 
 #alias hg 'history 99999999999999 | grep \!:1 | grep -v hg'
 alias hG 'history 99999999999999 | grep -i \!:1 | grep -v hG'
@@ -250,7 +254,7 @@ alias rest pmset sleepnow
 alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
 alias thus "echo ∴|pbcopy"
 alias sheets "open 'https://drive.google.com/drive/u/0/#search?q=type%3Aspreadsheet'"
-alias hamming "pbcopy < ~/Documents/Science/Advising/Ideas/Hamming/hamming-you-and-your-research.txt"
+
 alias kreps "echo 'https://twitter.com/jaykreps/status/219977241839411200' | pbcopy "
 alias pbstrip "pbpaste|estrip|pbcopy"
 alias reline "tr '\n' ' ' | tr '+' '\n' | fix "
@@ -286,3 +290,6 @@ alias des "echo Alain Desrosières"
 alias pbdes "echo Desrosières|pbcopy"
 alias ppf-server open http://104.196.215.242:8000 
 alias ppf-server open http://data-ppf.dsi.columbia.edu:8000
+
+# misc google fu
+alias ndoc "open 'https://docs.google.com/document/u/0/create?usp=docs_home&ths=true'"
