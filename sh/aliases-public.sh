@@ -128,7 +128,7 @@ alias g gsearch
 #alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force;mas upgrade"
 alias tend "sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force"
 alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
-alias gc-tend "gcloud components update"
+alias gc-tend "gcloud components update -q"
 alias gem-tend "gem cleanup;gem update"
 # ":" is read as "%" or "/" and is bad for makefile variables:
 # alias datestr date +%Y-%m-%dT%H-%M-%S
@@ -293,3 +293,6 @@ alias ppf-server open http://data-ppf.dsi.columbia.edu:8000
 
 # misc google fu
 alias ndoc "open 'https://docs.google.com/document/u/0/create?usp=docs_home&ths=true'"
+
+# uke tuning via sox:
+alias fleas "play -n synth 1 sin 783.99; play -n synth 1 sin 523.25; play -n synth 1 sin 659.25; play -n synth 1 sin 880.00"
