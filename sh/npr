@@ -1,1 +1,5 @@
-open `curl http://www.npr.org/rss/podcast.php?id=500005| tr '<>"' '\n' | grep -i mp3 | head -1`
+# 2017-05-27:
+open `curl 'https://www.npr.org/rss/podcast.php?id=500005' | tr '<>?"' '\n' | grep -i mp3| head -1`
+
+# before 2017-05-27:
+# open `curl http://www.npr.org/rss/podcast.php?id=500005| tr '<>"' '\n' | grep -i mp3 | head -1`
