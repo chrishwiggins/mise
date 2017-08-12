@@ -88,7 +88,8 @@ alias remise "cd-mise;git pull origin master;cd -"
 
 # misc:
 alias att gm has:attachment
-alias sniff open /Applications/iStumbler.app/
+#alias sniff open /Applications/iStumbler.app/
+alias sniff "open /Applications/WiFi\ Explorer.app/"
 alias estrip "fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v -e wiggins@tantanmen -e wiggins@karaage -e '^@' -e git@github.com | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' "
 ## misc auxfile tricks:
 #alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
@@ -100,7 +101,7 @@ alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | p
 # alias setv 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`'
 alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
 alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr=$vstr'
-alias v 'setv; vi +star $vstr; echo vstr=$vstr'
+alias v 'setv; vi +star $vstr; echo vstr:;echo $vstr'
 alias sv 'source $vstr'
 # v & b (quicknotes+longnotes)
 alias pv 'pbcopy < $vstr'
@@ -115,7 +116,8 @@ alias similar "gsearch related:\!:*"
 #alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
 #alias repo "mkdir dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/anonymous/4fa592e17f1bdfd79e6dbdb0cf820df5/raw/9f0e81a77d94d74257641eb8279303b65fa0a85e/a.rb"
 # alias repo "mkdir git/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md"
-alias repo "mkdir git/ dat/ doc/ doc/backups fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md; wget -O doc/makefile  --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; wget -O doc/writeup.sed --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb"
+# alias repo "mkdir git/ dat/ doc/ doc/backups fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md; wget -O doc/makefile  --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; wget -O doc/writeup.sed --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb"
+alias repo "mkdir git/ dat/ doc/ doc/backups fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; curl -o README.md --silent  https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md; curl -o doc/makefile  --silent  https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; curl -o doc/writeup.sed  https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb"
 #alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
 alias http "open http://\!*"
@@ -296,3 +298,4 @@ alias ndoc "open 'https://docs.google.com/document/u/0/create?usp=docs_home&ths=
 
 # uke tuning via sox:
 alias fleas "play -n synth 1 sin 783.99; play -n synth 1 sin 523.25; play -n synth 1 sin 659.25; play -n synth 1 sin 880.00"
+alias smile open https://smile.amazon.com/
