@@ -89,7 +89,6 @@ alias remise "cd-mise;git pull origin master;cd -"
 # misc:
 alias att gm has:attachment
 #alias sniff open /Applications/iStumbler.app/
-alias sniff "open /Applications/WiFi\ Explorer.app/"
 alias estrip "fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v -e wiggins@tantanmen -e wiggins@karaage -e '^@' -e git@github.com | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' "
 ## misc auxfile tricks:
 #alias dv "setenv vstr ~/Desktop/cwnote_`date +20%yy%mm%dd%Hh%M`;grep '[A-z]' $gtddir/cwttd_20* | sort -rn | cut -d_ -f2- | sed 's/\:/\: /' | pbcopy; vv"
@@ -239,7 +238,7 @@ alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 #alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
 #alias mbo "skype; boxes ; voice ; ichat; telegram;slack;DECK;focus"
 # alias mbo "iboxes; ichat; voice"
-alias mbo "f;boxes; ichat; voice"
+alias mbo "nytcal;boxes; ichat; voice;f"
 alias md2pdf "pandoc --number-sections \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias clio "fox 'http://clio.cul.columbia.edu'"
@@ -299,3 +298,5 @@ alias ndoc "open 'https://docs.google.com/document/u/0/create?usp=docs_home&ths=
 # uke tuning via sox:
 alias fleas "play -n synth 1 sin 783.99; play -n synth 1 sin 523.25; play -n synth 1 sin 659.25; play -n synth 1 sin 880.00"
 alias smile open https://smile.amazon.com/
+alias unxml plutil -convert xml1
+alias pdfmerge "gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=pdfmerge-out.pdf \!:*"
