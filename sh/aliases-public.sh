@@ -301,3 +301,5 @@ alias fleas "play -n synth 1 sin 783.99; play -n synth 1 sin 523.25; play -n syn
 alias smile open https://smile.amazon.com/
 alias unxml plutil -convert xml1
 alias pdfmerge "gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=pdfmerge-out.pdf \!:*"
+alias fmail 'setenv fmail `lynx -nolist -dump https://maildrop.cc/ | grep @maildrop.cc`;echo $fmail|pbcopy'
+alias fmail-open 'open https://maildrop.cc/inbox/`echo $fmail|cut -d@ -f1`'
