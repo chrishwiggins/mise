@@ -305,3 +305,4 @@ alias fmail 'setenv fmail `lynx -nolist -dump https://maildrop.cc/ | grep @maild
 alias fmail-open 'open https://maildrop.cc/inbox/`echo $fmail|cut -d@ -f1`'
 
 alias drive "open /Applications/Backup\ and\ Sync.app/"
+alias mlok mlook
