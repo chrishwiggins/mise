@@ -18,6 +18,7 @@ set noclobber
 
 # actually do stuff
 ## set path
+#% echo path
 cset
 
 ### TEXSTUFF
@@ -39,4 +40,5 @@ set path = ( $path ~/google-cloud-sdk/bin )
 
 ## learn my aliases
 # learn
+#% echo aliases
 source $paliases
