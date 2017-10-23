@@ -233,6 +233,7 @@ alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
 alias distract "boxes;ichat;adium;skype;voice"
 alias brews "brew list > $cwaux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/homebrew-*.asc"
+alias pips "pip list > $cwaux/pip-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/pip-*.asc"
 alias r-installed "which-r > $cwaux/r-installed-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/r-installed-*.asc"
 alias pb2gist gist -o -P
 
