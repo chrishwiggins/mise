@@ -142,7 +142,7 @@ alias datestr date +%Y-%m-%dT%Hh%Mm%S
 #alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
 #alias brew-tend "brew upgrade ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
 alias brew-tend "brew upgrade ; brew update;brew doctor;brew cask cleanup;brew link openssl --force; brew cleanup -s;brew prune"
-alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
+alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip;pips"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 #alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
 alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda;conda clean -tipsy"
