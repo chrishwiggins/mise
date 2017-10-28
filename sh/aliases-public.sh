@@ -312,3 +312,4 @@ alias fmail-open 'open https://maildrop.cc/inbox/`echo $fmail|cut -d@ -f1`'
 
 alias drive "open /Applications/Backup\ and\ Sync.app/"
 alias mlok mlook
+alias toro open -a /Applications/TorBrowser.app/
