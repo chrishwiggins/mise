@@ -130,7 +130,7 @@ alias json-grep jgrep
 alias g gsearch
 #alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 #alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force;mas upgrade"
-alias tend "sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force"
+alias tend "date;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force;date"
 #alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias qtend "brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias gc-tend "gcloud components update -q"
