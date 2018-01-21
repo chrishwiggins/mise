@@ -313,4 +313,4 @@ alias fmail-open 'open https://maildrop.cc/inbox/`echo $fmail|cut -d@ -f1`'
 alias drive "open /Applications/Backup\ and\ Sync.app/"
 alias mlok mlook
 alias toro open -a /Applications/TorBrowser.app/
-
+alias prand "python3 -c 'import random;print(random.randint(0,99))'"
