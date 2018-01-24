@@ -314,3 +314,5 @@ alias drive "open /Applications/Backup\ and\ Sync.app/"
 alias mlok mlook
 alias toro open -a /Applications/TorBrowser.app/
 alias prand "python3 -c 'import random;print(random.randint(0,99))'"
+alias conda-nav open /Users/wiggins/anaconda3/Anaconda-Navigator.app
+alias nb /Users/wiggins/anaconda3/bin/jupyter_mac.command
