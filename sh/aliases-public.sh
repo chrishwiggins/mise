@@ -316,3 +316,5 @@ alias toro open -a /Applications/TorBrowser.app/
 alias prand "python3 -c 'import random;print(random.randint(0,99))'"
 alias conda-nav open /Users/wiggins/anaconda3/Anaconda-Navigator.app
 alias nb /Users/wiggins/anaconda3/bin/jupyter_mac.command
+alias htm2pdf '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --print-to-pdf '
+alias htm2png '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --screenshot '
