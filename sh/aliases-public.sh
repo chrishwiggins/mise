@@ -318,3 +318,4 @@ alias conda-nav open /Users/wiggins/anaconda3/Anaconda-Navigator.app
 alias nb /Users/wiggins/anaconda3/bin/jupyter_mac.command
 alias htm2pdf '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --print-to-pdf '
 alias htm2png '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --screenshot '
+alias salganik open http://www.bitbybitbook.com/en/ethics/
