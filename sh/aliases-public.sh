@@ -320,3 +320,4 @@ alias htm2pdf '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --
 alias htm2png '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --screenshot '
 alias salganik open http://www.bitbybitbook.com/en/ethics/
 alias teen say i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like
+alias hex 'grep -i \!:* $cwaux/hex-color.txt'
