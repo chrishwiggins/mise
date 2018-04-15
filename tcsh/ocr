@@ -7,7 +7,7 @@ time convert -density 300 $1 -depth 8 -strip -background white -alpha off /tmp/o
 echo ...finished convert to tiff $1 at `date` 
 #"u -strip -background white -alpha off" removes any alpha channels, and makes the background white. Tesseract is rather picky about this kind of thing.
 echo starting tesseract at `date`r 
-time tesseract /tmp/ocr_$$.tiff $1.txt
+time tesseract /tmp/ocr_$$.tiff $1:r
 echo ...ending tesseract
  
 
