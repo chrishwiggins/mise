@@ -323,3 +323,4 @@ alias salganik open http://www.bitbybitbook.com/en/ethics/
 alias teen say i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like
 alias hex 'grep -i \!:* $cwaux/hex-color.txt'
 alias undos "tr '\r' '\n'"
+alias gpgp 'git pull git push'
