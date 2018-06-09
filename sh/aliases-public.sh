@@ -257,7 +257,9 @@ alias acal fox http://registrar.columbia.edu/event/academic-calendar
 #alias omutts "cd $odir;mutts;cd -"
 alias lock "/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend"
 
-alias zip4 "open 'https://tools.usps.com/go/ZipLookupAction'!'input.action?mode=0&refresh=true'"
+#alias zip4 open http://zip4.usps.com/zip4/welcome.jsp
+#alias zip4 "open 'https://tools.usps.com/go/ZipLookupAction'!'input.action?mode=0&refresh=true'"
+alias zip4 "open 'https://tools.usps.com/zip-code-lookup.htm?byaddress'"
 # alias rest sudo shutdown -s now
 alias rest pmset sleepnow
 alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
