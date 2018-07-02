@@ -326,3 +326,16 @@ alias teen say i was like i was like i was like i was like i was like i was like
 alias hex 'grep -i \!:* $cwaux/hex-color.txt'
 alias undos "tr '\r' '\n'"
 alias gpgp 'git pull; git push'
+alias nuzz open http://nuzzel.com/
+alias leaf fox https://v2.overleaf.com/project
+alias txt2aiff 'say -r 270 -f \!:1 -o \!:1.aiff'
+alias remkae make
+alias remkae make
+alias weahter weather
+alias weahter weather
+alias porfa sudo
+alias pcbopy pbcopy
+alias aaias alias
+alias aaias aalias
+alias doccs docs
+alias book gbook
