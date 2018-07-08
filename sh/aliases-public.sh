@@ -337,6 +337,7 @@ alias aaias alias
 alias aaias aalias
 alias doccs docs
 alias book gbook
+alias ogit-here open `grep github.com .git/config | sed -e 's/\:/\//' -e 's/url = git@/http:\/\//' -e 's/\.git[ ]*$//'`
 
 # things using gm which i changed to gg 20180708
 alias att gg has:attachment
