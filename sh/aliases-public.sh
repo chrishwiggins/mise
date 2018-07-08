@@ -55,8 +55,6 @@ alias gcomp 'open https://mail.google.com/mail/u/0/#compose/\!*'
 alias mcomp "open 'https://mail.google.com/mail/u/0/x/?&v=b&eot=1&pv=tl&cs=b'"
 alias mm "open https://mail.google.com/mail/u/0/x/"
 #alias gread "fox  'http://www.google.com/reader/view/#overview-page'"
-alias frm "gm from:\!*"
-alias to "gm to:\!*"
 #alias gcal fox http://www.google.com/calendar/render
 #alias gcal camino http://www.google.com/calendar/render
 #alias gcal camino https://www.google.com/calendar/
@@ -90,7 +88,6 @@ alias miseup "cd-mise;gugc;cd -"
 alias remise "cd-mise;git pull origin master;cd -"
 
 # misc:
-alias att gm has:attachment
 #alias sniff open /Applications/iStumbler.app/
 alias estrip "fix | tr ' , (){}:;[]=<>' '\n' | grep @ | sort -bfdu | grep -v -e wiggins@tantanmen -e wiggins@karaage -e '^@' -e git@github.com | tr '\n' ' ' | fix | sed -e 's/ [ ]*/,/g' "
 ## misc auxfile tricks:
@@ -340,3 +337,8 @@ alias aaias alias
 alias aaias aalias
 alias doccs docs
 alias book gbook
+
+# things using gm which i changed to gg 20180708
+alias att gg has:attachment
+alias frm "gg from:\!*"
+alias to "gg to:\!*"
