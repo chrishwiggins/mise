@@ -23,6 +23,7 @@ endif
 # echo unix
 # unix essentials
 alias l '/bin/ls -ltrFsA'
+alias ll '/bin/ls -ltrFs'
 alias mi 'mv -i'
 alias up "cd .."
 alias please sudo
