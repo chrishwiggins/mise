@@ -343,3 +343,7 @@ alias book gbook
 alias att gg has:attachment
 alias frm "gg from:\!*"
 alias to "gg to:\!*"
+
+# cu library
+alias clio "open 'http://www.columbia.edu/cgi-bin/cul/resolve?AMS3996'"
+alias clio "open 'https://library.columbia.edu/'"
