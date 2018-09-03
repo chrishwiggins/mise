@@ -60,7 +60,8 @@ alias mm "open https://mail.google.com/mail/u/0/x/"
 #alias gcal camino https://www.google.com/calendar/
 #alias gcal fox https://www.google.com/calendar/
 #alias gcal chrome http://www.google.com/calendar/render
-alias gcal fox https://www.google.com/calendar/b/0/render
+# alias gcal fox https://www.google.com/calendar/b/0/render
+alias gcal pers-gmail-browser https://www.google.com/calendar/b/0/render
 alias ccal chrome https://www.google.com/calendar/b/0/render
 # NB: 'gc' intended for use with google <- /usr/local/bin/google
 alias gc google calendar add
@@ -348,4 +349,3 @@ alias to "gg to:\!*"
 alias clio "open 'http://www.columbia.edu/cgi-bin/cul/resolve?AMS3996'"
 alias clio "open 'https://library.columbia.edu/'"
 alias manel "pbcopy < $mise/aux/manel.txt"
-
