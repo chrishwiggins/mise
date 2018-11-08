@@ -355,3 +355,4 @@ alias clio "open 'http://www.columbia.edu/cgi-bin/cul/resolve?AMS3996'"
 alias clio "open 'https://library.columbia.edu/'"
 alias manel "pbcopy < $mise/aux/manel.txt"
 alias takeout "open 'https://takeout.google.com/settings/takeout'"
+alias oct ocr
