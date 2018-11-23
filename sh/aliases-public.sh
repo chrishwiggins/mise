@@ -357,3 +357,4 @@ alias clio "open 'https://library.columbia.edu/'"
 alias manel "pbcopy < $mise/aux/manel.txt"
 alias takeout "open 'https://takeout.google.com/settings/takeout'"
 alias oct ocr
+alias profile py3 -m cProfile
