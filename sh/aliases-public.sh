@@ -359,3 +359,4 @@ alias takeout "open 'https://takeout.google.com/settings/takeout'"
 alias oct ocr
 alias profile py3 -m cProfile
 alias atom open /Applications/Atom.app/
+alias eee "echo 'Do you know your estimated time of arrival?'|pbcopy"
