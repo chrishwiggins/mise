@@ -223,6 +223,13 @@ alias platf "pdff \!:*:r ; bibtex \!:*:r ; pdff \!:*:r ; pdff \!:*:r ; grep Cita
 alias pdff pdflatex -interaction=nonstopmode
 
 # more misc
+alias manel "pbcopy < $mise/aux/manel.txt"
+alias takeout "open 'https://takeout.google.com/settings/takeout'"
+alias oct ocr
+alias profile py3 -m cProfile
+alias atom open /Applications/Atom.app/
+alias eee "echo 'Do you know your estimated time of arrival?'|pbcopy"
+alias zork echo back to work, you.
 alias asciify "/usr/bin/perl -pe 's/[^[:ascii:]]/+/g'"
 alias bow "asciify | fix | lower | words | nodud | sort -bfd | uniq -c | sort -nr"
 alias newdoc "open https://docs.google.com/document/"
@@ -354,9 +361,3 @@ alias to "gg to:\!*"
 # cu library
 alias clio "open 'http://www.columbia.edu/cgi-bin/cul/resolve?AMS3996'"
 alias clio "open 'https://library.columbia.edu/'"
-alias manel "pbcopy < $mise/aux/manel.txt"
-alias takeout "open 'https://takeout.google.com/settings/takeout'"
-alias oct ocr
-alias profile py3 -m cProfile
-alias atom open /Applications/Atom.app/
-alias eee "echo 'Do you know your estimated time of arrival?'|pbcopy"
