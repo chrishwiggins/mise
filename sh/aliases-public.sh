@@ -365,3 +365,4 @@ alias clio "open 'https://library.columbia.edu/'"
 
 #alias amazon "gsearch  site:amazon.com \!*"
 alias amazon "gsearch  site:worldcat.org \!*"
+alias juice open /System/Library/PreferencePanes/EnergySaver.prefPane/
