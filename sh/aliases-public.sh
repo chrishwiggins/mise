@@ -363,6 +363,6 @@ alias to "gg to:\!*"
 alias clio "open 'http://www.columbia.edu/cgi-bin/cul/resolve?AMS3996'"
 alias clio "open 'https://library.columbia.edu/'"
 
-#alias amazon "gsearch  site:amazon.com \!*"
+alias amzn "gsearch  site:amazon.com \!*"
 alias amazon "gsearch  site:worldcat.org \!*"
 alias juice open /System/Library/PreferencePanes/EnergySaver.prefPane/
