@@ -137,7 +137,9 @@ alias tend "date;open /Applications/App\ Store.app/;qtend;cd ~;brew link openssl
 alias qtend "brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias qqtend "q-brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias gc-tend "gcloud components update -q"
+# 2019-01-27 this needs sudo sadly: 
 alias gem-tend "gem cleanup;gem update"
+alias sudo-gem-tend "sudo gem cleanup;sudo gem update"
 # ":" is read as "%" or "/" and is bad for makefile variables:
 # alias datestr date +%Y-%m-%dT%H-%M-%S
 # alias datestr date +%Y-%m-%dT%H-%M-%S
@@ -146,10 +148,13 @@ alias datestr date +%Y-%m-%dT%Hh%Mm%S
 #alias brew-tend "brew upgrade ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
 #alias brew-tend "brew upgrade ; brew update;brew doctor;brew cask cleanup;brew link openssl --force; brew cleanup -s;brew prune"
 #alias brew-tend "brew upgrade ; brew update;brew doctor;brew cleanup;brew link openssl --force; brew cleanup -s;brew prune"
-alias brew-tend "brew upgrade | tee /tmp/brew_upgrade_`datestr` ; brew update;brew doctor;brew cleanup;brew link openssl --force; brew cleanup -s;brew prune"
-alias q-brew-tend "brew update;brew doctor;brew cleanup;brew link openssl --force; brew cleanup -s;brew prune"
+# alias brew-tend "brew upgrade | tee /tmp/brew_upgrade_`datestr` ; brew update;brew doctor;brew cleanup;brew link openssl --force; brew cleanup -s;brew prune"
+# alias q-brew-tend "brew update;brew doctor;brew cleanup;brew link openssl --force; brew cleanup -s;brew prune"
+alias brew-tend "brew upgrade | tee /tmp/brew_upgrade_`datestr` ; brew update;brew doctor;brew cleanup;brew link openssl --force; brew cleanup -s"
+alias q-brew-tend "brew update;brew doctor;brew cleanup;brew link openssl --force; brew cleanup -s"
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip;pips"
-alias hask-tend "cabal update;  ghc-pkg check --simple-output"
+#alias hask-tend "cabal update;  ghc-pkg check --simple-output"
+alias hask-tend "cabal new-update;  ghc-pkg check --simple-output"
 #alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
 alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda;conda clean -tipsy"
 alias cabal-tend "cabal update"
