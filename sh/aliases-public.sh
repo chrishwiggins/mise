@@ -348,6 +348,7 @@ alias gpgp 'git pull; git push'
 alias nuzz open http://nuzzel.com/
 alias leaf fox https://v2.overleaf.com/project
 alias txt2aiff 'say -r 270 -f \!:1 -o \!:1.aiff'
+alias txt2m4a 'say -r 270 -f \!:1 -o \!:1.m4a'
 alias remkae make
 alias remkae make
 alias weahter weather
