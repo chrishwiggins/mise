@@ -373,3 +373,4 @@ alias clio "open 'https://library.columbia.edu/'"
 alias amzn "gsearch  site:amazon.com \!*"
 alias amazon "gsearch  site:worldcat.org \!*"
 alias juice open /System/Library/PreferencePanes/EnergySaver.prefPane/
+alias sbe 'cat /dev/null | mutt \!:1 -a \!:2 -s \!:3'
