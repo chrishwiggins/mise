@@ -374,3 +374,4 @@ alias amzn "gsearch  site:amazon.com \!*"
 alias amazon "gsearch  site:worldcat.org \!*"
 alias juice open /System/Library/PreferencePanes/EnergySaver.prefPane/
 alias sbe 'cat /dev/null | mutt \!:1 -a \!:2 -s \!:3'
+alias pdf2pdf 'gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dQUIET -dBATCH -sOutputFile=output.pdf '
