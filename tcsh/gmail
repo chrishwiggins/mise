@@ -1,0 +1,28 @@
+#!/bin/tcsh -f #-V #-X -V
+#% open your browser in a gmail search
+#% eliminates spaces
+#% turns / (for dates) into url-formatted /
+#
+# this syntax barfed 02/14/12
+# set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'` 
+#
+# sytax also barfs on '[' which is read as a search by echo. 
+# HACK: {}->[]
+# 
+# FAIL: set str=`echo \'$*\' | sed -e 's/\ /+/g' -e 's/\:/%3a/g' -e 's/{/%5B/g' -e 's/}/%5D/g'` 
+#
+# this url barfed 02/14/12
+# set cmd="open -a ~/bin/chrome http://mail.google.com/mail/#search/"$str
+# new url:
+#
+# old url barfed 10/10/12
+# old string:
+# set cmd="open -a ~/bin/chrome http://mail.google.com/mail/u/0/#search/"$str
+#
+# new url:
+# https://mail.google.com/mail/u/0/#search/from%3Ahsomeone%40columbia.edu
+ 
+set str=`echo $* | sed -e 's/\ /+/g' -e 's/\:/%3a/g' -e 's/\//%2F/g' -e 's/@/%40/g'`
+set url="http://mail.google.com/mail/u/0/#search/"$str
+source ~/.login
+pers-gmail-browser $url
