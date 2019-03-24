@@ -207,7 +207,7 @@ alais grr g rstats
 alias rstack "open 'http://stats.stackexchange.com/search?q=%5Br%5D+'"
 #alias urls "asciify| fix | tr '<>[]()\ ' '\n' | grep -i 'http'| sed -e 's/[,.]\$//'"
 #alias urls "asciify| fix | tr '<>[]()\ ' '\n' | grep -i 'http'| sed -e 's/[,.]$//'"
-alias urls "asciify| fix | tr '<>[]()\ ' '\n' | grep -i 'http'"
+alias urls "asciify| fix | tr ';<>[]()\ ' '\n' | grep -i 'http'"
 alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
 alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
 alias deck onion
