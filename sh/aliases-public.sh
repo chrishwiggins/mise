@@ -297,6 +297,7 @@ alias cwnotes 'head `ls -1t $ndir/cwnote_201* | normalize` | more'
 alias basic cbmbasic
 alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
 alias shrug "echo '¯\_(ツ)_/¯' | pbcopy"
+alias tm "echo '™' | pbcopy"
 alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
 alias vi-null vim -u NONE
 
@@ -379,3 +380,4 @@ alias outline 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-section
 alias beamer  'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --slide-level 2 -i -t beamer --number-sections /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias stash   "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -i * stash_`date +%Y-%m-%dT%Hh%Mm`"
 alias stash-f "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -f * stash_`date +%Y-%m-%dT%Hh%Mm`"
+alias 
