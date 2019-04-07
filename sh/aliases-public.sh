@@ -380,3 +380,4 @@ alias outline 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-section
 alias beamer  'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --slide-level 2 -i -t beamer --number-sections /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias stash   "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -i * stash_`date +%Y-%m-%dT%Hh%Mm`"
 alias stash-f "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -f * stash_`date +%Y-%m-%dT%Hh%Mm`"
+alias jcm "echo '-Excuse me. I invented the term artificial intelligence. I invented it because ...we were trying to get money for a summer study in 1956...aimed at the long term goal of achieving human-level intelligence.'; open 'https://youtu.be/pyU9pm1hmYs?t=160'"
