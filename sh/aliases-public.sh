@@ -213,7 +213,8 @@ alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Rela
 alias deck onion
 alias otb fox http://www.onetimebox.org/
 alias sql "mysql.server start;mysql -uroot;mysql.server stop"
-alias sheet "open https://docs.google.com/spreadsheet/"
+#alias sheet "open https://docs.google.com/spreadsheet/"
+alias sheet "open http://sheet.new"
 
 #phone aliases
 alias call "echo \!* >> $phonefile"
