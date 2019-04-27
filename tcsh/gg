@@ -21,6 +21,7 @@
 #
 # new url:
 # https://mail.google.com/mail/u/0/#search/from%3Ahsomeone%40columbia.edu
+# https://mail.google.com/mail/u/0/#search/from%3Asaki
  
 set str=`echo $* | sed -e 's/\ /+/g' -e 's/\:/%3a/g' -e 's/\//%2F/g' -e 's/@/%40/g'`
 set url="http://mail.google.com/mail/u/0/#search/"$str
