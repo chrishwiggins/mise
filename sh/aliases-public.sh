@@ -33,7 +33,13 @@ alias cd-htm cd ~/Documents/public_html
 alias cd-mise cd $mise
 
 # handy, needed below
-alias datestr 'date +%Y-%m-%dT%H:%M:%S'
+# alias datestr 'date +%Y-%m-%dT%H-%M-%S '
+# alias datestr 'date +%Y-%m-%dT%H:%M:%S '
+alias datestr    date +%Y-%m-%dT%Hh%Mm%Ss
+alias datecp "datestr|pbcopy"
+alias dstr datestr
+alias pbdate 'datestr| pbcopy'
+alias dstr 'setenv dstr `datestr`'
 
 
 alias dump "learn;pbpaste > `datestr`"
@@ -142,9 +148,6 @@ alias gc-tend "gcloud components update -q"
 alias gem-tend "gem cleanup;gem update"
 alias sudo-gem-tend "sudo gem cleanup;sudo gem update"
 # ":" is read as "%" or "/" and is bad for makefile variables:
-# alias datestr date +%Y-%m-%dT%H-%M-%S
-# alias datestr date +%Y-%m-%dT%H-%M-%S
-alias datestr date +%Y-%m-%dT%Hh%Mm%S
 #alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
 #alias brew-tend "brew upgrade ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
 #alias brew-tend "brew upgrade ; brew update;brew doctor;brew cask cleanup;brew link openssl --force; brew cleanup -s;brew prune"
@@ -382,3 +385,4 @@ alias beamer  'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --slide-level 2 
 alias stash   "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -i * stash_`date +%Y-%m-%dT%Hh%Mm`"
 alias stash-f "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -f * stash_`date +%Y-%m-%dT%Hh%Mm`"
 alias jcm "echo '-Excuse me. I invented the term artificial intelligence. I invented it because ...we were trying to get money for a summer study in 1956...aimed at the long term goal of achieving human-level intelligence.'; open 'https://youtu.be/pyU9pm1hmYs?t=160'"
+
