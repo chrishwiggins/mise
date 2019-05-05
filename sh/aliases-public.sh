@@ -381,6 +381,7 @@ alias juice open /System/Library/PreferencePanes/EnergySaver.prefPane/
 alias sbe 'cat /dev/null | mutt \!:1 -a \!:2 -s \!:3'
 alias pdf2pdf 'gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dQUIET -dBATCH -sOutputFile=output.pdf '
 alias outline 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-sections /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
+alias toc 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-sections --table-of-contents /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias beamer  'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --slide-level 2 -i -t beamer --number-sections /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias stash   "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -i * stash_`date +%Y-%m-%dT%Hh%Mm`"
 alias stash-f "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -f * stash_`date +%Y-%m-%dT%Hh%Mm`"
