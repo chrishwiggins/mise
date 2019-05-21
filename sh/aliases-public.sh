@@ -171,6 +171,7 @@ alias mise "open https://github.com/chrishwiggins/mise"
 alias citibike open http://www.citibikenyc.com/stations
 
 # spelling while typing is hard
+alias plan plat
 alias opne open
 alias docus focus
 alias aalais aalias
