@@ -288,7 +288,6 @@ alias zip4 "open 'https://tools.usps.com/zip-code-lookup.htm?byaddress'"
 # alias rest sudo shutdown -s now
 alias rest pmset sleepnow
 alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
-alias thus "echo ∴|pbcopy"
 alias sheets "open 'https://drive.google.com/drive/u/0/#search?q=type%3Aspreadsheet'"
 
 alias kreps "echo 'https://twitter.com/jaykreps/status/219977241839411200' | pbcopy "
@@ -299,19 +298,16 @@ alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
 #alias cwnotes "head `ls -1t $ndir/cwnote_201* | grep -v -e '(' -e ')'` | more"
 alias cwnotes 'head `ls -1t $ndir/cwnote_201* | normalize` | more'
 
-# add commodore basic
-alias basic cbmbasic
+
 alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
-alias shrug "echo '¯\_(ツ)_/¯' | pbcopy"
-alias tm "echo '™' | pbcopy"
 alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
 alias vi-null vim -u NONE
+
 
 alias nterm 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -\!:* | normalize`'
 # alias term 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -1 | normalize`'
 # good fu: exploits quick add but adds browser to edit event, send invitesjj
 alias oslow 'pers-gmail-browser `slow \!:* | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`'
-alias logo open /Applications/ACSLogo.app/
 alias remake 'vi makefile'
 alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forecast/?ex_cid=rrpromo#plus' | grep -A 2 'Hillary Clinton' | more | head -3 | grep '%'; lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
 #alias polls "lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
@@ -387,4 +383,16 @@ alias toc 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-sections --
 alias beamer  'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --slide-level 2 -i -t beamer --number-sections /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias stash   "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -i * stash_`date +%Y-%m-%dT%Hh%Mm`"
 alias stash-f "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -f * stash_`date +%Y-%m-%dT%Hh%Mm`"
+
+# quotes i reference lot
 alias jcm "echo '-Excuse me. I invented the term artificial intelligence. I invented it because ...we were trying to get money for a summer study in 1956...aimed at the long term goal of achieving human-level intelligence.'; open 'https://youtu.be/pyU9pm1hmYs?t=160'"
+alias hamming 'pbcopy < $science/Advising/Ideas/Hamming/hamming-you-and-your-research.txt '
+
+# weird languages
+# add commodore basic
+alias logo open /Applications/ACSLogo.app/
+alias basic cbmbasic
+# weird stuff to type
+alias shrug "echo '¯\_(ツ)_/¯' | pbcopy"
+alias thus "echo ∴|pbcopy"
+alias tm "echo '™' | pbcopy"
