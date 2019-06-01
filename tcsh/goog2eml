@@ -13,10 +13,17 @@
 #
 # so this script calls unspace-mvs then
 # renames after the date in the email
+#
+# update 2019-07-01
+# goog changed file name convention and
+# also i wanna do this for other uses
+# so i'm changing it to take filename as input
+# rather than assuming a buncha files named `original_msg*.txt`
 
 # cw defined:
 unspace-mvs
-foreach efile ( original_msg*.txt )                    
+#foreach efile ( original_msg*.txt )                    
+foreach efile ( $* )                    
   echo $efile
   mv -i $efile `grep '^Date:' $efile | tr ',\r' ' ' | sed -e 's/Date: //' -e 's/[0-9,_ -]*$//' | head -1 | sed -e 's/ [ ]*/_/g'`.eml
 end
