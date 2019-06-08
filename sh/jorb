@@ -1,3 +1,5 @@
+#!/bin/tcsh
+
 lynx -width=999 -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://www.hrwiki.org/wiki/A_Jorb_Well_Done \
   | /usr/bin/perl -pe 's/[^[:ascii:]]/+/g'\
   | tr '\-\t <>&".?,()/\\+:\!{}' '\n' \
