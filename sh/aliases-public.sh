@@ -60,6 +60,7 @@ alias star "open 'https://mail.google.com/mail/u/0/?tab=mm#starred'"
 alias gcomp 'open https://mail.google.com/mail/u/0/#compose/\!*'
 alias mcomp "open 'https://mail.google.com/mail/u/0/x/?&v=b&eot=1&pv=tl&cs=b'"
 alias mm "open https://mail.google.com/mail/u/0/x/"
+alias mma "open 'https://mail.google.com/mail/u/0/x/?&s=a'"
 #alias gread "fox  'http://www.google.com/reader/view/#overview-page'"
 #alias gcal fox http://www.google.com/calendar/render
 #alias gcal camino http://www.google.com/calendar/render
