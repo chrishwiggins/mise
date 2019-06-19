@@ -1,1 +1,1 @@
-'{print NR"\t"$0}'
+{print NR". "$0}
