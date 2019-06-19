@@ -397,3 +397,4 @@ alias basic cbmbasic
 alias shrug "echo '¯\_(ツ)_/¯' | pbcopy"
 alias thus "echo ∴|pbcopy"
 alias tm "echo '™' | pbcopy"
+alias num "awk -f $mise/awk/num.awk"
