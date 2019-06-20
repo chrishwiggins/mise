@@ -13,6 +13,8 @@ echo ...finished convert to tiff $1 at `date`
 echo starting tesseract at `date`r 
 time tesseract /tmp/ocr_$$.tiff $1:r
 echo ...ending tesseract
+# might need cleanup:
+# rm -f /tmp/ocr_$$.tiff
  
 
  
