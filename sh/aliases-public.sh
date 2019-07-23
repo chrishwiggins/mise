@@ -401,3 +401,9 @@ alias thus "echo ∴|pbcopy"
 alias tm "echo '™' | pbcopy"
 alias num "awk -f $mise/awk/num.awk"
 alias best "echo 'The best lack all conviction, while the worst Are full of passionate intensity.'| pbcopy"
+
+
+alias statsort 'stat -f "%Sm %N" -t "%Y-%m-%dT%H:%M:%S" * | sort'
+alias findbig "find . -type f -size +1000000 -exec ls -lh {}\;"
+alias rmold "find . -type f -mtime +100 -exec rm {} +"
+alias countbig "find . -type f -size 10000 | wc -l"
