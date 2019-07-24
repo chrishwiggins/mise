@@ -407,3 +407,4 @@ alias statsort 'stat -f "%Sm %N" -t "%Y-%m-%dT%H:%M:%S" * | sort'
 alias findbig "find . -type f -size +1000000 -exec ls -lh {}\;"
 alias rmold "find . -type f -mtime +100 -exec rm {} +"
 alias countbig "find . -type f -size 10000 | wc -l"
+alias eng 'grep -f /usr/share/dict/words'
