@@ -1,0 +1,12 @@
+# i suggest that before you fix you sometimes asciify, i.e.,
+# /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' \
+#
+# NB: smoetimes when i indent at beginning, i mean it. so i deleted these
+fix| \
+  sed \
+      -e 's/^[ ]*//' \
+      -e 's/^[ ]*,[ ]*//' \
+      -e 's/^[> ]*//' \
+  | uniq
+
+# cf http://www.w3schools.com/TAGS/ref_urlencode.asp
