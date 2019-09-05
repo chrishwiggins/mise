@@ -1,0 +1,11 @@
+#!/bin/bash
+
+
+while :
+do
+  #echo testing
+  if [[ writeup-raw.md -nt writeup.pdf ]]; then
+    echo making
+    make open
+  fi
+done
