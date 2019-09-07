@@ -27,3 +27,7 @@ let g:markdown_fenced_languages = ['html', 'python', 'bash=sh']
 
 " cwstuff
 set ic 
+
+" fzf suggests adding:
+set rtp+=/usr/local/opt/fzf
+
