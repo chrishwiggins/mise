@@ -410,4 +410,3 @@ alias rmold "find . -type f -mtime +100 -exec rm {} +"
 alias countbig "find . -type f -size 10000 | wc -l"
 alias eng 'grep -w -f /usr/share/dict/words'
 alias tft "curl --silent 'http://itsthisforthat.com/api.php?text';echo"
-alias pbmutt "mutt `pbaste|estrip`"
