@@ -311,7 +311,7 @@ alias nterm 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -\!:
 # good fu: exploits quick add but adds browser to edit event, send invitesjj
 # barfing 2019-07-21, chrome nonresponsive
 #alias oslow 'pers-gmail-browser `slow \!:* | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`'
-alias oslow 'open  `slow \!:* | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`'
+alias oslow 'pers-gmail-browser  `slow \!:* | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`'
 alias remake 'vi makefile'
 alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forecast/?ex_cid=rrpromo#plus' | grep -A 2 'Hillary Clinton' | more | head -3 | grep '%'; lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
 #alias polls "lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
