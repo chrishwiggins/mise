@@ -330,6 +330,7 @@ alias ppf-server open http://data-ppf.dsi.columbia.edu:8000
 
 # misc google fu
 alias ndoc "open 'https://docs.google.com/document/u/0/create?usp=docs_home&ths=true'"
+alias cdoc "chrome 'https://docs.google.com/document/u/0/create?usp=docs_home&ths=true'"
 
 # uke tuning via sox:
 alias fleas "play -n synth 1 sin 783.99; play -n synth 1 sin 523.25; play -n synth 1 sin 659.25; play -n synth 1 sin 880.00"
