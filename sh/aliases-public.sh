@@ -50,6 +50,7 @@ alias rstudio open /Applications/RStudio.app/
 alias permute "perl -MList::Util=shuffle -e 'print shuffle <>'"
 alias hai open http://example.com
 alias fox "open -a 'Firefox' \!:*"
+alias brave "open -a '/Applications/Brave\ Browser.app/' \!:*"
 alias inpr "open http://www.npr.org/infiniteplayer/"
 
 # google-fu
