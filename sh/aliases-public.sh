@@ -294,7 +294,7 @@ alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
 alias sheets "open 'https://drive.google.com/drive/u/0/#search?q=type%3Aspreadsheet'"
 
 alias kreps "echo 'https://twitter.com/jaykreps/status/219977241839411200' | pbcopy "
-alias pbstrip "pbpaste|estrip|pbcopy"
+alias pbstrip "pbpaste|asciify|estrip|pbcopy"
 alias reline "tr '\n' ' ' | tr '+' '\n' | fix "
 alias ngit "open https://github.com/new"
 alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
