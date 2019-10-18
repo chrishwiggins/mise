@@ -15,6 +15,7 @@ setenv HOMEBREW_TEMP /usr/local/Cellar
 set savehist=1000
 set prompt="%n-%m{%c1}%\!: "
 set prompt="@carr2n:'do the work'{%c1}%\!: "
+set prompt="carr2n:'do the work'{%c1}%\!: "
 
 # Don't overwrite existing files with the redirection character ">"
 set noclobber
