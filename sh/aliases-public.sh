@@ -333,7 +333,6 @@ alias ndoc "open 'https://docs.google.com/document/u/0/create?usp=docs_home&ths=
 alias cdoc "chrome 'https://docs.google.com/document/u/0/create?usp=docs_home&ths=true'"
 
 # uke tuning via sox:
-alias fleas "play -n synth 1 sin 783.99; play -n synth 1 sin 523.25; play -n synth 1 sin 659.25; play -n synth 1 sin 880.00"
 alias smile open https://smile.amazon.com/
 alias unxml plutil -convert xml1
 alias pdfmerge "gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=pdfmerge-out.pdf \!:*"
@@ -411,3 +410,5 @@ alias rmold "find . -type f -mtime +100 -exec rm {} +"
 alias countbig "find . -type f -size 10000 | wc -l"
 alias eng 'grep -w -f /usr/share/dict/words'
 alias tft "curl --silent 'http://itsthisforthat.com/api.php?text';echo"
+alias fiddle "echo GG ; play -q  -n synth 1 sin 196.00; echo DD ; play -q  -n synth 1 sin 293.66; echo AA ; play -q  -n synth 1 sin 440.00; echo EE ; play -q  -n synth 1 sin 659.26"
+alias fleas "play -q  -n synth 1 sin 783.99; play -q  -n synth 1 sin 523.25; play -q  -n synth 1 sin 659.25; play -q  -n synth 1 sin 880.00"
