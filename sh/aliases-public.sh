@@ -35,7 +35,8 @@ alias cd-mise cd $mise
 # handy, needed below
 # alias datestr 'date +%Y-%m-%dT%H-%M-%S '
 # alias datestr 'date +%Y-%m-%dT%H:%M:%S '
-alias datestr    date +%Y-%m-%dT%Hh%Mm%Ss
+# alias datestr 'date +%Y-%m-%dT%Hh%Mm%Ss'
+alias datestr    date +%Y_%m_%dT%Hh%Mm%Ss
 alias datecp "datestr|pbcopy"
 alias dstr datestr
 alias pbdate 'datestr| pbcopy'
