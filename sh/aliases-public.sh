@@ -415,3 +415,9 @@ alias tft "curl --silent 'http://itsthisforthat.com/api.php?text';echo"
 alias fiddle "echo GG ; play -q  -n synth 1 sin 196.00; echo DD ; play -q  -n synth 1 sin 293.66; echo AA ; play -q  -n synth 1 sin 440.00; echo EE ; play -q  -n synth 1 sin 659.26"
 alias fleas "play -q  -n synth 1 sin 783.99; play -q  -n synth 1 sin 523.25; play -q  -n synth 1 sin 659.25; play -q  -n synth 1 sin 880.00"
 alias oldmutt "brew unlink mutt;brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/0e1d197da9d9a1d4cc321e91149a2f3431e39d8c/Formula/mutt.rb;brew link mutt"
+alias vs "open /Applications/Visual\ Studio\ Code.app/"
+alias py3 ~/anaconda3/bin/python3
+alias gpy3 google python3
+alias gpy3 g python3
+alias gpy3 g +python 3+
+alias gvs g +visual studio+ OR vscode
