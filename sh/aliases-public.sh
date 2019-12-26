@@ -421,3 +421,6 @@ alias gpy3 google python3
 alias gpy3 g python3
 alias gpy3 g +python 3+
 alias gvs g +visual studio+ OR vscode
+
+#alias nytrss "curl http://www.nytimes.com/services/xml/rss/nyt/GlobalHome.xml | grep -A 1 title"
+alias nytrss "curl --silent https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml | grep -A 1 title"
