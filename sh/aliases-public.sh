@@ -339,8 +339,8 @@ alias cdoc "chrome 'https://docs.google.com/document/u/0/create?usp=docs_home&th
 alias smile open https://smile.amazon.com/
 alias unxml plutil -convert xml1
 alias pdfmerge "gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=pdfmerge-out.pdf \!:*"
-alias fmail 'setenv fmail `lynx -nolist -dump https://maildrop.cc/ | grep @maildrop.cc`;echo $fmail|pbcopy'
-alias fmail-open 'open https://maildrop.cc/inbox/`echo $fmail|cut -d@ -f1`'
+#alias fmail 'setenv fmail `lynxx -nolist -dump https://maildrop.cc/ | grep @maildrop.cc`;echo $fmail|pbcopy'
+#alias fmail-open 'open https://maildrop.cc/inbox/`echo $fmail|cut -d@ -f1`'
 
 alias drive "open /Applications/Backup\ and\ Sync.app/"
 alias mlok mlook
