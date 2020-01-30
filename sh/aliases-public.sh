@@ -428,3 +428,4 @@ alias nytrss "curl --silent https://rss.nytimes.com/services/xml/rss/nyt/HomePag
 alias g0 py3 /usr/local/bin/googler
 alias g1 "open https://www.google.com/imghp?sout=1"
 alias linter pylint -d W0311 -d R0913 -d C0116 -d W0621 -d C0103
+alias irl "echo 'Meeting in person preferred; if not convenient, we could meet via Google Hangouts; if also not convenient, we could talk by phone. Please do let me know!'|pbcopy"
