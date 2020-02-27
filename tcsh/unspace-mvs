@@ -6,7 +6,7 @@
 ## ls -1 | grep ' ' | sed -f /Users/wiggins/mise//sed/normalize  >! /tmp/old_$$
 # new hotness
 find . | grep -e ' ' -e ',' -e '-' -e '_' | sed -f /Users/wiggins/mise//sed/normalize  >! /tmp/old_$$
-cat /tmp/old_$$ |  sed -e 's/[, _-][, _-]*/_/g' | tr '()' '-' >! /tmp/new_$$
+cat /tmp/old_$$ |  sed -e 's/[, _-][, _-]*/_/g' -e 's/'"'"'/_/g' | tr '()' '-' >! /tmp/new_$$
 
 
 # paste /tmp/old_$$ /tmp/new_$$ | awk '{print "mv -i "$0}' >! /tmp/mvs.sh
