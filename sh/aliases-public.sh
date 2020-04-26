@@ -430,3 +430,17 @@ alias g1 "open https://www.google.com/imghp?sout=1"
 alias linter pylint -d W0311 -d R0913 -d C0116 -d W0621 -d C0103
 alias irl "echo 'Meeting in person preferred; if not convenient, we could meet via Google Hangouts; if also not convenient, we could talk by phone. Please do let me know!'|pbcopy"
 alias gift "pbcopy < $mise/aux/gift.txt"
+
+alias vin "vi -c 'set nonumber'"
+alias oopen open
+alias kdir mkdir
+alias spotify open /Applications/Spotify.app/
+alias uppu upup
+alias rmdur rmdir
+alias blue-off blueutil -p 0
+alias blue-on blueutil -p 1
+alias ft open https://www.ft.com/coronavirus-latest
+alias spot spotify
+alias oopen open
+alias kdir mkdir
+alias spotify open /Applications/Spotify.app/
