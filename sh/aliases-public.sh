@@ -110,7 +110,8 @@ alias similar "gsearch related:\!:*"
 #alias repof "mkdir mat/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/; touch mat/.DS_store dat/.DS_store doc/.DS_store fig/.DS_store log/.DS_store ref/.DS_store src/.DS_store out/.DS_store aux/.DS_store "
 #alias bday "lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html http://en.m.wikipedia.org/wiki/`date +%h_%d` | awk '/^Births/,/^Deaths/' | grep -v -f $boring"
 #alias repo "mkdir dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/anonymous/4fa592e17f1bdfd79e6dbdb0cf820df5/raw/9f0e81a77d94d74257641eb8279303b65fa0a85e/a.rb"
-alias repo "mkdir git/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md"
+# alias repo "mkdir git/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md"
+alias repo "mkdir git/ dat/ doc/ doc/backups fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md; wget -O doc/makefile  --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; wget -O doc/writeup.sed --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb"
 #alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
 alias http "open http://\!*"
@@ -123,14 +124,15 @@ alias g gsearch
 #alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force;mas upgrade"
 alias tend "sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force"
 alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
-alias gc-tend "gcloud components update"
+alias gc-tend "gcloud components update -q"
 alias gem-tend "gem cleanup;gem update"
 # ":" is read as "%" or "/" and is bad for makefile variables:
 # alias datestr date +%Y-%m-%dT%H-%M-%S
 # alias datestr date +%Y-%m-%dT%H-%M-%S
 alias datestr date +%Y-%m-%dT%Hh%Mm%S
 #alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
-alias brew-tend "brew upgrade ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
+#alias brew-tend "brew upgrade ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
+alias brew-tend "brew upgrade ; brew update;brew doctor;brew cask cleanup;brew prune;brew link openssl --force; brew cleanup -s"
 alias pip-tend "pip install --upgrade distribute; pip install --upgrade pip"
 alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 #alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
@@ -274,4 +276,6 @@ alias polls "lynx -dump 'http://projects.fivethirtyeight.com/2016-election-forec
 #alias polls "lynx -dump 'http://www.nytimes.com/interactive/2016/upshot/presidential-polls-forecast.html' | more | grep Clinton | grep 'chance to win'"
 
 
-alias pdfjoin gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=final.pdf
+# alias pycharm open /Applications/PyCharm.app/
+alias lower "tr '[A-Z]' '[a-z]'"
+alias upper "tr '[a-z]' '[A-Z]'"
