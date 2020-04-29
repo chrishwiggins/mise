@@ -1,14 +1,17 @@
 # i suggest that before you fix you sometimes asciify, i.e.,
 # /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' \
+#
+# NB: smoetimes when i indent at beginning, i mean it. so i deleted these
+      #-e 's/^[ ]*//' \
+      #-e 's/^[ ]*,[ ]*//' \
+      # -e 's/^[> ]*//' \
  
 expand \
     | tr '\r' '\n' \
     | sed \
-      -e 's/^[ ]*//' \
-      -e 's/^[ ]*,[ ]*//' \
+      -e 's/^>[ ]*//' \
       -e 's/[ ]*$//' \
       -e 's/ [ ]*/ /g' \
-      -e 's/^[> ]*//' \
       -e 's/ =$//' \
       -e 's/=$/-/' \
       -e 's/[ ]*=20$//'\

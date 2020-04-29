@@ -1,0 +1,21 @@
+#!/bin/bash
+
+if [ "$#" -eq 0 ]; then
+    in="writeup-raw.md"
+    out="writeup.pdf"
+else
+    in=$1
+    out=$2
+fi
+
+
+echo $in $out
+
+while :
+do
+  #echo testing
+  if [[ $in -nt $out ]]; then
+    echo making
+    make open
+  fi
+done

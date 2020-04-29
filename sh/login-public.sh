@@ -4,20 +4,25 @@ umask 022
 # source  ~/mise/sh/aliases-public.sh"
 set paliases=~/mise/sh/aliases-public.sh
 
-alias cset "set path = ( $path /usr/local/bin ~//Documents/Scripts/perl ~//Documents/Scripts/osa ~//Documents/Scripts/sh/csh ~//bin /opt/local/bin /usr/local/mysql/bin /opt/local/libexec/gnubin    /usr/local/sbin ~/mise/* /usr/local/Cellar/ruby/1.9.3-p194/bin /usr/local/bin )"
+# deleting /usr/local/bin, demoting to cwlogin file 
+# alias cset "set path = ( $path /usr/local/bin ~//Documents/Scripts/perl ~//Documents/Scripts/osa ~//Documents/Scripts/sh/csh ~//bin /opt/local/bin /usr/local/mysql/bin /opt/local/libexec/gnubin    /usr/local/sbin ~/mise/* /usr/local/Cellar/ruby/1.9.3-p194/bin /usr/local/bin )"
+alias cset "set path = ( $path ~//Documents/Scripts/perl ~//Documents/Scripts/osa ~//Documents/Scripts/sh/csh ~//bin /opt/local/bin /usr/local/mysql/bin /opt/local/libexec/gnubin    /usr/local/sbin ~/mise/*/* /usr/local/Cellar/ruby/1.9.3-p194/bin )"
 
 # set some variables
 setenv EDITOR /usr/bin/vi
 setenv HOMEBREW_TEMP /usr/local/Cellar
 #setenv DYLD_INSERT_LIBRARIES /usr/local/lib/libvecLibFortI.dylib 
 set savehist=1000
-set prompt="%n@%m{%c1}%\!: "
+set prompt="%n-%m{%c1}%\!: "
+set prompt="@carr2n:'do the work'{%c1}%\!: "
+set prompt="carr2n:'do the work'{%c1}%\!: "
 
 # Don't overwrite existing files with the redirection character ">"
 set noclobber
 
 # actually do stuff
 ## set path
+#% echo path
 cset
 
 ### TEXSTUFF
@@ -39,4 +44,5 @@ set path = ( $path ~/google-cloud-sdk/bin )
 
 ## learn my aliases
 # learn
+#% echo aliases
 source $paliases
