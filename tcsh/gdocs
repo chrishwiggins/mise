@@ -1,0 +1,17 @@
+#!/bin/tcsh -f #-X -V
+#% open your browser in a search
+#% eliminates spaces
+#% turns / (for dates) into url-formatted /
+#
+# ex https://docs.google.com/#search/projects
+# ex https://drive.google.com/drive/u/0/search?q=Charlotte
+# 20180412T06h38PDT https://drive.google.com/drive/u/0/search?q=word%20%22a%20phrase%22
+
+set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'` 
+# echo $str
+#
+# changed 2014-12-19
+# open 'https://drive.google.com/?authuser=0#search/'$str
+#
+# made gdocs from docs by this line 2019-05-13T04h55
+open -a /Applications/Google\ Chrome.app 'https://drive.google.com/drive/u/0/#search?q='$str
