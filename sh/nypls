@@ -1,0 +1,9 @@
+#!/bin/tcsh
+
+open -a /Applications/Brave\ Browser.app 'https://browse.nypl.org/iii/encore/myaccount?lang=eng'
+open -a /Applications/Firefox.app/ 'https://browse.nypl.org/iii/encore/myaccount?lang=eng'
+open -a /Applications/Google\ Chrome.app 'https://browse.nypl.org/iii/encore/myaccount?lang=eng'
+open -a /Applications/Safari.app 'https://browse.nypl.org/iii/encore/myaccount?lang=eng'
+open -a /Applications/Opera.app 'https://browse.nypl.org/iii/encore/myaccount?lang=eng'
+
+grep '^nypl ' /Users/wiggins/gd/local/seiton/aux/phone.asc
