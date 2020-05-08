@@ -13,9 +13,12 @@ setenv EDITOR /usr/bin/vi
 setenv HOMEBREW_TEMP /usr/local/Cellar
 #setenv DYLD_INSERT_LIBRARIES /usr/local/lib/libvecLibFortI.dylib 
 set savehist=1000
-set prompt="%n-%m{%c1}%\!: "
-set prompt="@carr2n:'do the work'{%c1}%\!: "
-set prompt="carr2n:'do the work'{%c1}%\!: "
+
+# prompt
+#set prompt="%n-%m{%c1}%\!: "
+#set prompt="@carr2n:'do the work'{%c1}%\!: "
+#set prompt="carr2n:'do the work'{%c1}%\!: "
+set prompt='adapt{%c1}%\!: '
 
 # Don't overwrite existing files with the redirection character ">"
 set noclobber
