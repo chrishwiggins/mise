@@ -151,6 +151,7 @@ alias gc-tend "gcloud components update -q"
 # 2019-01-27 this needs sudo sadly: 
 alias gem-tend "gem cleanup;gem update"
 alias sudo-gem-tend "sudo gem cleanup;sudo gem update"
+alias port-tend "sudo port selfupdate"
 # ":" is read as "%" or "/" and is bad for makefile variables:
 #alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
 #alias brew-tend "brew upgrade ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
