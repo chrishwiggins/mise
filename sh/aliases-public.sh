@@ -145,7 +145,7 @@ alias g gsearch
 #alias tend "date;open /Applications/App\ Store.app/;qtend;cd ~;brew link openssl --force;date"
 alias tend "date;qtend;cd ~;brew link openssl --force;date"
 #alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
-alias qtend "brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
+alias qtend "brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade;port-tend"
 alias qqtend "q-brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias gc-tend "gcloud components update -q"
 # 2019-01-27 this needs sudo sadly: 
@@ -446,3 +446,4 @@ alias oopen open
 alias kdir mkdir
 alias spotify open /Applications/Spotify.app/
 alias docxdump "cp \!:1 /tmp/input.docx ; qlmanage -p /tmp/input.docx -o /tmp ; lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html /tmp/input.docx.qlpreview/Preview.html | /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' "
+alias port-tend "sudo port selfupdate"
