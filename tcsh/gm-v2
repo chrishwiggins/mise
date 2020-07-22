@@ -1,9 +1,0 @@
-#!/bin/tcsh -f #-X -V
-#% gmail search from command line (opens browser)
-#% open your browser in a search
-#% eliminates spaces
-#% turns / (for dates) into url-formatted /
-
-set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'` 
-set cmd="open -a ~/bin/chrome http://mail.google.com/mail/#search/"$str
-$cmd
