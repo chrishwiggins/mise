@@ -18,6 +18,6 @@ do
     echo making
     make open
   fi
-  # stop imake from chomping all my CPU
+  # stop imake from chomping all my CPU and interrupting edits
   sleep 1
 done
