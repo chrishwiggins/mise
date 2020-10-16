@@ -10,7 +10,7 @@ time convert -density 300 $1 -depth 8 -strip -background white -alpha off /tmp/o
 # -density 300 and -depth 8 control the resolution of the resulting TIFF image. OCR works best with high-resolution images; if you leave this out, you're likely to get garbled results.
 echo ...finished convert to tiff $1 at `date` 
 #"u -strip -background white -alpha off" removes any alpha channels, and makes the background white. Tesseract is rather picky about this kind of thing.
-echo starting tesseract at `date`r 
+echo starting tesseract at `date`
 setenv input $1
 echo $input
 shift
