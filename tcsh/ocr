@@ -6,17 +6,26 @@
  
 # from atlassian [1], 2018-04-01
 echo starting $1 at `date` ...
+
+# convert to tiff
 time convert -density 300 $1 -depth 8 -strip -background white -alpha off /tmp/ocr_$$.tiff
+ 
 # -density 300 and -depth 8 control the resolution of the resulting TIFF image. OCR works best with high-resolution images; if you leave this out, you're likely to get garbled results.
+
 echo ...finished convert to tiff $1 at `date` 
+ 
 #"u -strip -background white -alpha off" removes any alpha channels, and makes the background white. Tesseract is rather picky about this kind of thing.
+
 echo starting tesseract at `date`
 setenv input $1
 echo $input
 shift
-echo $*
-time tesseract  /tmp/ocr_$$.tiff $input:r $*
+echo options are $*
+ 
+# most important line in the code:
+time tesseract  $* /tmp/ocr_$$.tiff $input:r
 echo ...ending tesseract
+#
 # might need cleanup:
 # rm -f /tmp/ocr_$$.tiff
  
