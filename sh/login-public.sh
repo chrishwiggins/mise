@@ -55,5 +55,5 @@ source $paliases
 # remap capslock to esc:
 # h/t https://stackoverflow.com/questions/127591/using-caps-lock-as-esc-in-mac-os-x
 
-hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x700000029}]}'
+hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x700000029}]}' > /dev/null
 
