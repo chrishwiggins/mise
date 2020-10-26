@@ -5,4 +5,5 @@
 
 set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
 echo $str
-open 'http://twitter.com/search?f=realtime&q='$str'&src=typd'
+# brave breaks
+open -a safari 'http://twitter.com/search?f=realtime&q='$str'&src=typd'
