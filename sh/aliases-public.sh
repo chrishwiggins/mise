@@ -447,3 +447,7 @@ alias kdir mkdir
 alias spotify open /Applications/Spotify.app/
 alias docxdump "cp \!:1 /tmp/input.docx ; qlmanage -p /tmp/input.docx -o /tmp ; lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html /tmp/input.docx.qlpreview/Preview.html | /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' "
 alias port-tend "sudo port selfupdate;sudo port upgrade outdated"
+
+# h/t @josephoenix
+alias tool-crypto "sudo install_name_tool -change \!:1 /usr/local/Cellar/openssl@1.1/1.1.1h/lib/libcrypto.1.1.dylib \!:2"
+alias tool-ssl    "sudo install_name_tool -change \!:1 /usr/local/Cellar/openssl@1.1/1.1.1h/lib/libssl.1.1.dylib    \!:2"
