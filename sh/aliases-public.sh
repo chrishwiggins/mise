@@ -151,7 +151,6 @@ alias gc-tend "gcloud components update -q"
 # 2019-01-27 this needs sudo sadly: 
 alias gem-tend "gem cleanup;gem update"
 alias sudo-gem-tend "sudo gem cleanup;sudo gem update"
-alias port-tend "sudo port selfupdate"
 # ":" is read as "%" or "/" and is bad for makefile variables:
 #alias brew-tend "brew upgrade --all ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
 #alias brew-tend "brew upgrade ; brew update;brew doctor;brew linkapps;brew prune;brew link openssl --force; brew cleanup -s"
@@ -447,4 +446,4 @@ alias oopen open
 alias kdir mkdir
 alias spotify open /Applications/Spotify.app/
 alias docxdump "cp \!:1 /tmp/input.docx ; qlmanage -p /tmp/input.docx -o /tmp ; lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html /tmp/input.docx.qlpreview/Preview.html | /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' "
-alias port-tend "  port upgrade outdated; sudo port selfupdate"  
+alias port-tend "sudo port selfupdate;sudo port upgrade outdated"
