@@ -5,7 +5,7 @@
 ## ls -1 | grep ' ' | sed -e 's/ /_/g' | sed -f /Users/wiggins/mise//sed/normalize  >! /tmp/new_$$
 ## ls -1 | grep ' ' | sed -f /Users/wiggins/mise//sed/normalize  >! /tmp/old_$$
 # new hotness (include files in all subfolders and the folders themselves)
-# 20201030 change
+# 20201030 change to undo recursive
 # find . | grep -e ' ' -e ',' -e '-' -e '_' | sed -f /Users/wiggins/mise//sed/normalize  >! /tmp/old_$$
 ls -1 | grep -e ' ' -e ',' -e '-' -e '_' | sed -f /Users/wiggins/mise//sed/normalize  >! /tmp/old_$$
 # 20200723 changing becuase 20200722 i ran on ~ and killed files named '-'
