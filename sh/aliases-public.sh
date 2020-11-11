@@ -111,7 +111,7 @@ alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | p
 ### taking/using quicknotes:
 # alias setv 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`'
 alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
-alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr=$vstr'
+alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr:;echo $vstr'
 alias v 'setv; vi +star $vstr; echo vstr:;echo $vstr'
 alias sv 'source $vstr'
 # v & b (quicknotes+longnotes)
