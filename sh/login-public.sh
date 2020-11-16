@@ -20,7 +20,22 @@ set savehist=1000
 #set prompt="%n-%m{%c1}%\!: "
 #set prompt="@carr2n:'do the work'{%c1}%\!: "
 #set prompt='adapt{%c1}%\!: '
-set prompt="carr2n:'do the work'{%c1}%\!: "
+#set prompt="carr2n:'do the work'{%c1}%\!: "
+
+# from https://www.cs.umd.edu/~srhuang/teaching/code_snippets/prompt_color.tcsh.html
+set     red="%{\033[1;31m%}"
+set   green="%{\033[0;32m%}"
+set  yellow="%{\033[1;33m%}"
+set    blue="%{\033[1;34m%}"
+set magenta="%{\033[1;35m%}"
+set    cyan="%{\033[1;36m%}"
+set   white="%{\033[0;37m%}"
+set     end="%{\033[0m%}" # This is needed at the end... :(
+
+#set prompt="@%P{%S%c%s}%U%h%u: "
+
+set prompt="${green}%P${blue}@%c ${white}%~ ${green}%h${end} "
+
 
 # Don't overwrite existing files with the redirection character ">"
 set noclobber
