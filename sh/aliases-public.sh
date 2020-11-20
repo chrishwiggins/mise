@@ -17,6 +17,7 @@ if (! $?phonefile) then
   set phonefile=$cwhome/Documents/phonebook.txt
 endif
 if (! $?cwaux) then
+  echo resetting cwaux
   set cwaux=$cwhome/Documents/aux/
 endif
 
