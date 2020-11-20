@@ -16,10 +16,11 @@ endif
 if (! $?phonefile) then
   set phonefile=$cwhome/Documents/phonebook.txt
 endif
-if (! $?cwaux) then
-  echo resetting cwaux
-  set cwaux=$cwhome/Documents/aux/
-endif
+#if (! $?cwaux) then
+  #echo resetting cwaux
+  #set cwaux=$cwhome/Documents/aux/
+#endif
+set mise_aux=${mise}/aux
 
 # echo unix
 # unix essentials
@@ -130,10 +131,7 @@ alias similar "gsearch related:\!:*"
 # alias repo "mkdir git/ dat/ doc/ fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md"
 # alias repo "mkdir git/ dat/ doc/ doc/backups fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md; wget -O doc/makefile  --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; wget -O doc/writeup.sed --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb"
 alias repo "mkdir git/ dat/ doc/ doc/backups fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; curl -o README.md --silent  https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md; curl -o doc/makefile  --silent  https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; curl -o doc/writeup.sed  https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb"
-alias lrepo "mkdir git/ dat/ doc/ doc/backups fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; cp $cwaux/writeup-template/* doc/"
 alias writeup "mkdir writeup/ writeup/backups ;curl -o writeup/makefile  --silent  https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; curl -o writeup/writeup.sed  https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb;cd writeup"
-alias lwriteup "mkdir writeup writeup/backups;cp $cwaux/writeup-template/* writeup;cd writeup"
-#alias boring "sort -bfdu $boring > $tmp ; mv -f $tmp $boring ; vi $boring; wig2cu $boring ~/Documents/Scripts/aux/boring_people.asc"
 alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
 alias http "open http://\!*"
 alias clean-browser 'open /Applications/Camino.app \!*'
@@ -258,18 +256,9 @@ alias addy "open /Applications/Contacts.app/"
 alias skindle "open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ \!:*"
 alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
-alias dir-nyt 'pbcopy < $cwaux/dir-nyt.txt'
-alias dir-205 'pbcopy < $cwaux/dir-205.txt'
-alias dir-428 'pbcopy < $cwaux/dir-428.txt'
 alias muttf "cat /dev/null | mutt -H \!:*"
 alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
-alias distract "boxes;ichat;adium;skype;voice"
-#alias brews "brew list > $cwaux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/homebrew-*.asc"
-alias brews "brew list --formula > $cwaux/homebrew-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/homebrew-*.asc"
-alias pips "pip list > $cwaux/pip-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/pip-*.asc"
-alias pip3s "pip3 list > $cwaux/pip3-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/pip3-*.asc"
-alias r-installed "which-r > $cwaux/r-installed-`date +%Y-%m-%dT%H:%M:%S`.asc;rmdups $cwaux/r-installed-*.asc"
 alias pb2gist gist -o -P
 
 alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocket.com"
@@ -358,7 +347,6 @@ alias htm2pdf '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --
 alias htm2png '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --screenshot '
 alias salganik open http://www.bitbybitbook.com/en/ethics/
 alias teen say i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like
-alias hex 'grep -i \!:* $cwaux/hex-color.txt'
 alias undos "tr '\r' '\n'"
 alias gpgp 'git pull; git push'
 alias nuzz open http://nuzzel.com/
@@ -456,3 +444,4 @@ alias port-tend "sudo port selfupdate;sudo port upgrade outdated"
 # h/t @josephoenix
 alias tool-crypto "sudo install_name_tool -change \!:1 /usr/local/Cellar/openssl@1.1/1.1.1h/lib/libcrypto.1.1.dylib \!:2"
 alias tool-ssl    "sudo install_name_tool -change \!:1 /usr/local/Cellar/openssl@1.1/1.1.1h/lib/libssl.1.1.dylib    \!:2"
+
