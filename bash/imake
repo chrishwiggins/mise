@@ -3,21 +3,25 @@
 if [ "$#" -eq 0 ]; then
     in="writeup-raw.md"
     out="writeup.pdf"
+    wait=1
 else
     in=$1
     out=$2
+    wait=$3
 fi
 
+if [ -f $in ]; then
+  echo imake running with in=$in, out=$out, and wait=$wait
+  while :
+  do
+    if [[ $in -nt $out ]]; then
+      echo making
+      make open
+    fi
+    #stop imake from chomping all my CPU and interrupting edits
+    sleep $wait
+  done
 
-echo $in $out
-
-while :
-do
-  #echo testing
-  if [[ $in -nt $out ]]; then
-    echo making
-    make open
-  fi
-  # stop imake from chomping all my CPU and interrupting edits
-  sleep 1
-done
+else
+   echo "File $in does not exist."
+fi
