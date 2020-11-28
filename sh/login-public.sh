@@ -73,3 +73,5 @@ source $paliases
 
 hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x700000029}]}' > /dev/null
 
+# delete after jan 20 2021
+curl --silent 'https://days.to/until/us-presidential-inauguration' | grep 'until US Presidential Inauguration' | grep 'There are' | cut -d\> -f2 | cut -c1-7
