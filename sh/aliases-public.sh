@@ -96,6 +96,7 @@ alias palias 'echo "alias \!*" >> $paliases ; learn '
 alias pteach "vi + $cwpaliases"
 #alias gugc "git pull origin master;git commit -a ;git push origin master"
 alias gugc "git pull origin main;git commit -a ;git push origin main"
+alias gugm "git pull origin master;git commit -a ;git push origin master"
 alias gbgb "git pull ;git commit -a ;git push "
 alias miseup "cd-mise;gugc;cd -"
 #alias remise "cd-mise;git pull origin master;cd -"
