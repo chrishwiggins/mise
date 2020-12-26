@@ -275,7 +275,7 @@ alias mbo "signal;nyt-hang;ghang;nytcal;boxes;ichat;voice;slack;f;open /Applicat
 alias md2pdf "pandoc --number-sections \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias clio "fox 'http://clio.cul.columbia.edu'"
-alias roi "open ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a"
+alias roi "open -a /Applications/iTunes.app/ ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a"
 alias beet "open /Users/wiggins/Music/iTunes/iTunes\ Media/Music/Compilations/7\ Conductors\ vs.\ Beethoven\'s\ 7th/06\ Symphony\ No.\ 7\ in\ A\ Major,\ Op.\ 92_\ II.\ Allegretto.m4a"
 alias pbpate pbpaste
 alias acal fox http://registrar.columbia.edu/calendar
