@@ -15,7 +15,7 @@ set str=`echo $* | sed -e 's/\ /+/g' -e 's/\//%2F/g'`
 # open 'https://drive.google.com/?authuser=0#search/'$str
 #
 # made gdocs from docs by this line 2019-05-13T04h55
-open -a /Applications/Google\ Chrome.app 'https://drive.google.com/drive/u/0/#search?q='$str
+#open -a /Applications/Google\ Chrome.app 'https://drive.google.com/drive/u/0/#search?q='$str
 # changed to firefox 2020-11-24
 #open -a firefox 'https://drive.google.com/drive/u/0/#search?q='$str
 # changed to safari 20201214 
