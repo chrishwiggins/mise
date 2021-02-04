@@ -2,11 +2,17 @@
 # /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' \
 #
 # NB: smoetimes when i indent at beginning, i mean it. so i deleted these
+#
+# 20210203 adding grep -v 
+#   1) '\f' and 
+#   2) lines that are just numbers
+ 
 fix| \
   sed \
       -e 's/^[ ]*//' \
       -e 's/^[ ]*,[ ]*//' \
       -e 's/^[> ]*//' \
+  | grep -v -e '\f' -e '^[0-9][0-9]*$' \
   | uniq
 
 # cf http://www.w3schools.com/TAGS/ref_urlencode.asp
