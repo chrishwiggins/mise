@@ -27,7 +27,8 @@ time tesseract  $* /tmp/ocr_$$.tiff $input:r
 echo ...ending tesseract
 #
 # might need cleanup:
-# rm -f /tmp/ocr_$$.tiff
+ rm -f /tmp/ocr_$$.tiff
+echo removed /tmp/ocr_$$.tiff
  
 
  
