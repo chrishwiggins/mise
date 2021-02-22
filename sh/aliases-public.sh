@@ -391,6 +391,7 @@ alias stash-f "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -f * stash_`date +%Y-%m-%d
 # quotes i reference lot
 alias jcm "echo '-Excuse me. I invented the term artificial intelligence. I invented it because ...we were trying to get money for a summer study in 1956...aimed at the long term goal of achieving human-level intelligence.'; open 'https://youtu.be/pyU9pm1hmYs?t=160'"
 alias hamming 'pbcopy < $science/Advising/Ideas/Hamming/hamming-you-and-your-research.txt '
+alias teams 'pbcopy < $science/Advising/Ideas/Teams/teams.txt '
 
 # weird languages
 # add commodore basic
