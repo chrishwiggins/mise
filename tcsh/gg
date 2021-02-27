@@ -27,3 +27,4 @@ set str=`echo $* | sed -e 's/\ /+/g' -e 's/\:/%3a/g' -e 's/\//%2F/g' -e 's/@/%40
 set url="http://mail.google.com/mail/u/0/#search/"$str
 set cmd="open "$url
 $cmd
+echo "remember to 'e'"
