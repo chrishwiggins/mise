@@ -23,6 +23,7 @@ shift
 echo options are $*
  
 # most important line in the code:
+echo time tesseract  $* /tmp/ocr_$$.tiff $input:r
 time tesseract  $* /tmp/ocr_$$.tiff $input:r
 echo ...ending tesseract
 #
