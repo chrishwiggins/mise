@@ -274,7 +274,7 @@ alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 alias mbo "signal;nyt-hang;ghang;nytcal;boxes;ichat;voice;slack;f;open /Applications/Keybase.app"
 alias md2pdf "pandoc --number-sections \!:1 -s -o \!:1:r.pdf"
 alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
-alias clio "fox 'http://clio.cul.columbia.edu'"
+#alias clio "fox 'http://clio.cul.columbia.edu'"
 #alias roi "open -a /Applications/iTunes.app/ ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a;osascript -e 'tell application '"'"'iTunes'"'"' to set song repeat to one'"
 #alias roi "open -a /Applica!tions/iTunes.app/ ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a;osascript -e 'tell application iTunes to set song repeat to one'"
 alias roi "open -a /Applications/iTunes.app/ ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a;$mise/osa/replay"
@@ -374,8 +374,8 @@ alias frm "gg from:\!*"
 alias to "gg to:\!*"
 
 # cu library
-alias clio "open 'http://www.columbia.edu/cgi-bin/cul/resolve?AMS3996'"
-alias clio "open 'https://library.columbia.edu/'"
+#alias clio "open 'http://www.columbia.edu/cgi-bin/cul/resolve?AMS3996'"
+#alias clio "open 'https://library.columbia.edu/'"
 
 alias amzn "gsearch  site:amazon.com \!*"
 alias amazon "gsearch  site:worldcat.org \!*"
