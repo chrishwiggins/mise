@@ -75,3 +75,8 @@ hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x70
 
 # delete after jan 20 2021
 #curl --silent 'https://days.to/until/us-presidential-inauguration' | grep 'until US Presidential Inauguration' | grep 'There are' | cut -d\> -f2 | cut -c1-7
+
+# generate random curse
+echo curses...
+shuf ~/mise/doc/curses.txt | head -1
+echo ...curses
