@@ -25,6 +25,8 @@ echo options are $*
 # most important line in the code:
 echo time tesseract  /tmp/ocr_$$.tiff $* $input:r
 time tesseract  /tmp/ocr_$$.tiff $* $input:r
+# maybe change this to mv -f after testing for a while.
+mv -i ${input:r}.txt ${input:r}.ocr
 echo ...ending tesseract
 #
 # might need cleanup:
