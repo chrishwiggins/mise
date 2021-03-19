@@ -79,4 +79,5 @@ hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x70
 # generate random curse
 #echo curses...
 shuf ~/mise/doc/curses.txt | head -1
+echo
 #echo ...curses
