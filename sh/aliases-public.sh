@@ -451,3 +451,4 @@ alias tool-crypto "sudo install_name_tool -change \!:1 /usr/local/Cellar/openssl
 alias tool-ssl    "sudo install_name_tool -change \!:1 /usr/local/Cellar/openssl@1.1/1.1.1h/lib/libssl.1.1.dylib    \!:2"
 alias tables "echo (┛ಠ_ಠ)┛彡┻━┻ | pbcopy"
 alias fly "open 'https://www.youtube.com/watch?v=maNe-tCqrJ8'"
+alias next "shuf ~/mise/doc/strategies.txt | head -1"
