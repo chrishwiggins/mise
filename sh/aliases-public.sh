@@ -147,7 +147,8 @@ alias g gsearch
 #alias tend "date;open /Applications/App\ Store.app/;qtend;cd ~;brew link openssl --force;date"
 alias tend "date;qtend;cd ~;brew link openssl --force;  softwareupdate --all --install ; date"
 #alias qtend "brew-tend;pip-tend;conda-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
-alias qtend "brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade;port-tend"
+#alias qtend "brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade;port-tend"
+alias qtend "brew-tend;pip3-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade;port-tend"
 alias qqtend "q-brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias gc-tend "gcloud components update -q"
 # 2019-01-27 this needs sudo sadly: 
