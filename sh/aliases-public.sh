@@ -284,8 +284,8 @@ alias beet "open /Users/wiggins/Music/iTunes/iTunes\ Media/Music/Compilations/7\
 alias pbpate pbpaste
 alias acal fox http://registrar.columbia.edu/calendar
 #alias omutts "cd $odir;mutts;cd -"
-alias lock "/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend"
-
+#alias lock "/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend"
+alias lock "osascript -e 'tell app '"'"'System Events'"'"' to key code 12 using {control down, command down}'"
 #alias zip4 open http://zip4.usps.com/zip4/welcome.jsp
 #alias zip4 "open 'https://tools.usps.com/go/ZipLookupAction'!'input.action?mode=0&refresh=true'"
 alias zip4 "open 'https://tools.usps.com/zip-code-lookup.htm?byaddress'"
