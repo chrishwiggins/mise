@@ -453,3 +453,4 @@ alias tool-ssl    "sudo install_name_tool -change \!:1 /usr/local/Cellar/openssl
 alias tables "echo (┛ಠ_ಠ)┛彡┻━┻ | pbcopy"
 alias fly "open 'https://www.youtube.com/watch?v=maNe-tCqrJ8'"
 alias next "shuf ~/mise/doc/strategies.txt | head -1"
+alias hunters "echo 'We are not open to utilizing agency support for this or any other Data Science role at this time. Thank you for reaching out. '|pbcopy"
