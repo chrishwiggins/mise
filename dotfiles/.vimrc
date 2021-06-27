@@ -40,3 +40,8 @@ set tabstop=2
 set softtabstop=2
 " when indenting with '>', use 2 spaces width
 set shiftwidth=2
+
+" from http://vimcasts.org/episodes/soft-wrapping-text/
+" command! -nargs=* Wrap set wrap linebreak nolist
+set wrap linebreak nolist
+" https://vim.fandom.com/wiki/Automatic_word_wrapping
