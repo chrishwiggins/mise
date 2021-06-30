@@ -283,7 +283,8 @@ alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 alias roi "open -a /Applications/iTunes.app/ ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a;$mise/osa/replay"
 alias beet "open /Users/wiggins/Music/iTunes/iTunes\ Media/Music/Compilations/7\ Conductors\ vs.\ Beethoven\'s\ 7th/06\ Symphony\ No.\ 7\ in\ A\ Major,\ Op.\ 92_\ II.\ Allegretto.m4a"
 alias pbpate pbpaste
-alias acal fox http://registrar.columbia.edu/calendar
+#alias acal fox http://registrar.columbia.edu/calendar
+alias acal fox 'https://www.registrar.columbia.edu/event/academic-calendar?acfy=47&acterm=6&acschool=All&keys=&field_event_type1_tid%5B%5D=21&field_event_type1_tid%5B%5D=22&field_event_type1_tid%5B%5D=23'
 #alias omutts "cd $odir;mutts;cd -"
 #big sur killed this, now an osascript: alias lock "/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend"
 #alias zip4 open http://zip4.usps.com/zip4/welcome.jsp
