@@ -459,3 +459,4 @@ alias hunters "echo 'We are not open to utilizing agency support for this or any
 #alias txt open /Applications/TextEdit.app/
 alias txt open /System/Applications/TextEdit.app
 alias txtify "pbpaste|pbcopy"
+alias prp "pbpaste|reply|pbcopy"
