@@ -10,4 +10,4 @@
 - Don’t be afraid to be ambitious. It’s not a crime.
 - Do the work.
 - The answer is never in the computer.
-- The prize is the pleasure of finding the thing out, the kick in the discovery, the observation that other people use it -- those are the real things.
+#- The prize is the pleasure of finding the thing out, the kick in the discovery, the observation that other people use it -- those are the real things.
