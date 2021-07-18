@@ -462,3 +462,5 @@ alias txtify "pbpaste|pbcopy"
 alias prp "pbpaste|reply|pbcopy"
 #alias ifind open -a safari https://www.icloud.com/#find
 alias ifind open /System/Applications/FindMy.app/
+alias curse " grep -v -e '^#' ~/mise/doc/curses.txt | shuf | head -1"
+
