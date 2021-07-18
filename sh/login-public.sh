@@ -78,6 +78,7 @@ hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x70
 
 # generate random curse
 #echo curses...
-grep -v -e '^#' ~/mise/doc/curses.txt | shuf | head -1
+curse
+# grep -v -e '^#' ~/mise/doc/curses.txt | shuf | head -1
 echo
 #echo ...curses
