@@ -25,8 +25,8 @@ echo "  - starting tesseract at" `date` with:
 echo "    + input =" $input
 echo "    + options =" $options
  
-# most important line in the code:
 echo "  - starting"  tesseract  /tmp/ocr_$$.tiff $options $input:r at `date`
+# most important line in the code:
 time tesseract  /tmp/ocr_$$.tiff $options $input:r
 echo ...ENDING tesseract at `date`!
 echo 
