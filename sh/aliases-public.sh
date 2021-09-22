@@ -355,7 +355,8 @@ alias nb /Users/wiggins/anaconda3/bin/jupyter_mac.command
 alias htm2pdf '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --print-to-pdf '
 alias htm2png '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --screenshot '
 alias salganik open http://www.bitbybitbook.com/en/ethics/
-alias teen say i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like
+#alias teen say i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like i was like
+alias teen "seq 1 \!:* | awk '{print "i was like"}' | tr '\n' ' ' | say"
 alias undos "tr '\r' '\n'"
 alias gpgp 'git pull; git push'
 alias nuzz open http://nuzzel.com/
@@ -475,4 +476,3 @@ alias curse " grep -v -e '^#' ~/mise/doc/curses.txt | shuf | head -1"
 alias cu-covid https://secure.health.columbia.edu/branch.aspx
 
 alias leads lds
-alias 
