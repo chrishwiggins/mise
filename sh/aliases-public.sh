@@ -475,3 +475,4 @@ alias curse " grep -v -e '^#' ~/mise/doc/curses.txt | shuf | head -1"
 alias cu-covid https://secure.health.columbia.edu/branch.aspx
 
 alias leads lds
+alias 
