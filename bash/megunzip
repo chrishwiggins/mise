@@ -1,0 +1,11 @@
+#!/bin/bash
+# keep gunzipping until there are no *.gz found
+
+# uses find | wc -l 
+dat=`find . -name '*.gz' | wc -l`
+while [ "$dat" -gt 0 ]
+do
+    echo found $dat files to gunzip 
+    gunzip *.gz
+    dat=`find . -name '*.gz' | wc -l`
+done
