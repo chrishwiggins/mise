@@ -6,4 +6,6 @@
 set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
 echo $str
 # brave breaks
-open -a safari 'http://twitter.com/search?f=realtime&q='$str'&src=typd'
+#open -a safari 'http://twitter.com/search?f=realtime&q='$str'&src=typd' 
+# back to brave 20211022
+open -a ~/bin/brave 'http://twitter.com/search?f=realtime&q='$str'&src=typd'
