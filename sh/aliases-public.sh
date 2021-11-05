@@ -475,4 +475,4 @@ alias curse " grep -v -e '^#' ~/mise/doc/curses.txt | shuf | head -1"
 alias cu-covid https://secure.health.columbia.edu/branch.aspx
 
 alias leads lds
-alias forward "Great! Could you write a forwardable intro email ( cf., e.g., https://www.entrepreneur.com/article/247692 ) to get things started?"
+alias forward "echo 'Great! Could you write a forwardable intro email ( cf., e.g., https://www.entrepreneur.com/article/247692 ) to get things started?' | pbcopy"
