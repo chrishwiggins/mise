@@ -1,0 +1,15 @@
+#!/bin/tcsh -f #-X -V
+#% wraps around google, turns + into quotes
+#% turns spaces into URL spaces (%22)
+
+set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' | sed -e 's/\#/%23/g' `
+echo $str
+# open -a safari 'http://encrypted.google.com/search?hl=en&lr=&safe=off&c2coff=1&q='$str'&btnG=Search'
+#open 'http://encrypted.google.com/search?hl=en&lr=&safe=off&c2coff=1&q='$str'&btnG=Search'
+open 'https://clio.columbia.edu/quicksearch?q='$str'&commit=Search'
+
+
+
+# examples
+# https://encrypted.google.com/#sclient=psy-ab&hl=en&source=hp&q=foo+bar+%22a+phrase%22&pbx=1&oq=foo+bar+%22a+phrase%22&aq=f&aqi=&aql=&gs_sm=e&gs_upl=2860l5461l2l5610l10l10l0l0l0l0l219l944l7.2.1l10l0&bav=on.2,or.r_gc.r_pw.,cf.osb&fp=87d046bd4f62ca5c&biw=1342&bih=638
+#    https://encrypted.google.com/search?hl=en&lr=&safe=off&c2coff=1&q=bar+foo+%22phrase+a%22&btnG=Search
