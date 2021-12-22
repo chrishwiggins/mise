@@ -283,7 +283,7 @@ alias md2htm "pandoc \!:1 -s -o \!:1:r.htm"
 #alias roi "open -a /Applications/iTunes.app/ ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a;osascript -e 'tell application '"'"'iTunes'"'"' to set song repeat to one'"
 #alias roi "open -a /Applica!tions/iTunes.app/ ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a;osascript -e 'tell application iTunes to set song repeat to one'"
 alias roi "open -a /Applications/iTunes.app/ ~/Music/iTunes/iTunes\ Media/Music/The\ Breeders/LSXX/1-05\ Roi.m4a;$mise/osa/replay"
-alias beet "open /Users/wiggins/Music/iTunes/iTunes\ Media/Music/Compilations/7\ Conductors\ vs.\ Beethoven\'s\ 7th/06\ Symphony\ No.\ 7\ in\ A\ Major,\ Op.\ 92_\ II.\ Allegretto.m4a"
+alias beet "open ~//Music/iTunes/iTunes\ Media/Music/Compilations/7\ Conductors\ vs.\ Beethoven\'s\ 7th/06\ Symphony\ No.\ 7\ in\ A\ Major,\ Op.\ 92_\ II.\ Allegretto.m4a"
 alias pbpate pbpaste
 #alias acal fox http://registrar.columbia.edu/calendar
 alias acal "fox 'https://www.registrar.columbia.edu/event/academic-calendar?acfy=47&acterm=6&acschool=All&keys=&field_event_type1_tid%5B%5D=21&field_event_type1_tid%5B%5D=22&field_event_type1_tid%5B%5D=23'"
@@ -350,8 +350,8 @@ alias drive "open /Applications/Backup\ and\ Sync.app/"
 alias mlok mlook
 alias toro open -a /Applications/TorBrowser.app/
 alias prand "python3 -c 'import random;print(random.randint(0,99))'"
-alias conda-nav open /Users/wiggins/anaconda3/Anaconda-Navigator.app
-alias nb /Users/wiggins/anaconda3/bin/jupyter_mac.command
+alias conda-nav open ~//anaconda3/Anaconda-Navigator.app
+alias nb ~//anaconda3/bin/jupyter_mac.command
 alias htm2pdf '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --print-to-pdf '
 alias htm2png '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --screenshot '
 alias salganik open http://www.bitbybitbook.com/en/ethics/
