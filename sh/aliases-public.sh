@@ -239,7 +239,9 @@ alias mtg-no "grep -v '^%' ~/mise/aux/rp-decline.asc| pbcopy"
 alias mtg-q "grep -v '^%' ~/mise/aux/rp-mtg.asc| pbcopy"
 
 # LaTeX stuff
-alias plat "pdflatex \!:*:r ; bibtex \!:*:r ; pdflatex \!:*:r ; pdflatex \!:*:r ; grep Citation \!:*:r.log "
+alias sty-install "sudo tlmgr update --self;sudo tlmgr install \!:*:t:r"
+#alias plat "pdflatex \!:*:r ; bibtex \!:*:r ; pdflatex \!:*:r ; pdflatex \!:*:r ; grep Citation \!:*:r.log "
+alias plat "pdflatex --shell-escape \!:*:r ; bibtex \!:*:r ; pdflatex --shell-escape \!:*:r ; pdflatex --shell-escape \!:*:r ; grep Citation \!:*:r.log "
 alias lat "latex \!:*:r ; bibtex \!:*:r ; latex \!:*:r ; latex \!:*:r ; grep Citation \!:*:r.log;dvipdf \:*:r.dvi "
 alias plath "pdflatex -halt-on-error \!:*:r ; bibtex \!:*:r ; pdflatex -halt-on-error \!:*:r ; pdflatex -halt-on-error \!:*:r "
 alias platf "pdff \!:*:r ; bibtex \!:*:r ; pdff \!:*:r ; pdff \!:*:r ; grep Citation \!:*:r.log "
