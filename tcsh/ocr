@@ -31,7 +31,7 @@ time tesseract  /tmp/ocr_$$.tiff $options $input:r
 echo ...ENDING tesseract at `date`!
 echo 
 # maybe change this to mv -f after testing for a while.
-mv -i ${input:r}.txt ${input:r}.ocr
+mv -v -i ${input:r}.txt ${input:r}.ocr
 #
 # might need cleanup:
 rm -f /tmp/ocr_$$.tiff
