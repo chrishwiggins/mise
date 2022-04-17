@@ -10,7 +10,7 @@
 ls -1 | grep -e '&' -e ' ' -e ',' -e '-' -e '_' | sed -f ~//mise//sed/normalize  >! /tmp/old_$$
 # 20200723 changing becuase 20200722 i ran on ~ and killed files named '-'
 # cat /tmp/old_$$ |  sed -e 's/[, _-][, _-]*/_/g' -e 's/'"'"'/_/g' | tr '()' '-' >! /tmp/new_$$
-  cat /tmp/old_$$ |  sed -e 's/[, _][, _]*/_/g'   -e 's/'"'"'/_/g' | tr '()&' '-' >! /tmp/new_$$
+  cat /tmp/old_$$ |  sed -e 's/-/_/g' -e 's/[, _][, _]*/_/g'   -e 's/'"'"'/_/g' | tr '()&' '-' >! /tmp/new_$$
 # 20211222 replacing home with ~
 
 
