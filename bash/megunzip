@@ -5,7 +5,7 @@
 dat=`find . -name '*.gz' | wc -l`
 while [ "$dat" -gt 0 ]
 do
-    echo found $dat files to gunzip 
+    echo found $dat files to megunzip 
     gunzip *.gz
     dat=`find . -name '*.gz' | wc -l`
 done
