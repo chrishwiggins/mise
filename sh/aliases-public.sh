@@ -479,4 +479,8 @@ alias cu-covid open https://secure.health.columbia.edu/branch.aspx
 
 alias leads lds
 alias forward "echo 'Great! Could you write a forwardable intro email ( cf., e.g., https://www.entrepreneur.com/article/247692 ) to get things started?' | pbcopy"
+<<<<<<< HEAD
 alias dephone "open 'https://support.google.com/websearch/troubleshooter/9685456'"
+=======
+alias table "echo '(╯°□°)╯︵ ┻━┻'|pbcopy"
+>>>>>>> bb8ecbd608bbe569f2573fe7a9eecfa4868696cc
