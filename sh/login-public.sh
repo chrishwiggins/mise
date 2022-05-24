@@ -8,7 +8,7 @@ set paliases=~/mise/sh/aliases-public.sh
 # alias cset "set path = ( $path /usr/local/bin ~//Documents/Scripts/perl ~//Documents/Scripts/osa ~//Documents/Scripts/sh/csh ~//bin /opt/local/bin /usr/local/mysql/bin /opt/local/libexec/gnubin    /usr/local/sbin ~/mise/* /usr/local/Cellar/ruby/1.9.3-p194/bin /usr/local/bin )"
 #alias cset "set path = ( $path ~//Documents/Scripts/perl ~//Documents/Scripts/osa ~//Documents/Scripts/sh/csh ~//bin /opt/local/bin /usr/local/mysql/bin /opt/local/libexec/gnubin    /usr/local/sbin ~/mise/*/* /usr/local/Cellar/ruby/1.9.3-p194/bin )"
 # postpending 2 for macports 2020-06-08
-alias cset "set path = ( $path ~//Documents/Scripts/perl ~//Documents/Scripts/osa ~//Documents/Scripts/sh/csh ~//bin /opt/local/bin /usr/local/mysql/bin /opt/local/libexec/gnubin    /usr/local/sbin ~/mise/*/* /usr/local/Cellar/ruby/1.9.3-p194/bin /opt/local/bin /opt/local/sbin )"
+alias cset "set path = ( $path ~//Documents/Scripts/perl ~//Documents/Scripts/osa ~//Documents/Scripts/sh/csh ~//bin /opt/local/bin /usr/local/mysql/bin /opt/local/libexec/gnubin    /usr/local/sbin ~/mise/*/* /usr/local/Cellar/ruby/1.9.3-p194/bin /opt/local/bin /opt/local/sbin /opt/homebrew/bin/ )"
 
 # set some variables
 setenv EDITOR /usr/bin/vi
