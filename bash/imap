@@ -1,0 +1,31 @@
+#!/bin/bash
+
+cmd=/Library/Frameworks/Maple.framework/Versions/2020/bin/maple
+
+if [ "$#" -eq 0 ]; then
+    in="math.mpl"
+    out="math.asc"
+    wait=1
+else
+    in=$1
+    out=$2
+    wait=$3
+fi
+
+if [ -f $in ]; then
+  echo imap running with in=$in, out=$out, and wait=$wait
+  while :
+  do
+    if [[ $in -nt $out ]]; then
+      echo making
+      date; $cmd < $in > $out ; clear; cat $out ; date
+    fi
+    #stop imake from chomping all my CPU and interrupting edits
+    sleep $wait
+  done
+
+else
+   echo "File $in does not exist."
+   echo "restart;" > $in
+   echo "now it does. enjoy your new math."
+fi
