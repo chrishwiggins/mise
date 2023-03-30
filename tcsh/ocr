@@ -1,4 +1,6 @@
 #/bin/tcsh -f -X -V
+#
+# usage w/language: tesseract ocr_34483.tiff foo.txt -l fra
 
 # takes as input an imagefile
 # conversts to tiff
@@ -27,14 +29,15 @@ echo "    + options =" $options
  
 echo "  - starting"  tesseract  /tmp/ocr_$$.tiff $options $input:r at `date`
 # most important line in the code:
-time tesseract  /tmp/ocr_$$.tiff $options $input:r
+#time tesseract  /tmp/ocr_$$.tiff $options $input:r
+time tesseract  /tmp/ocr_$$.tiff $input:r $options
 echo ...ENDING tesseract at `date`!
 echo 
 # maybe change this to mv -f after testing for a while.
 mv -v -i ${input:r}.txt ${input:r}.ocr
 #
 # might need cleanup:
-rm -f /tmp/ocr_$$.tiff
+# rm -f /tmp/ocr_$$.tiff
 # echo removed /tmp/ocr_$$.tiff
 
 # [1] https://diging.atlassian.net/wiki/spaces/DCH/pages/5275668/Tutorial+Text+Extraction+and+OCR+with+Tesseract+and+ImageMagick 
@@ -85,3 +88,170 @@ rm -f /tmp/ocr_$$.tiff
 #    -v, --version         Show version information.
 #    --list-langs          List available languages for tesseract engine.
 #    --print-parameters    Print tesseract parameters to stdout.
+#
+#
+# List of available languages in "/opt/homebrew/share/tessdata/" (163):
+# afr
+# amh
+# ara
+# asm
+# aze
+# aze_cyrl
+# bel
+# ben
+# bod
+# bos
+# bre
+# bul
+# cat
+# ceb
+# ces
+# chi_sim
+# chi_sim_vert
+# chi_tra
+# chi_tra_vert
+# chr
+# cos
+# cym
+# dan
+# deu
+# div
+# dzo
+# ell
+# eng
+# enm
+# epo
+# equ
+# est
+# eus
+# fao
+# fas
+# fil
+# fin
+# fra
+# frk
+# frm
+# fry
+# gla
+# gle
+# glg
+# grc
+# guj
+# hat
+# heb
+# hin
+# hrv
+# hun
+# hye
+# iku
+# ind
+# isl
+# ita
+# ita_old
+# jav
+# jpn
+# jpn_vert
+# kan
+# kat
+# kat_old
+# kaz
+# khm
+# kir
+# kmr
+# kor
+# kor_vert
+# lao
+# lat
+# lav
+# lit
+# ltz
+# mal
+# mar
+# mkd
+# mlt
+# mon
+# mri
+# msa
+# mya
+# nep
+# nld
+# nor
+# oci
+# ori
+# osd
+# pan
+# pol
+# por
+# pus
+# que
+# ron
+# rus
+# san
+# script/Arabic
+# script/Armenian
+# script/Bengali
+# script/Canadian_Aboriginal
+# script/Cherokee
+# script/Cyrillic
+# script/Devanagari
+# script/Ethiopic
+# script/Fraktur
+# script/Georgian
+# script/Greek
+# script/Gujarati
+# script/Gurmukhi
+# script/HanS
+# script/HanS_vert
+# script/HanT
+# script/HanT_vert
+# script/Hangul
+# script/Hangul_vert
+# script/Hebrew
+# script/Japanese
+# script/Japanese_vert
+# script/Kannada
+# script/Khmer
+# script/Lao
+# script/Latin
+# script/Malayalam
+# script/Myanmar
+# script/Oriya
+# script/Sinhala
+# script/Syriac
+# script/Tamil
+# script/Telugu
+# script/Thaana
+# script/Thai
+# script/Tibetan
+# script/Vietnamese
+# sin
+# slk
+# slv
+# snd
+# snum
+# spa
+# spa_old
+# sqi
+# srp
+# srp_latn
+# sun
+# swa
+# swe
+# syr
+# tam
+# tat
+# tel
+# tgk
+# tha
+# tir
+# ton
+# tur
+# uig
+# ukr
+# urd
+# uzb
+# uzb_cyrl
+# vie
+# yid
+# yor
+
