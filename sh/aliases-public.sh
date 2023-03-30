@@ -365,6 +365,7 @@ alias nuzz open http://nuzzel.com/
 alias leaf fox https://v2.overleaf.com/project
 alias txt2aiff 'say -r 270 -f \!:1 -o \!:1.aiff'
 alias txt2m4a 'say -r 270 -f \!:1 -o \!:1:r.m4a'
+alias txt2aif 'say -r 270 -f \!:1 -o \!:1:r.aiff'
 alias remkae make
 alias remkae make
 alias weahter weather
@@ -393,6 +394,7 @@ alias sbe 'cat /dev/null | mutt \!:1 -a \!:2 -s \!:3'
 alias pdf2pdf 'gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dQUIET -dBATCH -sOutputFile=output.pdf '
 alias outline 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-sections /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias toc 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-sections --table-of-contents /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
+alias toc 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc -V colorlinks=true -V linkcolor=blue -V urlcolor=red -V toccolor=gray --number-sections --table-of-contents /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias beamer  'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --slide-level 2 -i -t beamer --number-sections /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias stash   "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -i * stash_`date +%Y-%m-%dT%Hh%Mm`"
 alias stash-f "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -f * stash_`date +%Y-%m-%dT%Hh%Mm`"
@@ -468,8 +470,7 @@ alias txtify "pbpaste|pbcopy"
 alias prp "pbpaste|reply|pbcopy"
 #alias ifind open -a safari https://www.icloud.com/#find
 alias ifind open /System/Applications/FindMy.app/
-alias curse " grep -v -e '^#' ~/mise/doc/curses.txt | shuf | head -1"
-
+alias curse "grep -e '^-' ~/mise/doc/curses.txt | shuf | head -1"
 #alias cu-covid https://covid19.columbia.edu/content/covid-19-testing-program-fall-2021
 #alias cu-covid http://secure.health.columbia.edu/
 #alias cu-covid https://secure.health.columbia.edu/confirm.aspx
