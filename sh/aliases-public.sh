@@ -52,7 +52,8 @@ alias dusort "learn;date;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`;dat
 alias rstudio open /Applications/RStudio.app/
 alias permute "perl -MList::Util=shuffle -e 'print shuffle <>'"
 alias hai open http://example.com
-alias fox "open -a 'Firefox' \!:*"
+#alias fox "open -a 'Firefox' \!:*"
+alias fox "open "
 alias inpr "open http://www.npr.org/infiniteplayer/"
 
 # google-fu
@@ -117,7 +118,9 @@ alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | p
 alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
 alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr:;echo $vstr'
 alias v 'setv; vi +star $vstr; echo vstr:;echo $vstr'
+alias o 'setv; vi +star $vstr; oai-f $vstr'
 alias sv 'source $vstr'
+alias gv 'smail $vstr'
 # v & b (quicknotes+longnotes)
 alias pv 'pbcopy < $vstr'
 alias pb 'pbcopy < $bstr'
@@ -215,7 +218,7 @@ alias st2 '/Applications/Sublime\ Text\ 2.app/Contents/SharedSupport/bin/subl'
 alias get git clone
 
 #alias airport 'open /Applications/Utilities/AirPort\ Admin\ Utility.app/'
-alias airport 'open /Applications/Utilities/AirPort\ Utility.app/'
+alias airport-util 'open /Applications/Utilities/AirPort\ Utility.app/'
 alias els "echo 'For reasons explained in detail at http://bactra.org/weblog/864.html, I will not review for any Elsevier publication. I look forward to assisting your journal in the future, after it switches publishers.' | pbcopy"
 alias duplist 'dupseek -f hn .'
 alias hh history -h
@@ -289,7 +292,7 @@ alias roi "open -a /Applications/iTunes.app/ ~/Music/iTunes/iTunes\ Media/Music/
 alias beet "open ~//Music/iTunes/iTunes\ Media/Music/Compilations/7\ Conductors\ vs.\ Beethoven\'s\ 7th/06\ Symphony\ No.\ 7\ in\ A\ Major,\ Op.\ 92_\ II.\ Allegretto.m4a"
 alias pbpate pbpaste
 #alias acal fox http://registrar.columbia.edu/calendar
-alias acal "fox 'https://www.registrar.columbia.edu/event/academic-calendar?acfy=47&acterm=6&acschool=All&keys=&field_event_type1_tid%5B%5D=21&field_event_type1_tid%5B%5D=22&field_event_type1_tid%5B%5D=23'"
+alias acal "open 'https://www.registrar.columbia.edu/event/academic-calendar?acfy=48&acterm=7&acschool=All&keys=&field_event_type1_tid%5B%5D=21&field_event_type1_tid%5B%5D=22&field_event_type1_tid%5B%5D=23'"
 #alias omutts "cd $odir;mutts;cd -"
 #big sur killed this, now an osascript: alias lock "/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend"
 #alias zip4 open http://zip4.usps.com/zip4/welcome.jsp
@@ -364,7 +367,8 @@ alias gpgp 'git pull; git push'
 alias nuzz open http://nuzzel.com/
 alias leaf fox https://v2.overleaf.com/project
 alias txt2aiff 'say -r 270 -f \!:1 -o \!:1.aiff'
-alias txt2m4a 'say -r 270 -f \!:1 -o \!:1:r.m4a'
+alias txt2m4a 'say -r 200 -f \!:1 -o \!:1:r.m4a'
+alias txt2m4a-quick 'say -r 270 -f \!:1 -o \!:1:r.m4a'
 alias remkae make
 alias remkae make
 alias weahter weather
@@ -482,3 +486,5 @@ alias leads lds
 alias forward "echo 'Great! Could you write a forwardable intro email ( cf., e.g., https://www.entrepreneur.com/article/247692 ) to get things started?' | pbcopy"
 alias dephone "open 'https://support.google.com/websearch/troubleshooter/9685456'"
 alias table "echo '(╯°□°)╯︵ ┻━┻'|pbcopy"
+alias wifis "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s; echo 'lower (more negative) value indicates a weaker signal and a higher (less negative) value indicates a stronger signal'"
+alias d20 "shuf -i 1-20 -n 1"
