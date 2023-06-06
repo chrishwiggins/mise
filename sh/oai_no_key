@@ -1,0 +1,43 @@
+#!/bin/sh
+
+# Instead of using $1 directly in the JSON data, escape the input using jq
+# This will handle special characters like single quotes and exclamation marks properly
+escaped_input=$(printf '%s' "$1" | jq -Rs '.')
+
+# Create a temporary file to store the JSON data
+json_file="/tmp/oai_json_$$.json"
+
+# Write the JSON data to the temporary file
+cat > "${json_file}" <<EOF
+{
+  "model": "gpt-3.5-turbo",
+  "messages": [
+    {
+      "role": "user",
+      "content": ${escaped_input}
+    }
+  ]
+}
+EOF
+
+# Verbose output: Display the escaped input and JSON data
+## echo "Escaped Input: ${escaped_input}"
+## echo "JSON Data:"
+## cat "${json_file}"
+
+# Execute the curl request with the JSON data from the temporary file
+output=$(curl --silent --location --insecure --request POST 'https://api.openai.com/v1/chat/completions' \
+--header 'Authorization: Bearer KEY' \
+--header 'Content-Type: application/json' \
+--data "@${json_file}" | jq '.choices[].message.content')
+
+# Verbose output: Display the raw output
+## echo "Raw Output: ${output}"
+
+# Process the output
+echo "${output}" | sed -e 's/\\n/\n/g' -e 's/\\"/"/g' -e 's/^"//' -e 's/"$//' > /tmp/oai_$$.out
+cat /tmp/oai_$$.out
+
+# Save the curl request and output for debugging purposes
+mv "${json_file}" /tmp/oai_`date +%s`.in
+mv /tmp/oai_$$.out /tmp/oai_`date +%s`.out
