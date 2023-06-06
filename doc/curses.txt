@@ -1,22 +1,33 @@
 - we shall overcome --- because the arc of the moral universe is long, but it bends toward justice.
 - think.
+#- think.
 #- Choose.
 #- Prioritize done over better.
-#- Prioritize presence over toggling.
+- Prioritize presence over toggling.
+
+# from @carr2n:
+# explore:
+- Don’t just do what you’re good at. Get outside of your comfort zone. Being a {scientist} is permission for lifetime learning.
+# exploit:
+- Do the work.
 #- Someone who is underestimated will be the one who changes the world. It’s not the person everyone expects. It might be you.
 #- “Do what is front of you.” Focus on the small steps ahead of you.
 #- Don’t worry about achieving a master plan, about the plot to take over the world.
 #- Be a worker among workers. It’s more important that you fit in before you stick out.
 #- Follow the “Mom Rule.” Don’t do anything you couldn’t explain or justify to your mom.
-- Don’t just do what you’re good at. Get outside of your comfort zone. Being a {scientist} is permission for lifetime learning.
-#- Be present. Don’t worry about documenting the moment with your smartphone. Experience it yourself.
-#- Take responsibility for the good and the bad. Learn to own your failures.
-#- Be honest, and be willing to have the difficult conversation.
+- Be present. Don’t worry about documenting the moment with your smartphone. Experience it yourself.
+- Take responsibility for the good and the bad. Learn to own your failures.
+- Be honest, and be willing to have the difficult conversation.
 - Don’t be afraid to be ambitious. It’s not a crime.
-- Do the work.
-#- The answer is never in the computer.
-#- The prize is the pleasure of finding the thing out, the kick in the discovery, the observation that other people use it -- those are the real things.
-- Leap, and the net will appear.
+
+
+# from @chrishwiggins:
+- The answer is never in the computer.
+
+# from RPF:
+- The prize is the pleasure of finding the thing out, the kick in the discovery, the observation that other people use it -- those are the real things.
+
+#- Leap, and the net will appear.
 # - don't be silly.
 # 11.a.1) Insist on doing everything through "channels." Never permit short-cuts to be taken in order to, expedite decisions. -- "Sabotage", 1944
 # 11.a.2) Make "speeches." Talk as frequently as possible and at great length. Illustrate your "points" by long anecdotes and accounts of personal experiences. Never hesitate to make a few appropriate "patriotic" comments. -- "Sabotage", 1944
