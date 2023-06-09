@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Enable verbose output for better understanding of the script flow
-set -x
+# set -x
 
 # Declare input file and output directory
 input_file=$1
@@ -50,4 +50,4 @@ cat $output_dir/*.txt > "$output_file"
 echo "OCR complete! Text file can be found at $output_file"
 
 # Disable verbose output
-set +x
+# set +x
