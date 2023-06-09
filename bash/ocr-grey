@@ -1,22 +1,30 @@
 #!/bin/bash
+# This is a bash script for performing OCR on a PDF file using Tesseract.
 
-# Check if --help option is provided
+# Check if the --help option is provided
+# If provided, it lists the languages supported by Tesseract and exits
 if [ "$1" == "--help" ]; then
+    echo "Listing the languages supported by Tesseract:"
     tesseract --list-langs
     exit 0
 fi
 
 # Check if at least one argument is provided
+# If not, it provides a usage hint and exits
 if [ $# -lt 1 ]; then
     echo "Usage: ocr input_file [options]"
     echo "e.g., ocr foo.png -l fra --oem 1"
     exit 1
 fi
 
+# Store the first argument as the input file name
 input_file=$1
-shift  # This will remove the first argument, and shift all the others to the left
+# Shift the arguments to the left, removing the first one
+shift
 
+# Initialize options with a default value
 options=""
+# If there are any remaining arguments, store them as options
 if [ $# -eq 0 ]; then
     options="-l eng --oem 1"
 else
@@ -24,29 +32,43 @@ else
 fi
 
 # Check if the input file exists
+# If not, it provides an error message and exits
 if [ ! -f "$input_file" ]; then
     echo "Input file does not exist: $input_file"
     exit 1
 fi
 
-# Define output file and directory
+# Extract the base file name and extension from the input file name
 base_filename=$(basename -- "$input_file")
 base_filename_no_ext="${base_filename%.*}"
+# Create an output directory with the same name as the input file
 output_dir="$base_filename_no_ext"
 mkdir -p "$output_dir"
+# Define the output file name
 output_file="$output_dir/$base_filename_no_ext.ocr"
 
-echo "STARTING ocr on $input_file at $(date) ..."
+echo "STARTING OCR on $input_file at $(date)..."
 
-# Convert PDF to Images
+# Convert the PDF file to PNG images using pdftoppm
+# It generates one image per page, named as 'page-01.png', 'page-02.png', etc.
+echo "  - starting convert to png $input_file at $(date)"
 pdftoppm -png "$input_file" "$output_dir/page"
+echo "  - finished convert to png $input_file at $(date)"
 
-# OCR on the images
+# Perform OCR on each PNG image using Tesseract
+# The output is a text file for each image
+echo "  - starting tesseract at $(date) with:"
+echo "    + options = $options"
+echo "    + input = $input_file"
 for img in $(ls "$output_dir"/*.png); do
+    echo "    - processing $img"
     tesseract $img $output_dir/$(basename $img .png) $options
 done
+echo "  - finished tesseract at $(date)"
 
-# Combine all OCR'd text into one file
+# Combine all the text files into one output file
+echo "  - starting combining text files at $(date)"
 cat "$output_dir"/*.txt > "$output_file"
+echo "  - finished combining text files at $(date)"
 
-echo "OCR complete."
+echo "OCR complete. The output has been saved to: $output_file"
