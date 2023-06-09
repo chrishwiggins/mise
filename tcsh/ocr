@@ -35,7 +35,7 @@ echo "  - starting tesseract at `date` with:"
 echo "    + options = $options"
 echo "    + input = $input_file"
 
-echo "  - starting tesseract /tmp/ocr_$$.tiff $input_file:r $options at `date`"
+echo "  - starting tesseract /tmp/ocr_$$.tiff $input_file:r $options"
 echo "command:"
 echo "tesseract /tmp/ocr_$$.tiff $input_file:r $options"
 
