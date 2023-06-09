@@ -1,74 +1,53 @@
 #!/bin/bash
-# This is a bash script for performing OCR on a PDF file using Tesseract.
 
-# Check if the --help option is provided
-# If provided, it lists the languages supported by Tesseract and exits
-if [ "$1" == "--help" ]; then
-    echo "Listing the languages supported by Tesseract:"
-    tesseract --list-langs
-    exit 0
-fi
+# Enable verbose output for better understanding of the script flow
+set -x
 
-# Check if at least one argument is provided
-# If not, it provides a usage hint and exits
-if [ $# -lt 1 ]; then
-    echo "Usage: ocr input_file [options]"
-    echo "e.g., ocr foo.png -l fra --oem 1"
-    exit 1
-fi
-
-# Store the first argument as the input file name
+# Declare input file and output directory
 input_file=$1
-# Shift the arguments to the left, removing the first one
-shift
-
-# Initialize options with a default value
-options=""
-# If there are any remaining arguments, store them as options
-if [ $# -eq 0 ]; then
-    options="-l eng --oem 1"
-else
-    options=$*
-fi
+output_dir=out
+output_file="$output_dir/$(basename "$input_file" .pdf).txt"
 
 # Check if the input file exists
-# If not, it provides an error message and exits
 if [ ! -f "$input_file" ]; then
-    echo "Input file does not exist: $input_file"
-    exit 1
+  echo "Input file $input_file not found!"
+  exit 1
 fi
 
-# Extract the base file name and extension from the input file name
-base_filename=$(basename -- "$input_file")
-base_filename_no_ext="${base_filename%.*}"
-# Create an output directory with the same name as the input file
-output_dir="$base_filename_no_ext"
+# Create the output directory if it does not exist
 mkdir -p "$output_dir"
-# Define the output file name
-output_file="$output_dir/$base_filename_no_ext.ocr"
 
-echo "STARTING OCR on $input_file at $(date)..."
+# Use pdf2image to convert the PDF to a set of PNG images
+# The resulting images are saved in the output directory
+echo "Converting PDF to PNG..."
+python3 -c "
+from pdf2image import convert_from_path
+images = convert_from_path('$input_file')
+for i, image in enumerate(images):
+    image.save('$output_dir/page_'+ str(i) +'.png', 'PNG')
+"
 
-# Convert the PDF file to PNG images using pdftoppm
-# It generates one image per page, named as 'page-01.png', 'page-02.png', etc.
-echo "  - starting convert to png $input_file at $(date)"
-pdftoppm -png "$input_file" "$output_dir/page"
-echo "  - finished convert to png $input_file at $(date)"
-
-# Perform OCR on each PNG image using Tesseract
-# The output is a text file for each image
-echo "  - starting tesseract at $(date) with:"
-echo "    + options = $options"
-echo "    + input = $input_file"
-for img in $(ls "$output_dir"/*.png); do
-    echo "    - processing $img"
-    tesseract $img $output_dir/$(basename $img .png) $options
+# Use ImageMagick to convert the PNG images to grayscale
+# This can help with removing any highlights in the original PDF
+echo "Converting images to grayscale..."
+for file in $output_dir/*.png; do
+    convert "$file" -colorspace GRAY "$file"
 done
-echo "  - finished tesseract at $(date)"
 
-# Combine all the text files into one output file
-echo "  - starting combining text files at $(date)"
-cat "$output_dir"/*.txt > "$output_file"
-echo "  - finished combining text files at $(date)"
+# Use Tesseract to perform OCR on the PNG images
+# The resulting text is saved in the output directory
+echo "Performing OCR with Tesseract..."
+for file in $output_dir/*.png; do
+    tesseract "$file" "$output_dir/$(basename "$file" .png).txt" -l eng --oem 1
+done
 
-echo "OCR complete. The output has been saved to: $output_file"
+# Concatenate all the individual text files into a single file
+# This is the final output of the script
+echo "Concatenating text files..."
+cat $output_dir/*.txt > "$output_file"
+
+# Output the path to the OCR text file
+echo "OCR complete! Text file can be found at $output_file"
+
+# Disable verbose output
+set +x
