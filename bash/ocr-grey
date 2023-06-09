@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Check if --help option is provided
+if [ "$1" == "--help" ]; then
+    tesseract --list-langs
+    exit 0
+fi
+
+# Check if at least one argument is provided
+if [ $# -lt 1 ]; then
+    echo "Usage: ocr input_file [options]"
+    echo "e.g., ocr foo.png -l fra --oem 1"
+    exit 1
+fi
+
+input_file=$1
+shift
+
+options=$*
+if [ $# -lt 2 ]; then
+    options="-l eng --oem 1"
+fi
+
+echo "STARTING ocr on $input_file at $(date) ..."
+
+# Use python script to convert pdf to tiff and remove highlights
+python3 << END
+import cv2
+import numpy as np
+from pdf2image import convert_from_path
+import os
+import subprocess
+
+input_file_path = "$input_file"
+output_file_path = "/tmp/ocr_$$.tiff"
+options = "$options"
+output_file_txt = f"{os.path.splitext(input_file_path)[0]}.ocr"
+
+# Convert the PDF to images
+pages = convert_from_path(input_file_path)
+
+for i, page in enumerate(pages):
+    # convert PIL image to OpenCV image (RGB to BGR)
+    img = cv2.cvtColor(np.array(page), cv2.COLOR_RGB2BGR)
+
+    # convert the image to grayscale
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # save the image
+    cv2.imwrite(f"{output_file_path}_{i}", gray)
+
+    # Perform OCR on the image
+    cmd = f"tesseract {output_file_path}_{i} {output_file_path}_{i} {options}"
+    subprocess.call(cmd, shell=True)
+
+    # Append the OCR result to the output text file
+    with open(f"{output_file_path}_{i}.txt", 'r') as in_file, open(output_file_txt, 'a') as out_file:
+        out_file.write(in_file.read())
+        
+    # Clean up the temporary files
+    os.remove(f"{output_file_path}_{i}.txt")
+    os.remove(f"{output_file_path}_{i}")
+END
+
+echo "OCR complete."
