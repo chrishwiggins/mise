@@ -60,4 +60,5 @@ else
    # Then, it creates a new file with the name stored in the 'in' variable and writes "restart;" into it.
    echo "restart;" > $in
    # Prints a message to the console about the newly created file.
-   echo "
+   echo "now it does. enjoy your new math."
+fi

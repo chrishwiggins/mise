@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Set the shebang to use bash shell
+
+# Assign command-line arguments to variables with default values
+command=${1:-cat}       # The command to be run, default is 'cat'
+input_file=${2:-ein.txt}    # The input file for the command, default is 'ein.txt'
+output_file=${3:-aus.txt}   # The output file for the command, default is 'aus.txt'
+wait_time=${4:-4}       # The wait time between iterations, default is 4 seconds
+
+# Print usage and exit if no arguments were passed
+if [ $# -eq 0 ]; then
+  echo "Usage: $0 [command=$command] [input_file=$input_file] [output_file=$output_file] [wait_time=$wait_time]"
+  exit 1
+fi
+
+# Check if input file exists. If it doesn't, create it and exit
+if [ ! -f "$input_file" ]; then
+  echo "Input file not found. Creating file and exiting."
+  touch "$input_file"   # 'touch' is used to create the file
+  exit 0
+fi
+
+# Check if output file exists. If it doesn't, create it
+if [ ! -f "$output_file" ]; then
+  echo "Output file not found. Creating file."
+  touch "$output_file"  # 'touch' is used to create the file
+fi
+
+# Run the command once before entering the loop
+$command < "$input_file" > "$output_file"  # Input redirection '<' and output redirection '>'
+
+# Start of the infinite loop
+while true
+do
+  # Check if the input file is newer than the output file
+  if [ "$input_file" -nt "$output_file" ]
+  then
+    # Clear screen if the input file is newer
+    clear
+
+    # Run the command with input file as input and output file as output
+    $command < "$input_file" > "$output_file"  # The same command is run again
+
+    # Output the contents of the output file to the terminal
+    cat "$output_file"
+  fi
+
+  # Wait for the specified amount of time before the next iteration
+  sleep $wait_time
+done
+# End of the script
