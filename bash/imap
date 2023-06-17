@@ -1,31 +1,63 @@
 #!/bin/bash
+# A Bash script is a script written in the Bash scripting language and is interpreted by the Bash shell.
 
-cmd=/Library/Frameworks/Maple.framework/Versions/2020/bin/maple
+# Uncomment the following line to trace the script execution. 
+# Useful for debugging. Every command will be printed to the terminal before it is executed.
+# set -x 
 
+# Define the cmd variable. 
+# This variable contains the path to the Maple software that will execute the math equations.
+# Initially, the script was using Maple 2020, but now it is set to use the current version of Maple.
+# WORKING: cmd=/Library/Frameworks/Maple.framework/Versions/2020/bin/maple
+cmd=/Library/Frameworks/Maple.framework/Versions/Current/bin/maple
+
+# Uncomment the following line to print the cmd value. Useful for debugging purposes.
+# echo $cmd
+
+# The script checks if any arguments were passed when the script was called.
+# If not, it sets default values for the input file (in), output file (out), and wait time (wait).
 if [ "$#" -eq 0 ]; then
-    in="math.mpl"
-    out="math.asc"
-    wait=1
+    in="math.mpl"  # Default input file name.
+    out="math.asc"  # Default output file name.
+    wait=1  # Default waiting time in seconds.
 else
+    # If arguments are provided, they are used to set the input file, output file, and wait time.
+    # The first argument ($1) is the name of the input file.
     in=$1
-    out=$2
-    wait=$3
+    # The second argument ($2) is the name of the output file. If not provided, "output.asc" is used.
+    out=${2:-"output.asc"}
+    # The third argument ($3) is the wait time. If not provided, 1 second is used.
+    wait=${3:-1}
 fi
 
+# This checks if the output file already exists.
+# If not, it creates a new file with the name stored in the 'out' variable.
+if [ ! -f $out ]; then
+  touch $out
+fi
+
+# Check if the input file exists.
 if [ -f $in ]; then
+  # Print a message showing the input file, output file, and wait time.
   echo imap running with in=$in, out=$out, and wait=$wait
+  # This is an infinite loop. It constantly checks if the input file is newer than the output file.
   while :
   do
+    # If the input file is newer, it executes the following commands.
     if [[ $in -nt $out ]]; then
+      # Prints a message to the console.
       echo making
+      # Prints the current date and time, runs the Maple command to process the math equations in the input file and output the result to the output file, clears the terminal, displays the content of the output file, and prints the date and time again.
       date; $cmd < $in > $out ; clear; cat $out ; date
     fi
-    #stop imake from chomping all my CPU and interrupting edits
+    # Waits for the specified amount of time before the next iteration. 
+    # This prevents the script from using all the CPU resources and interrupting edits.
     sleep $wait
   done
-
 else
+   # If the input file doesn't exist, the script prints a message to the console.
    echo "File $in does not exist."
+   # Then, it creates a new file with the name stored in the 'in' variable and writes "restart;" into it.
    echo "restart;" > $in
-   echo "now it does. enjoy your new math."
-fi
+   # Prints a message to the console about the newly created file.
+   echo "
