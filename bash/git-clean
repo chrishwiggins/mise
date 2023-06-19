@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# Function to prompt for user confirmation
+confirm() {
+  read -r -p "$1 (y/n): " response
+  case "$response" in
+    [yY][eE][sS]|[yY])
+      true
+      ;;
+    *)
+      false
+      ;;
+  esac
+}
+
+# Prune remote tracking branches
+if confirm "Prune remote tracking branches"; then
+  echo "Executing: git remote prune origin"
+  git remote prune origin
+fi
+
+# Remove unused objects
+if confirm "Remove unused objects"; then
+  echo "Executing: git gc --prune=now"
+  git gc --prune=now
+fi
+
+# Clear reflog
+if confirm "Clear reflog"; then
+  echo "Executing: git reflog expire --expire=now --all"
+  git reflog expire --expire=now --all
+fi
+
+# Perform garbage collection
+if confirm "Perform garbage collection"; then
+  echo "Executing: git gc --aggressive --prune=now"
+  git gc --aggressive --prune=now
+fi
+
+# Remove unnecessary local branches
+if confirm "Remove unnecessary local branches"; then
+  echo -n "Enter the branch name to delete: "
+  read -r branch_name
+  echo "Executing: git branch -d $branch_name"
+  git branch -d "$branch_name"
+fi
