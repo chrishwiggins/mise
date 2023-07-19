@@ -319,8 +319,6 @@ alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
 alias vi-null "vi -c 'set nonumber'"
 
 
-alias nterm 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -\!:* | normalize`'
-# alias term 'open `find ~/gd/aux/osx-terminal-themes/schemes | gshuf | head -1 | normalize`'
 # good fu: exploits quick add but adds browser to edit event, send invitesjj
 # barfing 2019-07-21, chrome nonresponsive
 #alias oslow 'pers-gmail-browser `slow \!:* | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`'
