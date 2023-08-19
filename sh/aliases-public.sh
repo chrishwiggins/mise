@@ -310,7 +310,7 @@ alias ngit "open https://github.com/new"
 alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
 #alias cwnotes "head `ls -1t $ndir/cwnote_201* | grep -v -e '(' -e ')'` | more"
 #alias cwnotes 'head `ls -1t $ndir/cwnote_201* | normalize` | more'
-alias cwnotes 'head `ls -1t $ndir/cwnote_20* | normalize` | more'
+alias cwnotes 'head `ls -1t $ndir/cwnote_2023_*T*_*_*.md | normalize` | more'
 
 
 alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
@@ -487,3 +487,4 @@ alias dephone "open 'https://support.google.com/websearch/troubleshooter/9685456
 alias table "echo '(╯°□°)╯︵ ┻━┻'|pbcopy"
 alias wifis "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s; echo 'lower (more negative) value indicates a weaker signal and a higher (less negative) value indicates a stronger signal'"
 alias d20 "shuf -i 1-20 -n 1"
+alias pst "env TZ=':America/Los_Angeles' date"
