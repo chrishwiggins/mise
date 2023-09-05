@@ -31,7 +31,6 @@ alias up "cd .."
 alias please sudo
 
 # places to go
-alias cd-htm cd ~/Documents/public_html
 alias cd-mise cd $mise
 
 # handy, needed below
@@ -488,3 +487,10 @@ alias table "echo '(╯°□°)╯︵ ┻━┻'|pbcopy"
 alias wifis "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s; echo 'lower (more negative) value indicates a weaker signal and a higher (less negative) value indicates a stronger signal'"
 alias d20 "shuf -i 1-20 -n 1"
 alias pst "env TZ=':America/Los_Angeles' date"
+
+alias canceling "echo 'I am fine with canceling this meeting. Thank you.'| pbcopy"
+
+
+
+
+
