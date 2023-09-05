@@ -10,7 +10,8 @@ if [ -z "$latest_screenshot" ]; then
 fi
 
 # Run Tesseract OCR on the latest screenshot
-tesseract ~/Shots/"$latest_screenshot" /tmp/ocr.txt
+#tesseract ~/Shots/"$latest_screenshot" /tmp/ocr.txt
+tesseract ~/Shots/"$latest_screenshot" /tmp/ocr
 
 # Inform the user
 echo "OCR output written to /tmp/ocr.txt"
