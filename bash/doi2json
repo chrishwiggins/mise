@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Function to display usage
+usage() {
+    echo "Usage: $0 [OPTIONS] <DOI>"
+    echo "Options:"
+    echo "  -o    Open the article URL in a web browser"
+    echo "  -u    Display the article URL"
+    echo "  -t    Display the title of the article"
+    echo "Without any option, the full JSON metadata will be displayed."
+    exit 1
+}
+
+# Ensure at least one argument is provided
+if [ "$#" -lt 1 ]; then
+    usage
+fi
+
+# The DOI should be the last argument
+DOI="${!#}"
+URL="https://api.crossref.org/works/$DOI"
+DATA=$(curl -s -LH "Accept: application/json" "$URL")
+
+# If only the DOI is provided, display the full JSON
+if [ "$#" -eq 1 ]; then
+    echo "$DATA" | jq '.'
+    exit 0
+fi
+
+# Process the options
+while getopts ":outa" opt; do
+    case $opt in
+        o)
+            open "$(echo "$DATA" | jq -r '.message.URL')"
+            ;;
+        u)
+            echo "URL: $(echo "$DATA" | jq -r '.message.URL')"
+            ;;
+        t)
+            echo "Title: $(echo "$DATA" | jq -r '.message.title[0]')"
+            ;;
+        a)
+            authors=$(echo "$DATA" | jq -r '.message.author[] | "\(.given) \(.family)"')
+            echo "Authors:"
+            echo "$authors"
+            ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            usage
+            ;;
+    esac
+done

@@ -491,6 +491,5 @@ alias pst "env TZ=':America/Los_Angeles' date"
 alias canceling "echo 'I am fine with canceling this meeting. Thank you.'| pbcopy"
 
 
-
-
-
+alias minors open "https://bulletin.engineering.columbia.edu/minor-applied-mathematics"
+alias majors open "https://bulletin.engineering.columbia.edu/undergraduate-degree-tracks"
