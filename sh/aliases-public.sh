@@ -6,7 +6,7 @@ set mise=$cwhome/mise/
 ## FILES
 set cwpaliases=$mise/sh/aliases-public.sh
 
-# echo conditionals
+ echo conditionals
 ## conditionals
 if (! $?ndir) then
   set ndir=$cwhome/Documents/ndir/
@@ -17,12 +17,12 @@ if (! $?phonefile) then
   set phonefile=$cwhome/Documents/phonebook.txt
 endif
 #if (! $?cwaux) then
-  #echo resetting cwaux
+  echo resetting cwaux
   #set cwaux=$cwhome/Documents/aux/
 #endif
 set mise_aux=${mise}/aux
 
-# echo unix
+ echo unix
 # unix essentials
 alias l '/bin/ls -ltrFsA'
 alias ll '/bin/ls -ltrFs'
@@ -493,3 +493,5 @@ alias canceling "echo 'I am fine with canceling this meeting. Thank you.'| pbcop
 
 alias minors open "https://bulletin.engineering.columbia.edu/minor-applied-mathematics"
 alias majors open "https://bulletin.engineering.columbia.edu/undergraduate-degree-tracks"
+
+alias croncheck "cat /tmp/cron_test.log;grep CRON /var/log/syslog"
