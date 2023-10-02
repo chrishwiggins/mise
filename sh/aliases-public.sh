@@ -495,3 +495,4 @@ alias minors open "https://bulletin.engineering.columbia.edu/minor-applied-mathe
 alias majors open "https://bulletin.engineering.columbia.edu/undergraduate-degree-tracks"
 
 alias croncheck "cat /tmp/cron_test.log;grep CRON /var/log/syslog"
+alias pbpy "pbpaste >! /tmp/$$.py ; py3 /tmp/$$.py"
