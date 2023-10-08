@@ -497,3 +497,4 @@ alias majors open "https://bulletin.engineering.columbia.edu/undergraduate-degre
 alias croncheck "cat /tmp/cron_test.log;grep CRON /var/log/syslog"
 alias pbpy "pbpaste >! /tmp/$$.py ; py3 /tmp/$$.py"
 alias pbmpl "pbpaste >! /tmp/$$.mpl ; maple  /tmp/$$.mpl"
+alias mute 'osascript -e "set volume output muted true"'
