@@ -498,3 +498,4 @@ alias croncheck "cat /tmp/cron_test.log;grep CRON /var/log/syslog"
 alias pbpy "pbpaste >! /tmp/$$.py ; py3 /tmp/$$.py"
 alias pbmpl "pbpaste >! /tmp/$$.mpl ; maple  /tmp/$$.mpl"
 alias mute 'osascript -e "set volume output muted true"'
+#alias quote-search "set url='https://quoteinvestigator.com/?s='; set words=\`echo \!:* | sed s/\\ /+/g\`; open \${url}\${words}"

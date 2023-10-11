@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Base URL
+url="https://quoteinvestigator.com/?s="
+
+# Initialize the formatted string
+formatted_input=""
+
+# Process each argument
+for arg in "$@"; do
+    # If argument contains spaces, wrap with encoded quotes
+    if [[ $arg =~ \  ]]; then
+        arg="%22$(echo "$arg" | sed 's/ /+/g')%22"
+    else
+        arg=$(echo "$arg" | sed 's/ /+/g')
+    fi
+    # Append to the formatted string
+    formatted_input+="$arg+"
+done
+
+# Remove trailing '+'
+formatted_input=${formatted_input%+}
+
+# Open the URL
+open "${url}${formatted_input}"
