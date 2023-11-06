@@ -1,8 +1,9 @@
 #!/bin/tcsh -f #-X -V
-#% wraps around google maps, turns + into quotes
-#% turns spaces into URL spaces (%22)
+#% wraps around google maps
+#OLD:% turns spaces into URL spaces (%22)
+#NEW:% turns spaces into +
 # make sure you include "/" in the input, separating places
 
-set str=`echo $* | sed -e 's/ /%20/g'`
+set str=`echo $* | sed -e 's/ /+/g'`
 echo $str
 open  'http://www.google.com/maps/dir/'$str
