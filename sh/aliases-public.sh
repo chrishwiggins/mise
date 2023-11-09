@@ -495,8 +495,8 @@ alias minors open "https://bulletin.engineering.columbia.edu/minor-applied-mathe
 alias majors open "https://bulletin.engineering.columbia.edu/undergraduate-degree-tracks"
 
 alias croncheck "cat /tmp/cron_test.log;grep CRON /var/log/syslog"
-alias pbpy "pbpaste >! /tmp/$$.py ; py3 /tmp/$$.py"
-alias pbmpl "pbpaste >! /tmp/$$.mpl ; maple  /tmp/$$.mpl"
+alias pbpy "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; py3 /tmp/$$.py"
+alias pbmpl "pbpaste >! /tmp/$$.mpl ; wc -w /tmp/$$.mpl ; maple  /tmp/$$.mpl"
 alias mute 'osascript -e "set volume output muted true"'
 alias hamlet open https://www.litcharts.com/shakescleare/shakespeare-translations/hamlet/act-1-scene-1
 alias newer 'find . -type f -newermt "\!:1"'
