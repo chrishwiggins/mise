@@ -500,3 +500,5 @@ alias pbmpl "pbpaste >! /tmp/$$.mpl ; wc -w /tmp/$$.mpl ; maple  /tmp/$$.mpl"
 alias mute 'osascript -e "set volume output muted true"'
 alias hamlet open https://www.litcharts.com/shakescleare/shakespeare-translations/hamlet/act-1-scene-1
 alias newer 'find . -type f -newermt "\!:1"'
+alias yt-xcript yt-dlp --write-auto-sub --skip-download
+alias yt2mp4 "yt-dlp -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' "
