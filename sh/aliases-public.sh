@@ -6,7 +6,7 @@ set mise=$cwhome/mise/
 ## FILES
 set cwpaliases=$mise/sh/aliases-public.sh
 
- echo conditionals
+ #echo conditionals
 ## conditionals
 if (! $?ndir) then
   set ndir=$cwhome/Documents/ndir/
@@ -17,12 +17,12 @@ if (! $?phonefile) then
   set phonefile=$cwhome/Documents/phonebook.txt
 endif
 #if (! $?cwaux) then
-  echo resetting cwaux
+  #echo resetting cwaux
   #set cwaux=$cwhome/Documents/aux/
 #endif
 set mise_aux=${mise}/aux
 
- echo unix
+ #echo unix
 # unix essentials
 alias l '/bin/ls -ltrFsA'
 alias ll '/bin/ls -ltrFs'
