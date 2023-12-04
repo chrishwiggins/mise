@@ -45,3 +45,8 @@ set shiftwidth=2
 " command! -nargs=* Wrap set wrap linebreak nolist
 set wrap linebreak nolist
 " https://vim.fandom.com/wiki/Automatic_word_wrapping
+"
+"
+" 20231204T15h49 copilot
+autocmd BufEnter *.py Copilot enable
+ 
