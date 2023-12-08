@@ -1,0 +1,55 @@
+#!/usr/bin/python3
+# Shebang line: the script will be executed by Python 3 interpreter
+
+import sys  # Import the sys module, used for accessing system-specific parameters and functions
+import re  # Import the re module, for regular expression operations
+
+
+def clean_transcript():
+    # Define a function 'clean_transcript' to clean a transcript text
+
+    seen_lines = set()  # Initialize an empty set to store unique lines
+    skip_header = True  # Initialize a flag to indicate if we are still in the header part of the transcript
+
+    for line in sys.stdin:
+        # Iterate over each line of input received from the standard input (stdin)
+
+        # Skip header lines
+        if skip_header:
+            # If we are still in the header part of the transcript
+            if line.strip() == "":
+                # If the line is empty (after stripping whitespace),
+                # it indicates the end of the header section
+                skip_header = (
+                    False  # Set the flag to False as we are now past the header
+                )
+            continue  # Continue to the next iteration, skipping further processing for this line
+
+        # Remove timestamps
+        if re.match(r"\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}", line):
+            # Use a regular expression to detect timestamps in the format 'hh:mm:ss.mmm --> hh:mm:ss.mmm'
+            continue  # If a timestamp is found, skip this line and go to the next
+
+        # Remove formatting tags and leading/trailing whitespace
+        cleaned_line = re.sub(r"<[^>]+>", "", line).strip()
+        # Remove any HTML/XML-like tags using a regular expression and strip whitespace from both ends
+
+        # Skip empty lines
+        if not cleaned_line:
+            # If the cleaned line is empty, skip further processing and continue to the next line
+            continue
+
+        # Check if line is a repeat, and skip if so
+        if cleaned_line in seen_lines:
+            # If the cleaned line is already in the set of seen lines, it's a duplicate
+            continue  # Skip the duplicate line
+
+        seen_lines.add(
+            cleaned_line
+        )  # Add the non-duplicate, cleaned line to the set of seen lines
+        sys.stdout.write(
+            cleaned_line + "\n"
+        )  # Write the cleaned line to standard output (stdout) with a newline
+
+
+clean_transcript()  # Call the function to clean the transcript
