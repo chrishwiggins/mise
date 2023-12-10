@@ -40,7 +40,7 @@ set noclobber
 # actually do stuff
 ## set path
 #% echo path
-cset
+#2023-12-10 cset
 
 ### TEXSTUFF
 # Add /usr/local/texlive/2011/texmf/doc/man to MANPATH, if not dynamically determined.
