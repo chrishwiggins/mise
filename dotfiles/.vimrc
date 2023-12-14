@@ -49,3 +49,5 @@ set wrap linebreak nolist
 "
 " 20231204T15h49 copilot
 autocmd BufEnter *.py Copilot enable
+autocmd BufEnter *.txt Copilot enable
+autocmd BufEnter *.md Copilot enable
