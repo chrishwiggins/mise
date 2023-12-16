@@ -471,7 +471,7 @@ alias txtify "pbpaste|pbcopy"
 alias prp "pbpaste|reply|pbcopy"
 #alias ifind open -a safari https://www.icloud.com/#find
 alias ifind open /System/Applications/FindMy.app/
-alias curse "grep -e '^-' ~/mise/doc/curses.txt | shuf | head -1"
+alias curse "grep -e '^-' ~/mise/doc/curses.txt | shuf | head -1| tr '\\' '\n'"
 #alias cu-covid https://covid19.columbia.edu/content/covid-19-testing-program-fall-2021
 #alias cu-covid http://secure.health.columbia.edu/
 #alias cu-covid https://secure.health.columbia.edu/confirm.aspx
