@@ -51,3 +51,14 @@ set wrap linebreak nolist
 autocmd BufEnter *.py Copilot enable
 autocmd BufEnter *.txt Copilot enable
 autocmd BufEnter *.md Copilot enable
+" 20231219T07h01 copilot
+command! Pilot :Copilot enable
+command! Unpilot :Copilot disable
+command! Ideas :Copilot panel
+command! Status :Copilot status  
+
+
+
+" Autostart GitHub Copilot for Python and Markdown files
+autocmd BufEnter,BufRead,BufNewFile *.py :Copilot enable
+autocmd BufEnter,BufRead,BufNewFile *.md :Copilot enable
