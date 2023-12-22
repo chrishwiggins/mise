@@ -502,3 +502,4 @@ alias hamlet open https://www.litcharts.com/shakescleare/shakespeare-translation
 alias newer 'find . -type f -newermt "\!:1"'
 alias yt-xcript yt-dlp --write-auto-sub --skip-download
 alias yt2mp4 "yt-dlp -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' "
+alias sniff "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s"
