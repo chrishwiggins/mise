@@ -1,4 +1,12 @@
 #!/bin/tcsh
+
+set orig_dir = `pwd` 
+set tmp_dir = /tmp/ocr.dir
+ 
+# Check if $tmp_dir exists as a directory, if not create it
+if (! -d $tmp_dir) then
+    mkdir $tmp_dir
+endif
  
 ## Check if --help option is provided
 if ("$1" == "--help") then
@@ -25,31 +33,31 @@ endif
 
 echo "STARTING ocr on $input_file at `date` ..."
 
-# convert to tiff
-echo "  - starting convert to tiff $input_file at `date`"
-time convert -density 300 $input_file -depth 8 -strip -background white -alpha off /tmp/ocr_$$.tiff
+# convert to tif
+echo "  - starting convert to tif $input_file at `date`"
+# time convert -density 300 $input_file -depth 8 -strip -background white -alpha off /tmp/ocr_$$.tif
+time convert -density 300 $input_file -depth 8 -strip -background white -alpha off ocr_$$.tif
 
-echo "  - finished convert to tiff $input_file at `date`"
+
+echo "  - finished convert to tif $input_file at `date`"
 
 echo "  - starting tesseract at `date` with:"
 echo "    + options = $options"
 echo "    + input = $input_file"
 
-echo "  - starting tesseract /tmp/ocr_$$.tiff $input_file:r $options"
+
+echo "  - starting tesseract ocr_$$.tif $input_file:r $options"
 echo "command:"
-echo "tesseract /tmp/ocr_$$.tiff $input_file:r $options"
+echo "tesseract ocr_$$.tif $input_file:r $options"
 
 # most important line in the code:
-time tesseract /tmp/ocr_$$.tiff $input_file:r $options
+time tesseract ocr_$$.tif $input_file:r $options
 
-echo "  - ending tesseract /tmp/ocr_$$.tiff $input_file:r $options at `date`"
+echo "  - ending tesseract ocr_$$.tif $input_file:r $options at `date`"
 
-# maybe change this to mv -f after testing for a while.
+# Change the mv command to look for the output in the $tmp_dir directory
 mv -v -i ${input_file:r}.txt ${input_file:r}.ocr
-#
-# might need cleanup:
-# rm -f /tmp/ocr_$$.tiff
-# echo removed /tmp/ocr_$$.tiff
+
 
 # [1] https://diging.atlassian.net/wiki/spaces/DCH/pages/5275668/Tutorial+Text+Extraction+and+OCR+with+Tesseract+and+ImageMagick 
 # [2]
@@ -266,3 +274,6 @@ mv -v -i ${input_file:r}.txt ${input_file:r}.ocr
 # yid
 # yor
 
+
+# Change back to the original directory
+cd $orig_dir
