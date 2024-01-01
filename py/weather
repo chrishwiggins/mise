@@ -1,0 +1,145 @@
+#!/usr/bin/python3
+
+import requests
+from datetime import datetime
+import argparse
+
+def get_weather_forecast(latitude, longitude):
+    # Base URL for the National Weather Service API
+    base_url = "https://api.weather.gov/points"
+    
+    # Construct the URL with provided latitude and longitude
+    url = f"{base_url}/{latitude},{longitude}"
+
+    # Send a GET request to obtain location-specific data
+    location_response = requests.get(url)
+    location_data = location_response.json()
+
+    # Extract the forecast URL from the location data
+    forecast_url = location_data["properties"]["forecast"]
+
+    # Request the weather forecast using the extracted URL
+    forecast_response = requests.get(forecast_url)
+    forecast_data = forecast_response.json()
+
+    return forecast_data
+
+def format_temperature(temp):
+    # Format the temperature to display three digits
+    return f"{temp:03d}"
+
+def format_precipitation(prob):
+    # Format the precipitation probability to display three digits
+    # If the probability is None, return 000
+    return f"{prob if prob is not None else 0:03d}"
+
+def get_day_of_week(date_str):
+    # Convert the date string to a datetime object
+    date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+
+    # Return the day of the week as a three-letter abbreviation
+    return date_obj.strftime("%a")
+
+def print_daily_forecast(weather_forecast, num_days):
+    # Check if the forecast data contains the necessary properties
+    if "properties" in weather_forecast and "periods" in weather_forecast["properties"]:
+        daily_forecasts = {}
+
+        # Loop through each forecast period
+        for period in weather_forecast["properties"]["periods"]:
+            date = period["startTime"].split("T")[0]
+            day_of_week = get_day_of_week(date)
+            temp = period["temperature"]
+            precip_prob = format_precipitation(
+                period["probabilityOfPrecipitation"]["value"]
+            )
+
+            # Store forecast data for each day
+            if date not in daily_forecasts:
+                daily_forecasts[date] = {
+                    "day": day_of_week,
+                    "high": temp,
+                    "low": temp,
+                    "precip": precip_prob,
+                    "desc": period["shortForecast"],
+                }
+            else:
+                # Update high and low temperatures
+                if period["isDaytime"]:
+                    daily_forecasts[date]["high"] = temp
+                else:
+                    daily_forecasts[date]["low"] = temp
+
+            # Break the loop if the desired number of days is reached
+            if len(daily_forecasts) == num_days:
+                break
+
+        # Print the forecast for each day
+        for date, info in daily_forecasts.items():
+            print(
+                f"{info['day']} {date}: Lo {format_temperature(info['low'])}°F ; Hi {format_temperature(info['high'])}°F ; Pr {info['precip']}% ; {info['desc']}"
+            )
+
+    else:
+        print("Forecast data is not available.")
+
+# Function to get latitude and longitude from ZIP code using OpenCage Geocoder
+def geocode_zip(zip_code, api_key):
+    base_url = "https://api.opencagedata.com/geocode/v1/json"
+    params = {"q": zip_code, "key": api_key, "limit": 1}
+    response = requests.get(base_url, params=params)
+    data = response.json()
+    if data["results"]:
+        lat = data["results"][0]["geometry"]["lat"]
+        lon = data["results"][0]["geometry"]["lng"]
+        return lat, lon
+    else:
+        return None, None
+
+
+# All your function definitions remain the same
+
+import requests
+from datetime import datetime
+import argparse
+
+# ... [Other function definitions remain the same] ...
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Get the weather forecast for a specific location.",
+        epilog=("Example usage:\n"
+                "  weather -d 3 -l 40.7421,-74.0018\n"
+                "  Outputs 3-day forecast for given latitude and longitude\n\n"
+                "  weather -d 5 -z 90210 -k YOUR_API_KEY\n"
+                "  Outputs 5-day forecast for ZIP code 90210 using OpenCage Geocoder\n"),
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("-z", "--zipcode", help="ZIP code for the forecast", type=str)
+    parser.add_argument("-l", "--latlon", help="Latitude and Longitude for the forecast (format: lat,lon)", type=str)
+    parser.add_argument("-d", "--days", help="Number of days to forecast", default=10, type=int)
+    parser.add_argument("-k", "--apikey", help="OpenCage API key", default=None, type=str)
+    args = parser.parse_args()
+
+    # Default NYC coordinates
+    default_latitude = "40.7128"
+    default_longitude = "-74.0060"
+
+    if args.latlon:
+        latitude, longitude = args.latlon.split(',')
+    elif args.apikey and args.zipcode:
+        latitude, longitude = geocode_zip(args.zipcode, args.apikey)
+        if latitude is None or longitude is None:
+            print(f"Could not geocode ZIP code: {args.zipcode}")
+            return
+    else:
+        # Default to NYC coordinates if no arguments are provided
+        latitude, longitude = default_latitude, default_longitude
+
+    weather_forecast = get_weather_forecast(latitude, longitude)
+    print_daily_forecast(weather_forecast, args.days)
+
+if __name__ == "__main__":
+    main()
+
+
