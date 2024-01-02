@@ -41,6 +41,12 @@ set softtabstop=2
 " when indenting with '>', use 2 spaces width
 set shiftwidth=2
 
+" 2024-01-02T10h55 enable spell
+set spell
+set spelllang=en
+
+
+
 " from http://vimcasts.org/episodes/soft-wrapping-text/
 " command! -nargs=* Wrap set wrap linebreak nolist
 set wrap linebreak nolist
