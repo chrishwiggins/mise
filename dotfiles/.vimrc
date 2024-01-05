@@ -45,6 +45,9 @@ set shiftwidth=2
 set spell
 set spelllang=en
 
+" 2024-01-05 shut up
+:set noerrorbells
+:set visualbell
 
 
 " from http://vimcasts.org/episodes/soft-wrapping-text/
