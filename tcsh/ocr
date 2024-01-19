@@ -1,44 +1,63 @@
-#/bin/tcsh -f -X -V
-#
-# usage w/language: tesseract ocr_34483.tiff foo.txt -l fra
+#!/bin/tcsh
 
-# takes as input an imagefile
-# conversts to tiff
-# tesseract's it (no flags [2])
+set orig_dir = `pwd` 
+set tmp_dir = /tmp/ocr.dir
  
-# from atlassian [1], 2018-04-01
-echo 
-echo STARTING ocr on $1 at `date` ...
-
-# convert to tiff
-time convert -density 300 $1 -depth 8 -strip -background white -alpha off /tmp/ocr_$$.tiff
+# Check if $tmp_dir exists as a directory, if not create it
+if (! -d $tmp_dir) then
+    mkdir $tmp_dir
+endif
  
-# -density 300 and -depth 8 control the resolution of the resulting TIFF image. OCR works best with high-resolution images; if you leave this out, you're likely to get garbled results.
+## Check if --help option is provided
+if ("$1" == "--help") then
+    tesseract --list-langs
+    exit 0
+endif
 
-echo "  - finished convert to tiff" $1 at `date` 
- 
-#"u -strip -background white -alpha off" removes any alpha channels, and makes the background white. Tesseract is rather picky about this kind of thing.
+# Check if at least two arguments are provided
+if ($#argv < 1) then
+    echo "Usage: ocr input_file [options]"
+    echo "e.g., ocr foo.png -l fra --oem 1"
+    exit 1
+endif
 
-setenv input $1
+set input_file = $1
 shift
-setenv options $*
 
-echo "  - starting tesseract at" `date` with:
-echo "    + input =" $input
-echo "    + options =" $options
- 
-echo "  - starting"  tesseract  /tmp/ocr_$$.tiff $options $input:r at `date`
+set options = "$*"
+if ($#argv < 2) then
+    set options = "-l eng --oem 1"
+    #echo "e.g., ocr foo.png -l fra --oem 1"
+    #exit 1
+endif
+
+echo "STARTING ocr on $input_file at `date` ..."
+
+# convert to tif
+echo "  - starting convert to tif $input_file at `date`"
+# time convert -density 300 $input_file -depth 8 -strip -background white -alpha off /tmp/ocr_$$.tif
+time convert -density 300 $input_file -depth 8 -strip -background white -alpha off ocr_$$.tif
+
+
+echo "  - finished convert to tif $input_file at `date`"
+
+echo "  - starting tesseract at `date` with:"
+echo "    + options = $options"
+echo "    + input = $input_file"
+
+
+echo "  - starting tesseract ocr_$$.tif $input_file:r $options"
+echo "command:"
+echo "tesseract ocr_$$.tif $input_file:r $options"
+
 # most important line in the code:
-#time tesseract  /tmp/ocr_$$.tiff $options $input:r
-time tesseract  /tmp/ocr_$$.tiff $input:r $options
-echo ...ENDING tesseract at `date`!
-echo 
-# maybe change this to mv -f after testing for a while.
-mv -v -i ${input:r}.txt ${input:r}.ocr
-#
-# might need cleanup:
-# rm -f /tmp/ocr_$$.tiff
-# echo removed /tmp/ocr_$$.tiff
+time tesseract ocr_$$.tif $input_file:r $options
+
+echo "  - ending tesseract ocr_$$.tif $input_file:r $options at `date`"
+
+# Change the mv command to look for the output in the $tmp_dir directory
+mv -v -i ${input_file:r}.txt ${input_file:r}.ocr
+
 
 # [1] https://diging.atlassian.net/wiki/spaces/DCH/pages/5275668/Tutorial+Text+Extraction+and+OCR+with+Tesseract+and+ImageMagick 
 # [2]
@@ -255,3 +274,6 @@ mv -v -i ${input:r}.txt ${input:r}.ocr
 # yid
 # yor
 
+
+# Change back to the original directory
+cd $orig_dir
