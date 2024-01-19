@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# Enable verbose output for better understanding of the script flow
+# set -x
+
+# Declare input file and output directory
+input_file=$1
+output_dir=out
+output_file="$output_dir/$(basename "$input_file" .pdf).txt"
+
+# Check if the input file exists
+if [ ! -f "$input_file" ]; then
+  echo "Input file $input_file not found!"
+  exit 1
+fi
+
+# Create the output directory if it does not exist
+mkdir -p "$output_dir"
+
+# Use pdf2image to convert the PDF to a set of PNG images
+# The resulting images are saved in the output directory
+echo "Converting PDF to PNG..."
+python3 -c "
+from pdf2image import convert_from_path
+images = convert_from_path('$input_file')
+for i, image in enumerate(images):
+    image.save('$output_dir/page_'+ str(i) +'.png', 'PNG')
+"
+
+# Use ImageMagick to convert the PNG images to grayscale
+# This can help with removing any highlights in the original PDF
+echo "Converting images to grayscale..."
+for file in $output_dir/*.png; do
+    convert "$file" -colorspace GRAY "$file"
+done
+
+# Use Tesseract to perform OCR on the PNG images
+# The resulting text is saved in the output directory
+echo "Performing OCR with Tesseract..."
+for file in $output_dir/*.png; do
+    tesseract "$file" "$output_dir/$(basename "$file" .png).txt" -l eng --oem 1
+done
+
+# Concatenate all the individual text files into a single file
+# This is the final output of the script
+echo "Concatenating text files..."
+cat $output_dir/*.txt > "$output_file"
+
+# Output the path to the OCR text file
+echo "OCR complete! Text file can be found at $output_file"
+
+# Disable verbose output
+# set +x
