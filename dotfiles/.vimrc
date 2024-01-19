@@ -41,7 +41,35 @@ set softtabstop=2
 " when indenting with '>', use 2 spaces width
 set shiftwidth=2
 
+" 2024-01-02T10h55 enable spell
+set spell
+set spelllang=en
+
+" 2024-01-05 shut up
+:set noerrorbells
+:set visualbell
+
+
 " from http://vimcasts.org/episodes/soft-wrapping-text/
 " command! -nargs=* Wrap set wrap linebreak nolist
 set wrap linebreak nolist
 " https://vim.fandom.com/wiki/Automatic_word_wrapping
+
+" 20240115T08h00 set noic
+:set noic
+ 
+" 20231204T15h49 copilot
+autocmd BufEnter *.py Copilot enable
+autocmd BufEnter *.txt Copilot enable
+autocmd BufEnter *.md Copilot enable
+" 20231219T07h01 copilot
+command! Pilot :Copilot enable
+command! Unpilot :Copilot disable
+command! Ideas :Copilot panel
+command! Status :Copilot status  
+
+
+
+" Autostart GitHub Copilot for Python and Markdown files
+autocmd BufEnter,BufRead,BufNewFile *.py :Copilot enable
+autocmd BufEnter,BufRead,BufNewFile *.txt :Copilot enable
