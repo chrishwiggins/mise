@@ -69,7 +69,7 @@ command! Ideas :Copilot panel
 command! Status :Copilot status  
 
 
-
 " Autostart GitHub Copilot for Python and Markdown files
 autocmd BufEnter,BufRead,BufNewFile *.py :Copilot enable
 autocmd BufEnter,BufRead,BufNewFile *.txt :Copilot enable
+# creepy autocmd BufEnter,BufRead,BufNewFile *.md :Copilot enable

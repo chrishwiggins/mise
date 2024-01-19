@@ -1,0 +1,56 @@
+#!/bin/bash
+
+# This script aims to automate the process of generating brew link commands 
+# based on the output from 'brew doctor'. The script will create two files:
+# - /tmp/link_kegs.sh: Contains standard 'brew link' commands for each unlinked keg.
+# - /tmp/link_kegs_overwrite.sh: Contains 'brew link --overwrite' commands for forceful linking, possibly overwriting existing files.
+
+# ---------------------
+# COMMAND EXECUTION
+# ---------------------
+
+# Run 'brew doctor' and redirect its STDERR output to STDOUT to capture all its output.
+# Then, we pipe '|' it into an 'awk' command that extracts and processes the desired lines.
+
+# The 'awk' command works as follows:
+# '/Run `brew link` on these:/,/^[[:space:]]*$/': Selects lines starting from one containing "Run `brew link`..." to the next blank line.
+# 'if (!/^$/ && !/Run `brew link` on these:/)': Ignores both blank lines and the line containing "Run `brew link`...".
+# '{print "brew link " $1 > "/tmp/link_kegs.sh"; print "brew link --overwrite " $1 > "/tmp/link_kegs_overwrite.sh"}':
+#   - Writes 'brew link' commands to /tmp/link_kegs.sh
+#   - Writes 'brew link --overwrite' commands to /tmp/link_kegs_overwrite.sh
+# $1: Refers to the first field (word) in the line, assumed to be the name of the unlinked keg.
+
+brew doctor 2>&1 | awk '/Run `brew link` on these:/,/^[[:space:]]*$/{if (!/^$/ && !/Run `brew link` on these:/) {print "brew link " $1 > "/tmp/link_kegs.sh"; print "brew link --overwrite " $1 > "/tmp/link_kegs_overwrite.sh"}}'
+
+# ---------------------
+# POST-CREATION TASKS
+# ---------------------
+
+# Make the generated scripts executable.
+# chmod +x: Adds execute (x) permissions to the specified files.
+# /tmp/link_kegs.sh and /tmp/link_kegs_overwrite.sh: The files to which we add execute permissions.
+# This allows you to run them as scripts directly, without needing to prepend 'bash' or 'sh' to execute them.
+
+chmod +x /tmp/link_kegs.sh
+chmod +x /tmp/link_kegs_overwrite.sh
+
+# ---------------------
+# USER NOTIFICATION
+# ---------------------
+
+# Notify the user about the creation of the scripts and where they are located.
+# Using 'echo' to print informational messages to the terminal.
+# Informing them that:
+# - /tmp/link_kegs.sh contains non-overwriting link commands
+# - /tmp/link_kegs_overwrite.sh contains potentially overwriting link commands
+
+echo "Commands to link kegs written to /tmp/link_kegs.sh"
+echo "Commands to forcefully link kegs written to /tmp/link_kegs_overwrite.sh"
+
+# ---------------------
+# SCRIPT END
+# ---------------------
+
+# Script ends here!
+# Before running generated scripts, particularly /tmp/link_kegs_overwrite.sh, 
+# ensure to review them to understand and confirm the actions that will be performed!
