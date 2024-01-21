@@ -1,0 +1,21 @@
+#!/usr/bin/python3
+
+from pptx import Presentation
+import sys
+
+def pptx_to_text(pptx_file):
+    presentation = Presentation(pptx_file)
+    text = []
+    for slide in presentation.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text.append(shape.text)
+    return "\n".join(text)
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python pptx2txt.py <file.pptx>")
+        sys.exit(1)
+
+    pptx_file = sys.argv[1]
+    print(pptx_to_text(pptx_file))

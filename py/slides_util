@@ -1,0 +1,79 @@
+#!/usr/bin/python3
+
+import markdown2
+from googleapiclient.discovery import build
+
+
+def share_presentation_with_user(presentation_id, user_email):
+    """Share the presentation with a specific user."""
+    drive_service = build('drive', 'v3')
+    drive_service.permissions().create(
+        fileId=presentation_id,
+        body={'type': 'user', 'role': 'writer', 'emailAddress': user_email},
+        fields='id'
+    ).execute()
+
+
+def get_slides_service():
+    """Authenticate and build the Google Slides service."""
+    return build('slides', 'v1')
+
+def create_presentation(title):
+    """Create a new presentation and return its ID and URL."""
+    service = get_slides_service()
+    presentation = service.presentations().create(body={'title': title}).execute()
+    presentation_id = presentation['presentationId']
+    print(f"Created presentation with ID: {presentation_id}")
+    return presentation_id
+
+def create_text_box_request(slide_id, box_id):
+    """Create a request to add a text box to a slide."""
+    return {
+        'createShape': {
+            'objectId': box_id,
+            'shapeType': 'TEXT_BOX',
+            'elementProperties': {
+                'pageObjectId': slide_id,
+                'size': {
+                    'height': {'magnitude': 300, 'unit': 'PT'},
+                    'width': {'magnitude': 500, 'unit': 'PT'}
+                },
+                'transform': {
+                    'scaleX': 1,
+                    'scaleY': 1,
+                    'translateX': 100,
+                    'translateY': 100,
+                    'unit': 'PT'
+                }
+            }
+        }
+    }
+
+def add_text_slide(presentation_id, text):
+    """Add a text slide to a presentation."""
+    slide_id = 'MySlide_001'
+    box_id = 'MyTextBox'
+
+    requests = [
+        {
+            'createSlide': {
+                'objectId': slide_id,
+                'insertionIndex': '1',
+                'slideLayoutReference': {
+                    'predefinedLayout': 'BLANK'
+                }
+            }
+        },
+        create_text_box_request(slide_id, box_id),
+        {
+            'insertText': {
+                'objectId': box_id,
+                'text': text
+            }
+        }
+    ]
+
+    service = get_slides_service()
+    body = {'requests': requests}
+    response = service.presentations().batchUpdate(presentationId=presentation_id, body=body).execute()
+    print(f"Added a slide to presentation: {response}")
