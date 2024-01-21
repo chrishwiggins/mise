@@ -1,0 +1,111 @@
+#!/usr/bin/python3
+
+import sys
+import re
+import os
+from pptx.util import Inches, Pt
+from pptx import Presentation
+
+def add_image_slide(presentation, title, image_path):
+    """Add a slide with a title and centered image"""
+    slide_layout = presentation.slide_layouts[5]  # Using a blank slide layout
+    slide = presentation.slides.add_slide(slide_layout)
+    title_placeholder = slide.shapes.title
+    title_placeholder.text = title
+
+    # Load the image to get its size
+    from PIL import Image
+
+    with Image.open(image_path) as img:
+        width, height = img.size
+
+    # Calculate position to center the image
+    slide_width = Inches(10)
+    slide_height = Inches(7.5)
+    left = (slide_width - Inches(width / 72)) / 2  # Convert pixels to points and center
+    top = (slide_height - Inches(height / 72)) / 2
+
+    # Add the image
+    slide.shapes.add_picture(
+        image_path, left, top, width=Inches(width / 72), height=Inches(height / 72)
+    )
+
+
+def markdown_to_pptx(markdown_lines, pptx_filename):
+    """Convert Markdown lines to a PowerPoint presentation"""
+    presentation = Presentation()
+    current_slide_title = "Slide"
+    current_slide_content = []
+
+    for line in markdown_lines:
+        processed_line = process_markdown_line(line)
+        if line.startswith("#"):
+            # Start a new slide
+            if current_slide_content:
+                add_slide(presentation, current_slide_title, current_slide_content)
+                current_slide_content = []
+            current_slide_title = processed_line["content"]
+        else:
+            if processed_line["type"] == "image":
+                add_image_slide(
+                    presentation, current_slide_title, processed_line["path"]
+                )
+                current_slide_title = "Slide"  # Reset title for next slide
+            else:
+                current_slide_content.append(processed_line)
+
+    # Add the last slide
+    if current_slide_content:
+        add_slide(presentation, current_slide_title, current_slide_content)
+
+    presentation.save(pptx_filename)
+
+
+def add_slide(presentation, title, content):
+    """Add a slide with title and content (text or images) to the presentation"""
+    slide_layout = presentation.slide_layouts[1]  # Basic title and content layout
+    slide = presentation.slides.add_slide(slide_layout)
+    title_placeholder = slide.shapes.title
+    title_placeholder.text = title
+
+    for item in content:
+        if item["type"] == "text":
+            p = slide.placeholders[1].text_frame.add_paragraph()
+            p.text = item["content"]
+            p.font.size = Pt(18)
+        elif item["type"] == "image":
+            left = top = Inches(1)
+            slide.shapes.add_picture(item["path"], left, top)
+
+
+def read_markdown_file(file_path):
+    """Read and return the content of a Markdown file"""
+    with open(file_path, "r", encoding="utf-8") as file:
+        return file.readlines()
+
+
+def process_markdown_line(line):
+    """Process a single line of Markdown and return text or image information"""
+    image_match = re.match(r"!\[.*\]\((.*)\)", line)
+    if image_match:
+        image_path = image_match.group(1)
+        if os.path.exists(image_path):
+            return {"type": "image", "path": image_path}
+        else:
+            return {"type": "text", "content": f"[Image not found: {image_path}]"}
+    else:
+        # Process as normal text
+        line = re.sub(r"^#+\s*", "", line)
+        line = re.sub(r"\*([^*]+)\*", r"\1", line)
+        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+        return {"type": "text", "content": line.strip()}
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python script.py markdown_file.md")
+        sys.exit(1)
+
+    markdown_file_path = sys.argv[1]
+    markdown_lines = read_markdown_file(markdown_file_path)
+    markdown_to_pptx(markdown_lines, "output.pptx")

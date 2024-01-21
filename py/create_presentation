@@ -1,0 +1,27 @@
+#!/usr/bin/python3
+
+import slides_util
+import markdown2
+
+def main():
+    markdown_text = """
+    # Your Markdown Here
+    This is a sample markdown text.
+    - Point 1
+    - Point 2
+    """
+    html_content = markdown2.markdown(markdown_text)
+
+    title = "Markdown to Google Slides"
+    presentation_id = slides_util.create_presentation(title)
+    slides_util.add_text_slide(presentation_id, html_content)
+
+    print(f"Presentation URL: https://docs.google.com/presentation/d/{presentation_id}/edit")
+
+    #share_presentation_with_user(presentation_id, 'chris.wiggins@gmail.com')
+    slides_util.share_presentation_with_user(presentation_id, 'chris.wiggins@gmail.com')
+
+
+
+if __name__ == '__main__':
+    main()
