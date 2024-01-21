@@ -127,5 +127,23 @@ def process_markdown_line(line):
     image_match = re.match(r"!\[.*\]\((.*)\)", line)
     if image_match:
         image_path = image_match.group(1)
-        if os.path
+        if os.path.exists(image_path):
+            return {"type": "image", "path": image_path}
+        else:
+            return {"type": "text", "content": f"[Image not found: {image_path}]"}
+    else:
+        # Process as normal text
+        line = re.sub(r"^#+\s*", "", line)  # Remove Markdown header formatting
+        line = re.sub(r"\*([^*]+)\*", r"\1", line)  # Remove Markdown italic formatting
+        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)  # Remove Markdown bold formatting
+        return {"type": "text", "content": line.strip()}  # Strip leading/trailing whitespace
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python script.py markdown_file.md")
+        sys.exit(1)
+
+    markdown_file_path = sys.argv[1]
+    markdown_lines = read_markdown_file(markdown_file_path)
+    markdown_to_pptx(markdown_lines, "output.pptx")
 
