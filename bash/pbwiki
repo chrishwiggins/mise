@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# Get clipboard content
+query=$(pbpaste)
+
+# URL encode the query
+encoded_query=$(python3 -c "import urllib.parse; print(urllib.parse.quote('''$query'''))")
+
+# Wikipedia API endpoint for searching
+wiki_api="https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded_query&format=json"
+
+# Fetch the search results
+search_result=$(curl -s "$wiki_api")
+
+# Extract the title of the first matching article using awk
+# This line might need further refinement based on the exact structure of the Wikipedia API response
+article_title=$(echo $search_result | awk -F '"title":"' '{print $2}' | awk -F '","' '{print $1}' | head -1)
+
+# Replace spaces with underscores in the title
+formatted_title=$(echo $article_title | sed 's/ /_/g')
+
+# Form the Wikipedia URL
+wiki_url="https://en.wikipedia.org/wiki/$formatted_title"
+
+# Copy the Wikipedia URL to clipboard
+echo $wiki_url | pbcopy
