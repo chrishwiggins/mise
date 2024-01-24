@@ -7,6 +7,23 @@ import os
 from pptx.util import Inches, Pt
 from pptx import Presentation
 from PIL import Image
+from pptx.dml.color import RGBColor
+
+from pptx.dml.color import RGBColor
+
+#<colors|
+DARK_BLUE = RGBColor(0, 51, 102)  # A pretty but dark blue
+DARK_RED = RGBColor(139, 0, 0)    # A pretty but readable dark red
+DARK_GREEN = RGBColor(0, 100, 0)  # A pretty but readable dark green
+DARK_ORANGE = RGBColor(255, 140, 0)  # A pretty but readable dark orange
+DARK_YELLOW = RGBColor(255, 215, 0)  # A pretty but readable dark yellow
+DARK_PURPLE = RGBColor(128, 0, 128)  # A pretty but readable dark purple
+DARK_PINK = RGBColor(255, 20, 147)  # A pretty but readable dark pink
+DARK_BROWN = RGBColor(139, 69, 19)  # A pretty but readable dark brown
+DARK_GRAY = RGBColor(128, 128, 128)  # A pretty but readable dark gray
+DARK_BLACK = RGBColor(0, 0, 0)  # A pretty but readable dark black
+DARK_WHITE = RGBColor(255, 255, 255)  # A pretty but readable dark white
+#|colors>
 
 def add_image_slide(presentation, title, image_path):
     """
@@ -78,6 +95,7 @@ def markdown_to_pptx(markdown_lines, pptx_filename):
     # Save the PowerPoint presentation
     presentation.save(pptx_filename)
 
+
 def add_slide(presentation, title, content):
     """
     Add a slide with title and content (text or images) to the presentation.
@@ -101,10 +119,38 @@ def add_slide(presentation, title, content):
             p = slide.placeholders[1].text_frame.add_paragraph()
             p.text = item["content"]
             p.font.size = Pt(18)
+            p.font.color.rgb = DARK_BLACK
         elif item["type"] == "image":
             # Add image
             left = top = Inches(1)
             slide.shapes.add_picture(item["path"], left, top)
+
+    # Set a background color for the slide
+    background = slide.background
+    fill = background.fill
+    fill.solid()
+    # fill.fore_color.rgb = RGBColor(255, 223, 186)  # Example peach color
+    fill.fore_color.rgb = DARK_WHITE
+
+
+    # Customize title style
+    title_text_frame = title_placeholder.text_frame
+    title_text_frame.paragraphs[0].font.bold = True
+    title_text_frame.paragraphs[0].font.size = Pt(44)
+    title_text_frame.paragraphs[0].font.color.rgb = DARK_BLUE
+
+    # Set the title style
+    title_placeholder = slide.shapes.title
+    title_placeholder.text = title
+    title_placeholder.text_frame.paragraphs[0].font.color.rgb = DARK_BLUE
+    title_placeholder.text_frame.paragraphs[0].font.size = Pt(36)
+    title_placeholder.text_frame.paragraphs[0].font.bold = True
+
+
+
+
+
+
 
 def read_markdown_file(file_path):
     """
@@ -117,6 +163,33 @@ def read_markdown_file(file_path):
         return file.readlines()
 
 def process_markdown_line(line):
+    """
+    Process a single line of Markdown and return text or image information.
+
+    :param line: A line from a Markdown file.
+    :return: Dictionary with type ('text' or 'image') and content or path.
+    """
+    # Check if the line defines an image
+    image_match = re.match(r"!\[.*\]\((.*)\)", line)
+    if image_match:
+        image_path = image_match.group(1)
+        if os.path.exists(image_path):
+            return {"type": "image", "path": image_path}
+        else:
+            return {"type": "text", "content": f"[Image not found: {image_path}]"}
+    else:
+        # Convert Markdown links to plain text 
+        # TK with a URL in dark red
+        line = re.sub(r'\[(.*?)\]\((.*?)\)', r'\1 (URL: \2)', line)
+
+        # Process as normal text
+        line = re.sub(r"^#+\s*", "", line)  # Remove Markdown header formatting
+        line = re.sub(r"\*([^*]+)\*", r"\1", line)  # Remove Markdown italic formatting
+        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)  # Remove Markdown bold formatting
+        return {"type": "text", "content": line.strip()}  # Strip leading/trailing whitespace
+
+
+def process_markdown_line_brk(line):
     """
     Process a single line of Markdown and return text or image information.
 
