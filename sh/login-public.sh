@@ -59,22 +59,13 @@ set path = ( $path . )
 # CWADD: add some google
 set path = ( $path ~/google-cloud-sdk/bin )
 
+
 ## learn my aliases
-# learn
-#% echo aliases
 source $paliases
 
 # remap capslock to esc:
 # h/t https://stackoverflow.com/questions/127591/using-caps-lock-as-esc-in-mac-os-x
-
 hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x700000029}]}' > /dev/null
 
-# delete after jan 20 2021
-#curl --silent 'https://days.to/until/us-presidential-inauguration' | grep 'until US Presidential Inauguration' | grep 'There are' | cut -d\> -f2 | cut -c1-7
-
 # generate random curse
-#echo curses...
 curse
-# grep -v -e '^#' ~/mise/doc/curses.txt | shuf | head -1
-echo
-#echo ...curses
