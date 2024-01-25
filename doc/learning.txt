@@ -1,0 +1,9 @@
+A student asked how much of the code and readings are we expected to be internalizing, pointing out that some things we did esp. towards the end, are hard to grasp. For all complex reading, including code & notebooks, I recommend that you follow these steps:
+
+- Initialization: read the whole piece and skip without pausing over any Thing that is in the least bit confusing. Remember to stay calm and stay positive. You will be able to learn it and it is absolutely fine that it does not all make sense on the first reading.
+
+- Expansion: go back and mark or enumerate each confusing Thing 
+
+- Contraction: Find a resource that works for your learning style and environment (e.g., sending a Slack message to professor or graders; asking your favorite LLM to ELI5, etc.); consult that resource for each confusing Thing. You might need different resources for different Things, and also you may realize with experimentation that different resources are the most useful for you for different Things, different subjects, or different points in your development (also as the tools and environment changes in time)
+
+- Iteration: iterate Expansion and Contraction until you understand the whole reading, with no confusing Things left
