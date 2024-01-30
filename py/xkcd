@@ -1,5 +1,11 @@
 #!/usr/local/bin/python3
 
+'''
+from https://twitter.com/NoncanonicAleae/status/1749833072625713567
+
+it's easy to forget the average person probably doesn't know by name xkcd 2501. they probably only know the really famous ones, like xkcd 356 and xkcd 435. and, of course, xkcd 927. of course.
+'''
+
 import sys
 import requests
 import webbrowser
