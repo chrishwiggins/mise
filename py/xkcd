@@ -1,0 +1,45 @@
+#!/usr/local/bin/python3
+
+import sys
+import requests
+import webbrowser
+
+def get_xkcd_comic(comic_num):
+    # URL for the xkcd API
+    url = f'https://xkcd.com/{comic_num}/info.0.json'
+
+    try:
+        # Send a GET request to the xkcd API
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an exception if the request was not successful
+
+        # Parse the JSON response
+        comic_data = response.json()
+
+        # Extract the comic title and image URL
+        comic_title = comic_data['title']
+        comic_img_url = comic_data['img']
+
+        print(f"Opening xkcd {comic_num}: {comic_title}")
+
+        # Open the comic in a web browser
+        webbrowser.open(comic_img_url)
+    except requests.exceptions.RequestException as e:
+        print(f"Error: {e}")
+    except KeyError:
+        print(f"Comic {comic_num} not found")
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print("Usage: ./xkcd.py <comic_number>")
+        sys.exit(1)
+
+    try:
+        # Get the comic number from the command-line argument
+        comic_number = int(sys.argv[1])
+
+        # Call the function to retrieve and open the comic
+        get_xkcd_comic(comic_number)
+    except ValueError:
+        print("Invalid input. Please enter a valid integer comic number.")
+
