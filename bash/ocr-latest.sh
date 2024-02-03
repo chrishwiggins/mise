@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Get the latest screenshot file
-latest_screenshot=$(ls -t ~/Shots/ | grep -E '^screenshot' | head -n 1)
+latest_screenshot=$(ls -t ~/Shots/ | grep -E '^Screenshot ' | head -n 1)
 
 # Check if a screenshot is found
 if [ -z "$latest_screenshot" ]; then
