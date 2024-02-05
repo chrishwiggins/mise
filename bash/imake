@@ -25,4 +25,5 @@ if [ -f $in ]; then
 
 else
    echo "File $in does not exist."
+   touch $in
 fi
