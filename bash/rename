@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Check for -f argument to determine forceful move
+FORCE=false
+if [[ "$1" == "-f" ]]; then
+    FORCE=true
+    shift # Remove the argument so it's not passed to the rename function
+fi
+
+# Define a function to safely rename files
+safe_rename() {
+    local old_name="$1"
+    local new_name="$(echo "$old_name" | perl -pe 's/[& ,_-]+/_/g; s/[()&]/-/g; s/'"'"'/_/g')"
+    if [[ "$old_name" != "$new_name" ]]; then
+        if [[ "$FORCE" == true ]]; then
+            echo "Forcibly renaming '$old_name' to '$new_name'"
+            mv -f -- "$old_name" "$new_name"
+        else
+            echo "Interactively renaming '$old_name' to '$new_name'"
+            mv -i -- "$old_name" "$new_name"
+        fi
+    fi
+}
+
+# Export the function so it's available to subshells
+export -f safe_rename
+
+# Find all files and directories, excluding the top directory
+find . -mindepth 1 -depth | while IFS= read -r file; do
+    safe_rename "$file"
+done
