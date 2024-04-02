@@ -1,22 +1,19 @@
 #!/bin/bash
 
-# Set default profile number and URL
-#PROFILE_NUMBER="Default"  # Use "Default" or specify a default profile number
-PROFILE_NUMBER="1" 
+# Set a default URL to about:blank if no URL is provided, or use the provided URL
 URL="${2:-about:blank}"
 
-# Check if no profile argument is provided
+# Determine the profile directory based on the first argument
 if [ $# -eq 0 ]; then
-    # If no arguments are provided, use default profile and open about:blank or a specified default URL
-    echo "No arguments provided. Opening an empty window with the default profile."
-elif [ $# -eq 1 ]; then
-    # If only one argument is provided, treat it as the profile number
-    PROFILE_NUMBER="$1"
+    # No arguments provided, use the Default profile
+    PROFILE_DIRECTORY="Default"
+elif [ "$1" -eq 0 ]; then
+    # First argument is 0, use the Default profile
+    PROFILE_DIRECTORY="Default"
 else
-    # If both arguments are provided, use them as specified
-    PROFILE_NUMBER="$1"
-    URL="$2"
+    # Use the provided profile number
+    PROFILE_DIRECTORY="Profile $1"
 fi
 
-# Use the determined profile and URL to open Chrome
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --profile-directory="Profile $PROFILE_NUMBER" "$URL"
+# Execute the command with the determined profile and URL
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --profile-directory="$PROFILE_DIRECTORY" "$URL"
