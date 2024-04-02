@@ -507,3 +507,4 @@ alias sniff "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Cur
 alias plan "echo 'dream in years; plan in months; evaluate in weeks; ship daily'"
 alias nato "echo 'Alfa|Bravo|Charlie|Delta|Echo|Foxtrot|Golf|Hotel|India|Juliett|Kilo|Lima|Mike|November|Oscar|Papa|Quebec|Romeo|Sierra|Tango|Uniform|Victor|Whiskey|Xray|Yankee|Zulu'|tr '|' '\n'"
 alias embiggen "osascript  $mise/osa/embiggen.osa"
+
