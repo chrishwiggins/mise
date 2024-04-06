@@ -1,0 +1,32 @@
+#!/usr/bin/python3
+import os
+import re
+
+def normalize_filename(filename):
+    # Replace spaces, commas, hyphens, and underscores with a single underscore
+    filename = re.sub(r'[-,_ ]+', '_', filename)
+    # Replace single quotes, forward slash (⧸), and backslash (\) with underscore
+    filename = re.sub(r"[\'⧸\\]", '_', filename)
+    # Transform brackets into hyphens
+    filename = re.sub(r'\[|\]', '-', filename)
+    # Replace ampersands with hyphens
+    filename = filename.replace('&', '-')
+    # Additional normalization can be added here
+    return filename
+
+def rename_files_in_directory(directory='.'):
+    for root, dirs, files in os.walk(directory):
+        for name in files + dirs:
+            # Generate the new name using the normalization function
+            new_name = normalize_filename(name)
+            if name != new_name:
+                # Construct full file paths
+                old_path = os.path.join(root, name)
+                new_path = os.path.join(root, new_name)
+                print(f'Renaming {old_path} to {new_path}')
+                # Rename the file or directory
+                os.rename(old_path, new_path)
+
+# Call the function to start renaming process
+rename_files_in_directory()
+
