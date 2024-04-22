@@ -1,32 +1,22 @@
-#!/usr/bin/python3
-import os
-import re
+#!/bin/bash
 
-def normalize_filename(filename):
-    # Replace spaces, commas, hyphens, and underscores with a single underscore
-    filename = re.sub(r'[-,_ ]+', '_', filename)
-    # Replace single quotes, forward slash (⧸), and backslash (\) with underscore
-    filename = re.sub(r"[\'⧸\\]", '_', filename)
-    # Transform brackets into hyphens
-    filename = re.sub(r'\[|\]', '-', filename)
-    # Replace ampersands with hyphens
-    filename = filename.replace('&', '-')
-    # Additional normalization can be added here
-    return filename
+# Prepare temporary files
+tmp_old="/tmp/old_$$"
+tmp_new="/tmp/new_$$"
+tmp_mvs="/tmp/mvs.sh"
 
-def rename_files_in_directory(directory='.'):
-    for root, dirs, files in os.walk(directory):
-        for name in files + dirs:
-            # Generate the new name using the normalization function
-            new_name = normalize_filename(name)
-            if name != new_name:
-                # Construct full file paths
-                old_path = os.path.join(root, name)
-                new_path = os.path.join(root, new_name)
-                print(f'Renaming {old_path} to {new_path}')
-                # Rename the file or directory
-                os.rename(old_path, new_path)
+# Capture the list of filenames to normalize
+find . -type f | grep -E ' |,|-|_' > "$tmp_old"
 
-# Call the function to start renaming process
-rename_files_in_directory()
+# Normalize filenames: replace sequences of spaces, commas, dashes, and underscores with a single underscore
+# Replace single quotes with underscore and brackets with hyphens
+cat "$tmp_old" | sed -e 's/[, _-][, _-]*/_/g' -e "s/'/_/g" | tr '()' '-' > "$tmp_new"
 
+# Generate move commands
+paste "$tmp_old" "$tmp_new" | awk '{print "mv -f \"" $1 "\" \"" $2 "\""}' > "$tmp_mvs"
+
+# Execute the move commands
+source "$tmp_mvs"
+
+# Clean up
+rm "$tmp_old" "$tmp_new" "$tmp_mvs"
