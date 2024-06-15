@@ -457,6 +457,7 @@ alias oopen open
 alias kdir mkdir
 alias spotify open /Applications/Spotify.app/
 alias docxdump "cp \!:1 /tmp/input.docx ; qlmanage -p /tmp/input.docx -o /tmp ; lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html /tmp/input.docx.qlpreview/Preview.html | /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' "
+alias docxdump-o "cp \!:1 /tmp/input.docx ; qlmanage -p /tmp/input.docx -o /tmp ; lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html /tmp/input.docx.qlpreview/Preview.html | /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' > \!:1:r.asc "
 alias port-tend "sudo port selfupdate;sudo port upgrade outdated"
 
 # h/t @josephoenix
