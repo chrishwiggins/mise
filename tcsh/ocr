@@ -36,7 +36,9 @@ echo "STARTING ocr on $input_file at `date` ..."
 # convert to tif
 echo "  - starting convert to tif $input_file at `date`"
 # time convert -density 300 $input_file -depth 8 -strip -background white -alpha off /tmp/ocr_$$.tif
-time convert -density 300 $input_file -depth 8 -strip -background white -alpha off ocr_$$.tif
+#time convert -density 300 $input_file -depth 8 -strip -background white -alpha off ocr_$$.tif
+#20240620T06h32EDT: 'WARNING: The convert command is deprecated in IMv7, use "magick"'
+time magick -density 300 $input_file -depth 8 -strip -background white -alpha off ocr_$$.tif
 
 
 echo "  - finished convert to tif $input_file at `date`"

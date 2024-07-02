@@ -4,10 +4,11 @@ import requests
 from datetime import datetime
 import argparse
 
+
 def get_weather_forecast(latitude, longitude):
     # Base URL for the National Weather Service API
     base_url = "https://api.weather.gov/points"
-    
+
     # Construct the URL with provided latitude and longitude
     url = f"{base_url}/{latitude},{longitude}"
 
@@ -24,14 +25,17 @@ def get_weather_forecast(latitude, longitude):
 
     return forecast_data
 
+
 def format_temperature(temp):
     # Format the temperature to display three digits
     return f"{temp:03d}"
+
 
 def format_precipitation(prob):
     # Format the precipitation probability to display three digits
     # If the probability is None, return 000
     return f"{prob if prob is not None else 0:03d}"
+
 
 def get_day_of_week(date_str):
     # Convert the date string to a datetime object
@@ -39,6 +43,7 @@ def get_day_of_week(date_str):
 
     # Return the day of the week as a three-letter abbreviation
     return date_obj.strftime("%a")
+
 
 def print_daily_forecast(weather_forecast, num_days):
     # Check if the forecast data contains the necessary properties
@@ -83,6 +88,7 @@ def print_daily_forecast(weather_forecast, num_days):
     else:
         print("Forecast data is not available.")
 
+
 # Function to get latitude and longitude from ZIP code using OpenCage Geocoder
 def geocode_zip(zip_code, api_key):
     base_url = "https://api.opencagedata.com/geocode/v1/json"
@@ -104,25 +110,38 @@ from datetime import datetime
 import argparse
 
 
-
 def fahrenheit_to_celsius(fahrenheit):
-    return (fahrenheit - 32) * 5.0/9.0
+    return (fahrenheit - 32) * 5.0 / 9.0
+
 
 def main():
     parser = argparse.ArgumentParser(
         description="Get the weather forecast for a specific location.",
-        epilog=("Example usage:\n"
-                "  weather -d 3 -l 40.7421,-74.0018\n"
-                "  Outputs 3-day forecast for given latitude and longitude\n\n"
-                "  weather -d 5 -z 90210 -k YOUR_API_KEY\n"
-                "  Outputs 5-day forecast for ZIP code 90210 using OpenCage Geocoder\n"),
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        epilog=(
+            "Example usage:\n"
+            "  weather -d 3 -l 40.7421,-74.0018\n"
+            "  Outputs 3-day forecast for given latitude and longitude\n\n"
+            "  weather -d 5 -z 90210 -k YOUR_API_KEY\n"
+            "  Outputs 5-day forecast for ZIP code 90210 using OpenCage Geocoder\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("-z", "--zipcode", help="ZIP code for the forecast", type=str)
-    parser.add_argument("-l", "--latlon", help="Latitude and Longitude for the forecast (format: lat,lon)", type=str)
-    parser.add_argument("-d", "--days", help="Number of days to forecast", default=10, type=int)
-    parser.add_argument("-k", "--apikey", help="OpenCage API key", default=None, type=str)
-    parser.add_argument("-c", "--celsius", help="Display temperature in Celsius", action="store_true")
+    parser.add_argument(
+        "-l",
+        "--latlon",
+        help="Latitude and Longitude for the forecast (format: lat,lon)",
+        type=str,
+    )
+    parser.add_argument(
+        "-d", "--days", help="Number of days to forecast", default=10, type=int
+    )
+    parser.add_argument(
+        "-k", "--apikey", help="OpenCage API key", default=None, type=str
+    )
+    parser.add_argument(
+        "-c", "--celsius", help="Display temperature in Celsius", action="store_true"
+    )
     args = parser.parse_args()
 
     # Default NYC coordinates
@@ -130,7 +149,7 @@ def main():
     default_longitude = "-74.0060"
 
     if args.latlon:
-        latitude, longitude = args.latlon.split(',')
+        latitude, longitude = args.latlon.split(",")
     elif args.apikey and args.zipcode:
         latitude, longitude = geocode_zip(args.zipcode, args.apikey)
         if latitude is None or longitude is None:
@@ -143,7 +162,6 @@ def main():
     weather_forecast = get_weather_forecast(latitude, longitude)
     print_daily_forecast(weather_forecast, args.days)
 
+
 if __name__ == "__main__":
     main()
-
-

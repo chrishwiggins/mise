@@ -11,9 +11,9 @@ from pptx.dml.color import RGBColor
 
 from pptx.dml.color import RGBColor
 
-#<colors|
+# <colors|
 DARK_BLUE = RGBColor(0, 51, 102)  # A pretty but dark blue
-DARK_RED = RGBColor(139, 0, 0)    # A pretty but readable dark red
+DARK_RED = RGBColor(139, 0, 0)  # A pretty but readable dark red
 DARK_GREEN = RGBColor(0, 100, 0)  # A pretty but readable dark green
 DARK_ORANGE = RGBColor(255, 140, 0)  # A pretty but readable dark orange
 DARK_YELLOW = RGBColor(255, 215, 0)  # A pretty but readable dark yellow
@@ -23,7 +23,8 @@ DARK_BROWN = RGBColor(139, 69, 19)  # A pretty but readable dark brown
 DARK_GRAY = RGBColor(128, 128, 128)  # A pretty but readable dark gray
 DARK_BLACK = RGBColor(0, 0, 0)  # A pretty but readable dark black
 DARK_WHITE = RGBColor(255, 255, 255)  # A pretty but readable dark white
-#|colors>
+# |colors>
+
 
 def add_image_slide(presentation, title, image_path):
     """
@@ -48,13 +49,16 @@ def add_image_slide(presentation, title, image_path):
     # Calculate position to center the image on the slide
     slide_width = Inches(10)
     slide_height = Inches(7.5)
-    left = (slide_width - Inches(width / 72)) / 2  # Convert pixels to points and center horizontally
+    left = (
+        slide_width - Inches(width / 72)
+    ) / 2  # Convert pixels to points and center horizontally
     top = (slide_height - Inches(height / 72)) / 2  # Center vertically
 
     # Add the image to the slide
     slide.shapes.add_picture(
         image_path, left, top, width=Inches(width / 72), height=Inches(height / 72)
     )
+
 
 def markdown_to_pptx(markdown_lines, pptx_filename):
     """
@@ -132,7 +136,6 @@ def add_slide(presentation, title, content):
     # fill.fore_color.rgb = RGBColor(255, 223, 186)  # Example peach color
     fill.fore_color.rgb = DARK_WHITE
 
-
     # Customize title style
     title_text_frame = title_placeholder.text_frame
     title_text_frame.paragraphs[0].font.bold = True
@@ -147,11 +150,6 @@ def add_slide(presentation, title, content):
     title_placeholder.text_frame.paragraphs[0].font.bold = True
 
 
-
-
-
-
-
 def read_markdown_file(file_path):
     """
     Read and return the content of a Markdown file.
@@ -161,6 +159,7 @@ def read_markdown_file(file_path):
     """
     with open(file_path, "r", encoding="utf-8") as file:
         return file.readlines()
+
 
 def process_markdown_line(line):
     """
@@ -178,15 +177,20 @@ def process_markdown_line(line):
         else:
             return {"type": "text", "content": f"[Image not found: {image_path}]"}
     else:
-        # Convert Markdown links to plain text 
+        # Convert Markdown links to plain text
         # TK with a URL in dark red
-        line = re.sub(r'\[(.*?)\]\((.*?)\)', r'\1 (URL: \2)', line)
+        line = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1 (URL: \2)", line)
 
         # Process as normal text
         line = re.sub(r"^#+\s*", "", line)  # Remove Markdown header formatting
         line = re.sub(r"\*([^*]+)\*", r"\1", line)  # Remove Markdown italic formatting
-        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)  # Remove Markdown bold formatting
-        return {"type": "text", "content": line.strip()}  # Strip leading/trailing whitespace
+        line = re.sub(
+            r"\*\*([^*]+)\*\*", r"\1", line
+        )  # Remove Markdown bold formatting
+        return {
+            "type": "text",
+            "content": line.strip(),
+        }  # Strip leading/trailing whitespace
 
 
 def process_markdown_line_brk(line):
@@ -208,8 +212,14 @@ def process_markdown_line_brk(line):
         # Process as normal text
         line = re.sub(r"^#+\s*", "", line)  # Remove Markdown header formatting
         line = re.sub(r"\*([^*]+)\*", r"\1", line)  # Remove Markdown italic formatting
-        line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)  # Remove Markdown bold formatting
-        return {"type": "text", "content": line.strip()}  # Strip leading/trailing whitespace
+        line = re.sub(
+            r"\*\*([^*]+)\*\*", r"\1", line
+        )  # Remove Markdown bold formatting
+        return {
+            "type": "text",
+            "content": line.strip(),
+        }  # Strip leading/trailing whitespace
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -219,4 +229,3 @@ if __name__ == "__main__":
     markdown_file_path = sys.argv[1]
     markdown_lines = read_markdown_file(markdown_file_path)
     markdown_to_pptx(markdown_lines, "output.pptx")
-
