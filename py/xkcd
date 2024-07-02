@@ -1,18 +1,19 @@
 #!/usr/local/bin/python3
 
-'''
+"""
 from https://twitter.com/NoncanonicAleae/status/1749833072625713567
 
 it's easy to forget the average person probably doesn't know by name xkcd 2501. they probably only know the really famous ones, like xkcd 356 and xkcd 435. and, of course, xkcd 927. of course.
-'''
+"""
 
 import sys
 import requests
 import webbrowser
 
+
 def get_xkcd_comic(comic_num):
     # URL for the xkcd API
-    url = f'https://xkcd.com/{comic_num}/info.0.json'
+    url = f"https://xkcd.com/{comic_num}/info.0.json"
 
     try:
         # Send a GET request to the xkcd API
@@ -23,8 +24,8 @@ def get_xkcd_comic(comic_num):
         comic_data = response.json()
 
         # Extract the comic title and image URL
-        comic_title = comic_data['title']
-        comic_img_url = comic_data['img']
+        comic_title = comic_data["title"]
+        comic_img_url = comic_data["img"]
 
         print(f"Opening xkcd {comic_num}: {comic_title}")
 
@@ -35,7 +36,8 @@ def get_xkcd_comic(comic_num):
     except KeyError:
         print(f"Comic {comic_num} not found")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: ./xkcd.py <comic_number>")
         sys.exit(1)
@@ -48,4 +50,3 @@ if __name__ == '__main__':
         get_xkcd_comic(comic_number)
     except ValueError:
         print("Invalid input. Please enter a valid integer comic number.")
-

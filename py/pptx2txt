@@ -3,6 +3,7 @@
 from pptx import Presentation
 import sys
 
+
 def pptx_to_text(pptx_file):
     presentation = Presentation(pptx_file)
     text = []
@@ -11,6 +12,7 @@ def pptx_to_text(pptx_file):
             if hasattr(shape, "text"):
                 text.append(shape.text)
     return "\n".join(text)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
