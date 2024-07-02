@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 # line above ensures the script is executed with Python 3.
 
-# NB requires 
+# NB requires
 # https://github.com/chrishwiggins/email_merger/blob/patch-1/email_merger
 # which is a python3 fork of https://github.com/ltratt/email_merger
 
@@ -27,47 +27,55 @@ def move_file_brk2(source, destination, overwrite=False):
     shutil.move(source, destination)
 
 
-
 # Function to rename a directory
 def rename_dir(original, new_name):
     os.rename(original, new_name)
+
 
 # Function to check if a file exists
 def file_exists(file):
     # Uses os.path.exists to check if a file exists.
     return os.path.exists(file)
 
+
 # Function to copy file
 def copy_file(source, destination):
     # Uses shutil.copy to copy a file from source to destination.
     shutil.copy(source, destination)
+
 
 # Function to remove a directory and its contents
 def remove_dir(directory):
     # Uses shutil.rmtree to remove a directory and all its contents.
     shutil.rmtree(directory, ignore_errors=True)
 
+
 # Function to create a directory
 def create_dir(directory):
     # Uses os.makedirs to create a directory. 'exist_ok=True' means it won't throw an error if the directory already exists.
     os.makedirs(directory, exist_ok=True)
+
 
 # Function to move a file
 def move_file_brk(source, destination):
     # Uses shutil.move to move a file from source to destination.
     shutil.move(source, destination)
 
+
 # Function to execute a command and capture output
 def execute_command(command):
     # Executes a shell command and captures its output.
     # subprocess.Popen is used to run the command, capture stdout and stderr.
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True
+    )
     stdout, stderr = process.communicate()
-    return stdout.decode('utf-8'), stderr.decode('utf-8')
+    return stdout.decode("utf-8"), stderr.decode("utf-8")
+
 
 # Main script starts here
-body = 'mbody.asc'  # Default body file
-data = 'mdata.csv'  # Default data file
+body = "mbody.asc"  # Default body file
+data = "mdata.csv"  # Default data file
 
 # Check the number of command-line arguments
 if len(sys.argv) == 1:
@@ -99,46 +107,48 @@ if not fail:
     # Displaying the first line of the data file (usually contains field names)
     execute_command(f"head -1 {data}")
 
-    if data.endswith('.tsv'):
+    if data.endswith(".tsv"):
         # If the data file is already a .tsv, just copy it.
-        copy_file(data, 'mdata.tsv')
+        copy_file(data, "mdata.tsv")
     else:
         # Otherwise, convert the data file to a .tsv format.
-        execute_command(f"sed -e 's/[ ,]*$//' < {data} | grep -v '^#' | tr ',;' '\\t' > mdata.tsv")
-    
+        execute_command(
+            f"sed -e 's/[ ,]*$//' < {data} | grep -v '^#' | tr ',;' '\\t' > mdata.tsv"
+        )
+
     # Generating a date string in the specified format
     date_str = datetime.datetime.now().strftime("%Y_%m_%dT%Hh%Mm%Ss")
 
     # Check if 'mergedir' exists and rename it if it does
-    if file_exists('mergedir'):
-        rename_dir('mergedir', f'mergedir_old_{date_str}')
+    if file_exists("mergedir"):
+        rename_dir("mergedir", f"mergedir_old_{date_str}")
 
-    create_dir('mergedir')
+    create_dir("mergedir")
 
     # Main merging operation
     print("merging...")
     # The line below merges the body and data files. It's crucial and should be correct.
-    execute_command(f"~/gd/aux/email_merger/email_merger -d -o mergedir {body} mdata.tsv")
+    execute_command(
+        f"~/gd/aux/email_merger/email_merger -d -o mergedir {body} mdata.tsv"
+    )
     print("...merged")
 
-
     # Move the processed data file to /tmp directory, overwriting if it exists
-    move_file('mdata.tsv', '/tmp/mdata.tsv', overwrite=True)
-
+    move_file("mdata.tsv", "/tmp/mdata.tsv", overwrite=True)
 
     # Process each file in the 'mergedir'
-    os.chdir('mergedir')
-    for thing in os.listdir('.'):
+    os.chdir("mergedir")
+    for thing in os.listdir("."):
         # Remove a specific line ('User-Agent:') from each file and create a .eml file.
         execute_command(f"grep -v 'User-Agent:' {thing} > {thing}.eml")
         os.remove(thing)  # Remove the original file
 
 # If there was a failure in file existence check, print an error message.
 if fail:
-    print('${EMAIL}, etc')
+    print("${EMAIL}, etc")
 else:
     # Clean-up: Delete the mdata.tsv from /tmp if the script didn't fail
     try:
-        os.remove('/tmp/mdata.tsv')
+        os.remove("/tmp/mdata.tsv")
     except OSError as e:
         print(f"Error: {e.filename} - {e.strerror}.")
