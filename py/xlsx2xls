@@ -1,0 +1,37 @@
+#!/usr/bin/python3
+import openpyxl
+import xlwt
+import sys
+
+
+def convert_xlsx_to_xls(input_file, output_file):
+    try:
+        # Load the .xlsx file
+        workbook = openpyxl.load_workbook(input_file)
+        sheet = workbook.active
+
+        # Create a new .xls workbook
+        new_workbook = xlwt.Workbook()
+        new_sheet = new_workbook.add_sheet(sheet.title)
+
+        # Copy data from .xlsx to .xls
+        for row_index, row in enumerate(sheet.iter_rows(values_only=True)):
+            for col_index, cell in enumerate(row):
+                new_sheet.write(row_index, col_index, cell)
+
+        # Save the new .xls file
+        new_workbook.save(output_file)
+        print(f"File converted and saved as {output_file}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print(
+            "Usage: python convert_xlsx_to_xls.py <input_file.xlsx> <output_file.xls>"
+        )
+    else:
+        input_file = sys.argv[1]
+        output_file = sys.argv[2]
+        convert_xlsx_to_xls(input_file, output_file)
