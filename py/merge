@@ -1,71 +1,37 @@
 #!/usr/bin/python3
-# line above ensures the script is executed with Python 3.
 
-# NB requires
-# https://github.com/chrishwiggins/email_merger/blob/patch-1/email_merger
-# which is a python3 fork of https://github.com/ltratt/email_merger
-
+import csv
 import os
-import shutil
 import subprocess
 import sys
+import shutil
 import datetime
 
 
-def move_file(source, destination, overwrite=False):
-    # If overwrite is True and the destination file exists, delete the destination file.
-    if overwrite and os.path.exists(destination):
-        os.remove(destination)
-    shutil.move(source, destination)
-
-
-# Function to move a file, with overwrite capability
-def move_file_brk2(source, destination, overwrite=False):
-    # If overwrite is True and the destination file exists, delete the destination file.
-    if overwrite and os.path.exists(destination):
-        os.remove(destination)
-    shutil.move(source, destination)
-
-
-# Function to rename a directory
-def rename_dir(original, new_name):
-    os.rename(original, new_name)
-
-
-# Function to check if a file exists
 def file_exists(file):
-    # Uses os.path.exists to check if a file exists.
     return os.path.exists(file)
 
 
-# Function to copy file
-def copy_file(source, destination):
-    # Uses shutil.copy to copy a file from source to destination.
-    shutil.copy(source, destination)
+def validate_csv_structure(file_path, expected_num_columns):
+    """
+    Validate the structure of the CSV file, ensuring it has the expected number of columns.
+    Raise an error with details if any row has an unexpected number of columns.
+    """
+    with open(file_path, mode="r") as csv_file:
+        csv_reader = csv.reader(csv_file)
+        for line_number, row in enumerate(csv_reader, start=1):
+            if len(row) != expected_num_columns:
+                raise ValueError(
+                    f"Error in CSV file '{file_path}' at line {line_number}: "
+                    f"Expected {expected_num_columns} columns, but found {len(row)}. "
+                    f"Row contents: {row}. Please fix this line."
+                )
 
 
-# Function to remove a directory and its contents
-def remove_dir(directory):
-    # Uses shutil.rmtree to remove a directory and all its contents.
-    shutil.rmtree(directory, ignore_errors=True)
-
-
-# Function to create a directory
-def create_dir(directory):
-    # Uses os.makedirs to create a directory. 'exist_ok=True' means it won't throw an error if the directory already exists.
-    os.makedirs(directory, exist_ok=True)
-
-
-# Function to move a file
-def move_file_brk(source, destination):
-    # Uses shutil.move to move a file from source to destination.
-    shutil.move(source, destination)
-
-
-# Function to execute a command and capture output
 def execute_command(command):
-    # Executes a shell command and captures its output.
-    # subprocess.Popen is used to run the command, capture stdout and stderr.
+    """
+    Executes a shell command and captures its output.
+    """
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True
     )
@@ -73,82 +39,100 @@ def execute_command(command):
     return stdout.decode("utf-8"), stderr.decode("utf-8")
 
 
+def move_file(source, destination, overwrite=False):
+    """
+    Moves a file from source to destination. If overwrite is True, it will remove the destination file first.
+    """
+    if overwrite and os.path.exists(destination):
+        os.remove(destination)
+    shutil.move(source, destination)
+
+
+def copy_file(source, destination):
+    """
+    Copies a file from source to destination.
+    """
+    shutil.copy(source, destination)
+
+
+def rename_dir(original, new_name):
+    """
+    Renames a directory.
+    """
+    os.rename(original, new_name)
+
+
+def create_dir(directory):
+    """
+    Creates a directory if it doesn't already exist.
+    """
+    os.makedirs(directory, exist_ok=True)
+
+
 # Main script starts here
 body = "mbody.asc"  # Default body file
 data = "mdata.csv"  # Default data file
 
-# Check the number of command-line arguments
-if len(sys.argv) == 1:
-    # If no additional arguments, print the syntax.
-    print(f"(syntax: % merge [body={body} [data={data}]])")
-
+# Check if arguments are passed
 if len(sys.argv) == 2:
-    # If one argument is provided, use it as the body file.
-    print(f"using {sys.argv[1]} as mbody.")
-    body = sys.argv[1]
+    body = sys.argv[1]  # Use the first argument as the body file
 
 if len(sys.argv) == 3:
-    # If two arguments are provided, use the first as the body file and the second as the data file.
-    print(f"using {sys.argv[1]} as mbody and {sys.argv[2]} as mdata")
-    body = sys.argv[1]
-    data = sys.argv[2]
+    body = sys.argv[1]  # Use the first argument as the body file
+    data = sys.argv[2]  # Use the second argument as the data file
 
-fail = False  # A flag to indicate if there's a failure in file existence check.
-
-# Check if the specified files exist
-for auxfile in [data, data]:
+# Check if body and data files exist
+for auxfile in [body, data]:
     if not file_exists(auxfile):
-        print(f"must exist: {auxfile}. MERGE FAIL")
-        fail = True
+        print(f"Error: must exist: {auxfile}. MERGE FAIL")
+        sys.exit(1)  # Exit the script if file doesn't exist
 
-# Processing the data file if no failure detected
-if not fail:
-    print(f"fields used from {data}:")
-    # Displaying the first line of the data file (usually contains field names)
-    execute_command(f"head -1 {data}")
-
-    if data.endswith(".tsv"):
-        # If the data file is already a .tsv, just copy it.
-        copy_file(data, "mdata.tsv")
-    else:
-        # Otherwise, convert the data file to a .tsv format.
-        execute_command(
-            f"sed -e 's/[ ,]*$//' < {data} | grep -v '^#' | tr ',;' '\\t' > mdata.tsv"
-        )
-
-    # Generating a date string in the specified format
-    date_str = datetime.datetime.now().strftime("%Y_%m_%dT%Hh%Mm%Ss")
-
-    # Check if 'mergedir' exists and rename it if it does
-    if file_exists("mergedir"):
-        rename_dir("mergedir", f"mergedir_old_{date_str}")
-
-    create_dir("mergedir")
-
-    # Main merging operation
-    print("merging...")
-    # The line below merges the body and data files. It's crucial and should be correct.
-    execute_command(
-        f"~/gd/aux/email_merger/email_merger -d -o mergedir {body} mdata.tsv"
+# Validate the CSV file structure
+try:
+    expected_columns = (
+        4  # Assuming 4 columns based on the example (First_Name, Email, class, digit)
     )
-    print("...merged")
+    validate_csv_structure(data, expected_columns)
+except ValueError as e:
+    print(f"CSV Parsing Error: {str(e)}")
+    sys.exit(1)  # Exit the script if CSV structure is invalid
 
-    # Move the processed data file to /tmp directory, overwriting if it exists
-    move_file("mdata.tsv", "/tmp/mdata.tsv", overwrite=True)
+# Start merging process
+print(f"fields used from {data}:")
+stdout, stderr = execute_command(f"head -1 {data}")
+print(stdout)
 
-    # Process each file in the 'mergedir'
-    os.chdir("mergedir")
-    for thing in os.listdir("."):
-        # Remove a specific line ('User-Agent:') from each file and create a .eml file.
-        execute_command(f"grep -v 'User-Agent:' {thing} > {thing}.eml")
-        os.remove(thing)  # Remove the original file
-
-# If there was a failure in file existence check, print an error message.
-if fail:
-    print("${EMAIL}, etc")
+if data.endswith(".tsv"):
+    # If the data file is already a .tsv, just copy it.
+    copy_file(data, "mdata.tsv")
 else:
-    # Clean-up: Delete the mdata.tsv from /tmp if the script didn't fail
-    try:
-        os.remove("/tmp/mdata.tsv")
-    except OSError as e:
-        print(f"Error: {e.filename} - {e.strerror}.")
+    # Otherwise, convert the data file to a .tsv format.
+    execute_command(
+        f"sed -e 's/[ ,]*$//' < {data} | grep -v '^#' | tr ',;' '\\t' > mdata.tsv"
+    )
+
+# Generating a date string for renaming the directory
+date_str = datetime.datetime.now().strftime("%Y_%m_%dT%Hh%Mm%Ss")
+
+# Check if 'mergedir' exists and rename it if it does
+if file_exists("mergedir"):
+    rename_dir("mergedir", f"mergedir_old_{date_str}")
+
+create_dir("mergedir")
+
+# Main merging operation
+print("merging...")
+stdout, stderr = execute_command(
+    f"~/gd/aux/email_merger/email_merger -d -o mergedir {body} mdata.tsv"
+)
+print(stdout)
+print("...merged")
+
+# Move the processed data file to /tmp directory, overwriting if it exists
+move_file("mdata.tsv", "/tmp/mdata.tsv", overwrite=True)
+
+# Process each file in the 'mergedir'
+os.chdir("mergedir")
+for thing in os.listdir("."):
+    execute_command(f"grep -v 'User-Agent:' {thing} > {thing}.eml")
+    os.remove(thing)  # Remove the original file
