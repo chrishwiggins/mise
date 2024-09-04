@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Define temporary files using process ID to ensure uniqueness
+tmp_old="/tmp/old_$$"
+tmp_new="/tmp/new_$$"
+tmp_mvs="/tmp/mvs_$$.sh"
+
+# Function to capture filenames with problematic characters
+capture_filenames() {
+    echo "Capturing filenames with problematic characters..."
+    find . -type f | grep -E ' |,|-|_' > "$tmp_old"
+    echo "Captured filenames:"
+    cat "$tmp_old"
+}
+
+# Function to normalize filenames
+# Replace sequences of spaces, commas, dashes, and underscores with a single underscore
+# Replace single quotes with underscores
+# Replace parentheses with hyphens
+normalize_filenames() {
+    echo "Normalizing filenames..."
+    cat "$tmp_old" | sed -e 's/[, _-][, _-]*/_/g' -e "s/'/_/g" | tr '()' '-' > "$tmp_new"
+    echo "Normalized filenames:"
+    cat "$tmp_new"
+}
+
+# Function to generate move commands
+generate_move_commands() {
+    echo "Generating move commands..."
+    paste -d '\t' "$tmp_old" "$tmp_new" | awk -F '\t' '{print "mv -f \"" $1 "\" \"" $2 "\""}' > "$tmp_mvs"
+    echo "Move commands:"
+    cat "$tmp_mvs"
+}
+
+# Function to execute move commands
+execute_move_commands() {
+    echo "Executing move commands..."
+    source "$tmp_mvs"
+}
+
+# Function to clean up temporary files
+cleanup() {
+    echo "Cleaning up temporary files..."
+    rm "$tmp_old" "$tmp_new" "$tmp_mvs"
+}
+
+# Main script execution
+main() {
+    capture_filenames
+    normalize_filenames
+    generate_move_commands
+    execute_move_commands
+    cleanup
+}
+
+# Execute the main function
+main
