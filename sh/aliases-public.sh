@@ -509,3 +509,4 @@ alias plan "echo 'dream in years; plan in months; evaluate in weeks; ship daily'
 alias nato "echo 'Alfa|Bravo|Charlie|Delta|Echo|Foxtrot|Golf|Hotel|India|Juliett|Kilo|Lima|Mike|November|Oscar|Papa|Quebec|Romeo|Sierra|Tango|Uniform|Victor|Whiskey|Xray|Yankee|Zulu'|tr '|' '\n'"
 alias embiggen "osascript  $mise/osa/embiggen.osa"
 alias cdf 'cd `dirname \!:1`'
+alias md5 "echo i think you mean shasum -a 512"

@@ -12,20 +12,28 @@ def file_exists(file):
     return os.path.exists(file)
 
 
-def validate_csv_structure(file_path, expected_num_columns):
+def validate_csv_structure(file_path):
     """
-    Validate the structure of the CSV file, ensuring it has the expected number of columns.
+    Validate the structure of the CSV file. The expected number of columns is taken from the first row (header).
     Raise an error with details if any row has an unexpected number of columns.
     """
     with open(file_path, mode="r") as csv_file:
         csv_reader = csv.reader(csv_file)
-        for line_number, row in enumerate(csv_reader, start=1):
+        header = next(
+            csv_reader
+        )  # Read the first row to determine the number of columns
+        expected_num_columns = len(header)
+
+        for line_number, row in enumerate(
+            csv_reader, start=2
+        ):  # Start at 2 because of the header
             if len(row) != expected_num_columns:
                 raise ValueError(
                     f"Error in CSV file '{file_path}' at line {line_number}: "
                     f"Expected {expected_num_columns} columns, but found {len(row)}. "
                     f"Row contents: {row}. Please fix this line."
                 )
+        return expected_num_columns
 
 
 def execute_command(command):
@@ -89,10 +97,7 @@ for auxfile in [body, data]:
 
 # Validate the CSV file structure
 try:
-    expected_columns = (
-        4  # Assuming 4 columns based on the example (First_Name, Email, class, digit)
-    )
-    validate_csv_structure(data, expected_columns)
+    expected_columns = validate_csv_structure(data)
 except ValueError as e:
     print(f"CSV Parsing Error: {str(e)}")
     sys.exit(1)  # Exit the script if CSV structure is invalid
@@ -136,3 +141,9 @@ os.chdir("mergedir")
 for thing in os.listdir("."):
     execute_command(f"grep -v 'User-Agent:' {thing} > {thing}.eml")
     os.remove(thing)  # Remove the original file
+
+# Clean-up: Delete the mdata.tsv from /tmp if everything worked fine
+try:
+    os.remove("/tmp/mdata.tsv")
+except OSError as e:
+    print(f"Error: {e.filename} - {e.strerror}.")
