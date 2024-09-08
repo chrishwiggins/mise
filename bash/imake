@@ -1,17 +1,47 @@
 #!/bin/bash
 
+# Function to display help
+function display_help {
+    echo "Usage: ./imake.sh [options] [input.md] [output.pdf] [wait_time]"
+    echo
+    echo "Options:"
+    echo "  -h, --help    Show this help message"
+    echo
+    echo "Example:"
+    echo "  ./imake.sh ros.md ros.pdf 1"
+    echo
+    echo "If no arguments are provided, defaults are used:"
+    echo "  input: writeup-raw.md"
+    echo "  output: writeup.pdf"
+    echo "  wait_time: 1 second"
+    echo
+    echo "This script monitors the input file and regenerates the output file"
+    echo "using 'make open' whenever the input file is modified."
+    exit 0
+}
+
+# Parse flags
+while [[ "$1" == -* ]]; do
+    case "$1" in
+        -h|--help)
+            display_help
+            ;;
+        *)
+            echo "Unknown option: $1"
+            display_help
+            ;;
+    esac
+    shift
+done
+
 # Check if the user provided any arguments
 # If no arguments are provided, use default values for input, output, and wait time
 if [ "$#" -eq 0 ]; then
     echo "in, out, wait: using defaults"
-    # Default input markdown file
-    in="writeup-raw.md"
-    # Default output PDF file
-    out="writeup.pdf"
-    # Default wait time (in seconds) between file change checks
-    wait=1
+    in="writeup-raw.md"   # Default input markdown file
+    out="writeup.pdf"      # Default output PDF file
+    wait=1                # Default wait time (in seconds) between file change checks
 else
-    # If arguments are provided, set input, output, and wait time accordingly
     in=$1  # First argument is the input file (markdown)
     out=$2 # Second argument is the output file (PDF)
     wait=$3 # Third argument is the wait time between checks
@@ -20,7 +50,7 @@ fi
 # Check if the input file exists
 if [ -f $in ]; then
     echo "imake running with in=$in, out=$out, and wait=$wait"
-    
+
     # Infinite loop to continuously check if the input file is modified
     while :
     do
@@ -29,7 +59,7 @@ if [ -f $in ]; then
             echo "making" # Notify that we are regenerating the output file
             make open    # The 'open' target in the Makefile should handle the compilation
         fi
-        
+
         # Prevent the script from consuming too much CPU by waiting for a specified time
         sleep $wait
     done
@@ -37,16 +67,4 @@ else
     # If the input file does not exist, inform the user and create a placeholder file
     echo "File $in does not exist."
     touch $in  # Create an empty input file as a placeholder
-fi
-
-# Help functionality: If the user runs `make help`, provide guidance
-if [[ "$1" == "help" ]]; then
-    echo "Usage: ./imake.sh [input.md] [output.pdf] [wait_time]"
-    echo "Example: ./imake.sh ros.md ros.pdf 1"
-    echo "If no arguments are provided, defaults are used:"
-    echo "  input: writeup-raw.md"
-    echo "  output: writeup.pdf"
-    echo "  wait_time: 1 second"
-    echo "This script monitors the input file and regenerates the output file"
-    echo "using 'make open' whenever the input file is modified."
 fi
