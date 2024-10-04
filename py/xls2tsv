@@ -1,0 +1,100 @@
+#! /usr/local/bin/python3
+
+
+import xlrd  # Import xlrd, a library that allows reading .xls files (Excel 97-2003 format)
+import sys  # Import sys to work with system-specific parameters and functions (e.g., command-line arguments, output encoding)
+
+
+def xls2tsv(filepath):
+    """
+    Convert the contents of an Excel (.xls) file to a tab-separated values (TSV) format.
+
+    Args:
+        filepath (str): The path to the .xls file to be converted.
+    """
+
+    # Load the Excel file (.xls format) using xlrd's open_workbook function
+    # This function reads the workbook and gives access to the worksheets inside
+    wb = xlrd.open_workbook(filepath)
+
+    # Set the output encoding to UTF-8
+    # This ensures that any Unicode characters (e.g., non-ASCII) are properly printed to the terminal or output file
+    sys.stdout.reconfigure(encoding="utf-8")
+
+    # Iterate over each sheet in the workbook
+    # 'wb.sheets()' returns a list of all the sheets (worksheets) in the .xls file
+    for sheet in wb.sheets():
+
+        # Print the sheet name at the start of each new sheet
+        # This is a marker to identify where data from each sheet starts in the TSV file
+        # The ";;;" prefix is arbitrary and just marks the start of a new sheet
+        print(f";;; {sheet.name}\n")
+
+        # Variable to count consecutive blank rows
+        blankcount = 0
+
+        # Iterate over each row in the current sheet
+        # 'sheet.nrows' gives the number of rows in the sheet
+        for row_idx in range(sheet.nrows):
+
+            # Initialize an empty list to store the values in the current row
+            rowtxt = []
+
+            # Iterate over each column in the current row
+            # 'sheet.ncols' gives the number of columns in the sheet
+            for col_idx in range(sheet.ncols):
+
+                # Get the value of the current cell
+                # 'sheet.cell(row_idx, col_idx)' accesses the cell at (row_idx, col_idx)
+                cell = sheet.cell(row_idx, col_idx)
+                val = cell.value  # 'val' stores the actual value of the cell
+
+                # Check if the cell is empty
+                if val == "":
+                    # If the cell is empty, append an empty string (to preserve the tab structure)
+                    rowtxt.append("")
+                else:
+                    # If the cell contains a string, strip leading/trailing whitespace
+                    if isinstance(val, str):
+                        val = val.strip()
+
+                    # Convert the cell value to a string and add it to the row list
+                    rowtxt.append(str(val))
+
+            # Join the row's values into a single tab-separated string
+            # The '\t' character is used to separate each column
+            rowtxt = "\t".join(rowtxt)
+
+            # Check if the entire row is blank (i.e., no non-whitespace characters)
+            if not rowtxt.strip():
+                # If this is the first blank row, print a blank line (preserves one empty line)
+                if blankcount == 0:
+                    print("")
+                # Increment the blank row counter to avoid printing multiple blank lines in a row
+                blankcount += 1
+            else:
+                # If the row is not blank, reset the blank row counter
+                blankcount = 0
+                # Print the tab-separated row (non-blank)
+                print(rowtxt)
+
+        # At the end of each sheet, if the last printed row was not blank, print a final newline
+        if blankcount == 0:
+            print("")
+
+
+# Main block to execute the script
+# This block only runs if the script is executed directly (not imported as a module)
+if __name__ == "__main__":
+
+    # Check if the correct number of arguments is provided (script name + 1 argument for the file path)
+    if len(sys.argv) != 2:
+        # If not, print the usage message and exit the script with an error status
+        print("Usage: python xls2tsv.py file.xls > file.tsv")
+        sys.exit(1)
+
+    # Retrieve the file path from the command-line arguments
+    filepath = sys.argv[1]
+
+    # Call the xls2tsv function with the provided file path
+    xls2tsv(filepath)

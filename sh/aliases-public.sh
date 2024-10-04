@@ -510,3 +510,5 @@ alias nato "echo 'Alfa|Bravo|Charlie|Delta|Echo|Foxtrot|Golf|Hotel|India|Juliett
 alias embiggen "osascript  $mise/osa/embiggen.osa"
 alias cdf 'cd `dirname \!:1`'
 alias md5 "echo i think you mean shasum -a 512"
+alias lit 'osascript -e '\''tell application "System Events" to key code 144'\'''
+alias dim 'osascript -e '\''tell application "System Events" to key code 145'\'''
