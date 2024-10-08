@@ -77,4 +77,7 @@ autocmd BufEnter,BufRead,BufNewFile *.txt :Copilot enable
 
 " 20240412T04h35 no spell for python
 autocmd FileType python setlocal nospell
- 
+
+" make it easier to see trailing whitespace
+set listchars=tab:>-,nbsp:_,trail:·,extends:>,precedes:<,eol:¶
+set list
