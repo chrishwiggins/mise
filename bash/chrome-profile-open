@@ -1,37 +1,19 @@
 #!/bin/bash
 
-# Join all command-line arguments into a single string and replace spaces with '+'
-
+# Set a default URL to about:blank if no URL is provided, or use the provided URL
+URL="${2:-about:blank}"
 
 # Determine the profile directory based on the first argument
 if [ $# -eq 0 ]; then
+    # No arguments provided, use the Default profile
     PROFILE_DIRECTORY="Default"
 elif [ "$1" -eq 0 ]; then
+    # First argument is 0, use the Default profile
     PROFILE_DIRECTORY="Default"
 else
+    # Use the provided profile number
     PROFILE_DIRECTORY="Profile $1"
 fi
 
-# shift 1
-
-args=("$@")
-unset args[0]
-set -- "${args[@]}"
-# Construct the Gmail search phrase using the provided search phrase
-#
-# The search phrase is URL-encoded by replacing spaces with '+'
-# and double quotes with '%22'
-#
-SEARCH_PHRASE=$(echo "$*" | sed 's/"/%22/g' | sed 's/ /+/g')
-
-# Construct the Gmail search URL using the provided search phrase
-URL="https://mail.google.com/mail/u/0/#search/$SEARCH_PHRASE"
-
-# Open Chrome with the specified profile and the constructed URL
+# Execute the command with the determined profile and URL
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --profile-directory="$PROFILE_DIRECTORY" "$URL"
-
-# diagnostics: dump all strings
- echo "SEARCH_PHRASE: $SEARCH_PHRASE"
- echo "URL: $URL"
- echo "PROFILE_DIRECTORY: $PROFILE_DIRECTORY"
- echo "COMMAND: /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --profile-directory=\"$PROFILE_DIRECTORY\" \"$URL\""
