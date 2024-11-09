@@ -67,6 +67,8 @@ command! Pilot :Copilot enable
 command! Unpilot :Copilot disable
 command! Ideas :Copilot panel
 command! Status :Copilot status  
+command! Nosnoop :Copilot disable
+command! Nocreep :Copilot disable
 
 
 " Autostart GitHub Copilot for Python and Markdown files

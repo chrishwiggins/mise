@@ -4,5 +4,6 @@
 
 set str=`echo $* | sed -e 's/ /%20/g'`
 echo $str
-open  'http://www.google.com/maps/place/'$str
+#open  'http://www.google.com/maps/place/'$str
+chrome-profile-open 0  'http://www.google.com/maps/place/'$str
 # open -a safari 'http://www.google.com/maps/place/'$str
