@@ -499,6 +499,7 @@ alias majors open "https://bulletin.engineering.columbia.edu/undergraduate-degre
 
 alias croncheck "cat /tmp/cron_test.log;grep CRON /var/log/syslog"
 alias pbpy "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; py3 /tmp/$$.py"
+alias pblat "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; pdflatex /tmp/$$.py; open $$.pdf"
 alias pbmpl "pbpaste >! /tmp/$$.mpl ; wc -w /tmp/$$.mpl ; maple  /tmp/$$.mpl"
 alias mute 'osascript -e "set volume output muted true"'
 alias hamlet open https://www.litcharts.com/shakescleare/shakespeare-translations/hamlet/act-1-scene-1
@@ -513,3 +514,6 @@ alias cdf 'cd `dirname \!:1`'
 alias md5 "echo i think you mean shasum -a 512"
 alias lit 'osascript -e '\''tell application "System Events" to key code 144'\'''
 alias dim 'osascript -e '\''tell application "System Events" to key code 145'\'''
+alias code 'open -a "Visual Studio Code" \!*'    # macOS
+alias vs 'code $PWD \!*'    # macOS/Linux
+alias stats "open https://www-statista-com.ezproxy.cul.columbia.edu/;open https://ourworldindata.org/"

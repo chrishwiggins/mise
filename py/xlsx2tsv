@@ -1,0 +1,53 @@
+#! /usr/local/bin/python3
+
+import pandas as pd
+import sys
+
+
+def xlsx_to_tsv(excel_file, sheet=None):
+    # Read the Excel file
+    xls = pd.ExcelFile(excel_file)
+
+    # List all sheet names
+    sheet_names = xls.sheet_names
+
+    # Determine the sheet to convert
+    if sheet is not None:
+        # Validate the provided sheet number
+        if sheet > len(sheet_names) or sheet < 1:
+            print(
+                f"Invalid sheet number. Please choose a number between 1 and {len(sheet_names)}."
+            )
+            return
+        selected_sheet = sheet_names[sheet - 1]
+    elif len(sheet_names) == 1:
+        # Automatically select the only sheet
+        selected_sheet = sheet_names[0]
+    else:
+        # Prompt the user to select a sheet
+        for i, name in enumerate(sheet_names, start=1):
+            print(f"{i}. {name}")
+        choice = int(input("Choose a sheet number: "))
+        if choice > len(sheet_names) or choice < 1:
+            print(
+                f"Invalid choice. Please choose a number between 1 and {len(sheet_names)}."
+            )
+            return
+        selected_sheet = sheet_names[choice - 1]
+
+    # Read the selected sheet
+    df = pd.read_excel(excel_file, sheet_name=selected_sheet)
+
+    # Convert to TSV and save
+    tsv_file = excel_file.replace(".xlsx", f"_{selected_sheet}.tsv")
+    df.to_csv(tsv_file, sep="\t", index=False)
+    print(f"TSV file created: {tsv_file}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python script.py excel_file.xlsx [sheet_number]")
+    else:
+        excel_file = sys.argv[1]
+        sheet_number = int(sys.argv[2]) if len(sys.argv) > 2 else None
+        xlsx_to_tsv(excel_file, sheet=sheet_number)
