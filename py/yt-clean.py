@@ -78,5 +78,6 @@ def main():
         os.remove(temp_file.name)
         print(f"Removed temporary file {temp_file.name}")
 
+
 if __name__ == "__main__":
     main()
