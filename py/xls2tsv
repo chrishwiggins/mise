@@ -1,4 +1,4 @@
-#! /usr/local/bin/python3
+#! /usr/bin/python3
 
 
 import xlrd  # Import xlrd, a library that allows reading .xls files (Excel 97-2003 format)
