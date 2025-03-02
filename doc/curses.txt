@@ -1,4 +1,3 @@
-- 2+2=4
      1	Do not obey in advance.
      2	Defend institutions.
      3	Beware the one-party state.
@@ -19,3 +18,4 @@
     18	Be calm when the unthinkable arrives.
     19	Be a patriot.
     20	Be as courageous as you can.
+ "two plus two make four."
