@@ -115,8 +115,10 @@ alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | p
 ### taking/using quicknotes:
 # alias setv 'setenv vstr $ndir/cwnote_`date +20%yy%mm%dd%Hh%M`'
 alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
+alias setd 'setenv dstr $ndir/cwnote_`date +%Y_%m_%d`.md'
 alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr:;echo $vstr'
 alias v 'setv; vi +star $vstr; echo vstr:;echo $vstr'
+alias d 'setd; date +"%a %b %d, week %U of %Y" >>! $dstr; vi +star $dstr; echo dstr:;echo $dstr'
 alias o 'setv; vi +star $vstr; oai-f $vstr'
 alias sv 'source $vstr'
 alias gv 'smail $vstr'
@@ -357,7 +359,8 @@ alias mlok mlook
 alias toro open -a /Applications/TorBrowser.app/
 alias prand "python3 -c 'import random;print(random.randint(0,99))'"
 alias conda-nav open ~//anaconda3/Anaconda-Navigator.app
-alias nb ~//anaconda3/bin/jupyter_mac.command
+#alias nb ~//anaconda3/bin/jupyter_mac.command
+alias nb open https://notebooklm.google.com/
 alias htm2pdf '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --print-to-pdf '
 alias htm2png '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --screenshot '
 alias salganik open http://www.bitbybitbook.com/en/ethics/
@@ -475,7 +478,7 @@ alias txtify "pbpaste|pbcopy"
 alias prp "pbpaste|reply|pbcopy"
 #alias ifind open -a safari https://www.icloud.com/#find
 alias ifind open /System/Applications/FindMy.app/
-alias curse "grep -e '^-' ~/mise/doc/curses.txt | /opt/homebrew/bin/shuf | head -1| tr '\\' '\n'"
+alias curse "grep -v -e '^#' ~/mise/doc/curses.txt | sed -e 's/^- //' | /opt/homebrew/bin/shuf | head -1| tr '\\' '\n'"
 #alias cu-covid https://covid19.columbia.edu/content/covid-19-testing-program-fall-2021
 #alias cu-covid http://secure.health.columbia.edu/
 #alias cu-covid https://secure.health.columbia.edu/confirm.aspx
@@ -499,7 +502,8 @@ alias minors open "https://bulletin.engineering.columbia.edu/minor-applied-mathe
 alias majors open "https://bulletin.engineering.columbia.edu/undergraduate-degree-tracks"
 
 alias croncheck "cat /tmp/cron_test.log;grep CRON /var/log/syslog"
-alias pbpy "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; py3 /tmp/$$.py"
+alias pbpy "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; py3  /tmp/$$.py"
+alias pbR "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; R -f /tmp/$$.py"
 alias pblat "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; pdflatex /tmp/$$.py; open $$.pdf"
 alias pbmpl "pbpaste >! /tmp/$$.mpl ; wc -w /tmp/$$.mpl ; maple  /tmp/$$.mpl"
 alias mute 'osascript -e "set volume output muted true"'
@@ -513,8 +517,11 @@ alias nato "echo 'Alfa|Bravo|Charlie|Delta|Echo|Foxtrot|Golf|Hotel|India|Juliett
 alias embiggen "osascript  $mise/osa/embiggen.osa"
 alias cdf 'cd `dirname \!:1`'
 alias md5 "echo i think you mean shasum -a 512"
-alias lit 'osascript -e '\''tell application "System Events" to key code 144'\'''
-alias dim 'osascript -e '\''tell application "System Events" to key code 145'\'''
+alias flare 'osascript -e "tell application \"System Events\"" -e "repeat 16 times" -e "key code 144" -e "end repeat" -e "end tell"'
 alias code 'open -a "Visual Studio Code" \!*'    # macOS
 alias vs 'code $PWD \!*'    # macOS/Linux
 alias stats "open https://www-statista-com.ezproxy.cul.columbia.edu/;open https://ourworldindata.org/"
+alias lit 'osascript -e '\''tell application "System Events" to key code 144'\'''
+alias dim 'osascript -e '\''tell application "System Events" to key code 145'\'''
+alias blaze 'osascript -e '\''tell application "System Events"'\'' -e '\''repeat 16 times'\'' -e '\''key code 144'\'' -e '\''end repeat'\'' -e '\''end tell'\'''
+alias cd-parent 'cd `dirname \!:1`'
