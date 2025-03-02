@@ -6,7 +6,7 @@ set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' | sed -e 's/\#/%23/g' `
 echo $str
 # open -a safari 'http://encrypted.google.com/search?hl=en&lr=&safe=off&c2coff=1&q='$str'&btnG=Search'
 #open 'http://encrypted.google.com/search?hl=en&lr=&safe=off&c2coff=1&q='$str'&btnG=Search'
-open 'https://clio.columbia.edu/quicksearch?q='$str'&commit=Search'
+chrome-profile-open 1 'https://clio.columbia.edu/quicksearch?q='$str'&commit=Search'
 
 
 
