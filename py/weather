@@ -45,7 +45,11 @@ def get_day_of_week(date_str):
     return date_obj.strftime("%a")
 
 
-def print_daily_forecast(weather_forecast, num_days):
+def fahrenheit_to_celsius(fahrenheit):
+    return int((fahrenheit - 32) * 5.0 / 9.0)
+
+
+def print_daily_forecast(weather_forecast, num_days, use_celsius=False):
     # Check if the forecast data contains the necessary properties
     if "properties" in weather_forecast and "periods" in weather_forecast["properties"]:
         daily_forecasts = {}
@@ -81,8 +85,19 @@ def print_daily_forecast(weather_forecast, num_days):
 
         # Print the forecast for each day
         for date, info in daily_forecasts.items():
+            low_temp = info['low']
+            high_temp = info['high']
+            
+            # Convert to Celsius if requested
+            if use_celsius:
+                low_temp = fahrenheit_to_celsius(low_temp)
+                high_temp = fahrenheit_to_celsius(high_temp)
+                temp_unit = "°C"
+            else:
+                temp_unit = "°F"
+                
             print(
-                f"{info['day']} {date}: Lo {format_temperature(info['low'])}°F ; Hi {format_temperature(info['high'])}°F ; Pr {info['precip']}% ; {info['desc']}"
+                f"{info['day']} {date}: Lo {format_temperature(low_temp)}{temp_unit} ; Hi {format_temperature(high_temp)}{temp_unit} ; Pr {info['precip']}% ; {info['desc']}"
             )
 
     else:
@@ -101,17 +116,6 @@ def geocode_zip(zip_code, api_key):
         return lat, lon
     else:
         return None, None
-
-
-# All your function definitions remain the same
-
-import requests
-from datetime import datetime
-import argparse
-
-
-def fahrenheit_to_celsius(fahrenheit):
-    return (fahrenheit - 32) * 5.0 / 9.0
 
 
 def main():
@@ -160,7 +164,7 @@ def main():
         latitude, longitude = default_latitude, default_longitude
 
     weather_forecast = get_weather_forecast(latitude, longitude)
-    print_daily_forecast(weather_forecast, args.days)
+    print_daily_forecast(weather_forecast, args.days, args.celsius)
 
 
 if __name__ == "__main__":
