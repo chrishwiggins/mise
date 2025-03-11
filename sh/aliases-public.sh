@@ -503,8 +503,9 @@ alias majors open "https://bulletin.engineering.columbia.edu/undergraduate-degre
 
 alias croncheck "cat /tmp/cron_test.log;grep CRON /var/log/syslog"
 alias pbpy "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; py3  /tmp/$$.py"
+alias pbtex echo i think you mean pblat
 alias pbR "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; R -f /tmp/$$.py"
-alias pblat "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; pdflatex /tmp/$$.py; open $$.pdf"
+alias pblat "pbpaste >! /tmp/$$.tex ; wc -w /tmp/$$.tex; pdflatex /tmp/$$.tex; open $$.pdf"
 alias pbmpl "pbpaste >! /tmp/$$.mpl ; wc -w /tmp/$$.mpl ; maple  /tmp/$$.mpl"
 alias mute 'osascript -e "set volume output muted true"'
 alias hamlet open https://www.litcharts.com/shakescleare/shakespeare-translations/hamlet/act-1-scene-1
@@ -525,3 +526,4 @@ alias lit 'osascript -e '\''tell application "System Events" to key code 144'\''
 alias dim 'osascript -e '\''tell application "System Events" to key code 145'\'''
 alias blaze 'osascript -e '\''tell application "System Events"'\'' -e '\''repeat 16 times'\'' -e '\''key code 144'\'' -e '\''end repeat'\'' -e '\''end tell'\'''
 alias cd-parent 'cd `dirname \!:1`'
+alias tim "echo https://snyder.substack.com/p/on-tyranny | pbcopy"
