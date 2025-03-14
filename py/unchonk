@@ -7,11 +7,16 @@ def main():
     # Read input from stdin
     input_text = sys.stdin.read()
 
-    # Regular expression pattern for delimiters
-    pattern = r'(?<=[.?!])\s+|;\s+'
+    # Define a dictionary mapping delimiters to replacement strings
+    replacements = {
+        r'(?<=[.?!])\s+': '\n',  # Replace with newline for .?! delimiters
+        r'(?<=[,;—])\s+': '\n\t',  # Replace with newline and tab for ,;— delimiters
+    }
 
-    # Replace the found patterns with newline followed by a space
-    output_text = re.sub(pattern, '\n ', input_text)
+    # Apply each replacement to the input text
+    output_text = input_text
+    for pattern, replacement in replacements.items():
+        output_text = re.sub(pattern, replacement, output_text)
 
     # Write the modified text to stdout
     sys.stdout.write(output_text)
