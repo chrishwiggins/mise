@@ -1,0 +1,20 @@
+#!/usr/bin/python3
+
+import sys
+import re
+
+def main():
+    # Read input from stdin
+    input_text = sys.stdin.read()
+
+    # Regular expression pattern for delimiters
+    pattern = r'(?<=[.?!])\s+|;\s+'
+
+    # Replace the found patterns with newline followed by a space
+    output_text = re.sub(pattern, '\n ', input_text)
+
+    # Write the modified text to stdout
+    sys.stdout.write(output_text)
+
+if __name__ == '__main__':
+    main()
