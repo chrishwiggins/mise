@@ -6,9 +6,10 @@ tmp_new="/tmp/new_$$"
 tmp_mvs="/tmp/mvs_$$.sh"
 
 # Function to capture filenames with problematic characters
+# WAS:    find . -type f | grep -E ' |,|-|_' > "$tmp_old"
 capture_filenames() {
     echo "Capturing filenames with problematic characters..."
-    find . -type f | grep -E ' |,|-|_' > "$tmp_old"
+    find . \( -type f -o -type d \) | grep -E ' |,|-|_' > "$tmp_old"
     echo "Captured filenames:"
     cat "$tmp_old"
 }
