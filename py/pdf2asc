@@ -1,0 +1,37 @@
+#!/usr/bin/python3
+from io import StringIO
+from pdfminer.converter import TextConverter
+from pdfminer.layout import LAParams
+from pdfminer.pdfdocument import PDFDocument
+from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+from pdfminer.pdfpage import PDFPage
+from pdfminer.pdfparser import PDFParser
+import argparse
+
+def pdf_to_ascii(pdf_file):
+    output_string = StringIO()
+    with open(pdf_file, 'rb') as in_file:
+        parser = PDFParser(in_file)
+        doc = PDFDocument(parser)
+        rsrcmgr = PDFResourceManager()
+        device = TextConverter(rsrcmgr, output_string, laparams=LAParams())
+        interpreter = PDFPageInterpreter(rsrcmgr, device)
+        for page in PDFPage.create_pages(doc):
+            interpreter.process_page(page)
+    return output_string.getvalue()
+
+def main():
+    parser = argparse.ArgumentParser(description='Convert PDF to ASCII')
+    parser.add_argument('filename', help='PDF file to convert')
+    args = parser.parse_args()
+    try:
+        ascii_text = pdf_to_ascii(args.filename)
+        print(ascii_text)
+    except FileNotFoundError:
+        print(f"Error: File '{args.filename}' not found")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    main()
+

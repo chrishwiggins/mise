@@ -521,9 +521,10 @@ alias md5 "echo i think you mean shasum -a 512"
 alias flare 'osascript -e "tell application \"System Events\"" -e "repeat 16 times" -e "key code 144" -e "end repeat" -e "end tell"'
 alias code 'open -a "Visual Studio Code" \!*'    # macOS
 alias vs 'code $PWD \!*'    # macOS/Linux
-alias stats "open https://www-statista-com.ezproxy.cul.columbia.edu/;open https://ourworldindata.org/"
+alias stats "c-cu https://www-statista-com.ezproxy.cul.columbia.edu/;open https://ourworldindata.org/"
 alias lit 'osascript -e '\''tell application "System Events" to key code 144'\'''
 alias dim 'osascript -e '\''tell application "System Events" to key code 145'\'''
 alias blaze 'osascript -e '\''tell application "System Events"'\'' -e '\''repeat 16 times'\'' -e '\''key code 144'\'' -e '\''end repeat'\'' -e '\''end tell'\'''
 alias cd-parent 'cd `dirname \!:1`'
 alias tim "echo https://snyder.substack.com/p/on-tyranny | pbcopy"
+alias usenix "echo https://www.youtube.com/watch?v=ajGX7odA87k | pbcopy"
