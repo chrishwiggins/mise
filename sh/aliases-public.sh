@@ -263,6 +263,7 @@ alias atom open /Applications/Atom.app/
 alias eee "echo 'Do you know your estimated time of arrival?'|pbcopy"
 alias zork echo back to work, you.
 alias asciify "/usr/bin/perl -pe 's/[^[:ascii:]]/+/g'"
+alias asciify-clean "/usr/bin/perl -pe 's/[^[:ascii:]]//g'"
 alias bow "asciify | fix | lower | words | nodud | sort -bfd | uniq -c | sort -nr"
 alias newdoc "open https://docs.google.com/document/"
 #alias addy "open /Applications/Address\ Book.app/"
@@ -516,7 +517,7 @@ alias sniff "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Cur
 alias plan "echo 'dream in years; plan in months; evaluate in weeks; ship daily'"
 alias nato "echo 'Alfa|Bravo|Charlie|Delta|Echo|Foxtrot|Golf|Hotel|India|Juliett|Kilo|Lima|Mike|November|Oscar|Papa|Quebec|Romeo|Sierra|Tango|Uniform|Victor|Whiskey|Xray|Yankee|Zulu'|tr '|' '\n'"
 alias embiggen "osascript  $mise/osa/embiggen.osa"
-alias cdf 'cd `dirname \!:1`'
+alias cd-f cd-parent
 alias md5 "echo i think you mean shasum -a 512"
 alias flare 'osascript -e "tell application \"System Events\"" -e "repeat 16 times" -e "key code 144" -e "end repeat" -e "end tell"'
 alias code 'open -a "Visual Studio Code" \!*'    # macOS
@@ -528,3 +529,5 @@ alias blaze 'osascript -e '\''tell application "System Events"'\'' -e '\''repeat
 alias cd-parent 'cd `dirname \!:1`'
 alias tim "echo https://snyder.substack.com/p/on-tyranny | pbcopy"
 alias usenix "echo https://www.youtube.com/watch?v=ajGX7odA87k | pbcopy"
+alias stripdf 'exiftool -all= \!:1 -o stripped.pdf; qpdf --linearize stripped.pdf \!:2'
+alias dsi-dir "echo 'in 428 mudd (in the DSI (in Mudd (to the right of Blue Java (behind some glass doors))))'|pbcopy"
