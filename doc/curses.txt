@@ -1,21 +1,34 @@
-     1	Do not obey in advance.
-     2	Defend institutions.
-     3	Beware the one-party state.
-     4	Take responsibility for the face of the world.
-     5	Remember professional ethics.
-     6	Be wary of paramilitaries.
-     7	Be reflective if you must be armed.
-     8	Stand out.
-     9	Be kind to our language.
-    10	Believe in truth.
-    11	Investigate.
-    12	Make eye contact and small talk.
-    13	Practice corporeal politics.
-    14	Establish a private life.
-    15	Contribute to good causes.
-    16	Learn from peers in other countries.
-    17	Listen for dangerous words.
-    18	Be calm when the unthinkable arrives.
-    19	Be a patriot.
-    20	Be as courageous as you can.
- "two plus two make four."
+TS: 1	Do not obey in advance.
+TS: 2	Defend institutions.
+TS: 3	Beware the one-party state.
+TS: 4	Take responsibility for the face of the world.
+TS: 5	Remember professional ethics.
+TS: 6	Be wary of paramilitaries.
+TS: 7	Be reflective if you must be armed.
+TS: 8	Stand out.
+TS: 9	Be kind to our language.
+TS: 10	Believe in truth.
+TS: 11	Investigate.
+TS: 12	Make eye contact and small talk.
+TS: 13	Practice corporeal politics.
+TS: 14	Establish a private life.
+TS: 15	Contribute to good causes.
+TS: 16	Learn from peers in other countries.
+TS: 17	Listen for dangerous words.
+TS: 18	Be calm when the unthinkable arrives.
+TS: 19	Be a patriot.
+TS: 20	Be as courageous as you can.
+"two plus two make four."
+SA: "Power is not only what you have but what the enemy thinks you have."
+SA: "Never go outside the experience of your people."
+SA: "Whenever possible go outside of the experience of the enemy."
+SA: "Make the enemy live up to its own book of rules."
+SA: "Ridicule is man's most potent weapon. There is no defense. It is almost impossible to counterattack ridicule. Also it infuriates the opposition, who then react to your advantage."
+SA: "A good tactic is one your people enjoy."
+SA: "A tactic that drags on too long becomes a drag."
+SA: "Keep the pressure on."
+SA: "The threat is usually more terrifying than the thing itself."
+SA: "The major premise for tactics is the development of operations that will maintain a constant pressure upon the opposition."
+SA: "If you push a negative hard and deep enough it will break through into its counterside; this is based on the principle that every positive has its negative."
+SA: "The price of a successful attack is a constructive alternative."
+SA: "Pick the target, freeze it, personalize it, and polarize it."

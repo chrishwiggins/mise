@@ -6,6 +6,7 @@
 which R
 whereis R
 echo "so.... is it /usr/local/bin/R ?"
+echo "so.... is it /opt/homebrew/bin/R ?"
 
 R --version
 R -e 'install.packages("'$1'", verbose=TRUE, dependencies = TRUE, repos="http://cran.us.r-project.org")'
