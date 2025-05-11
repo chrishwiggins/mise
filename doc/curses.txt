@@ -19,16 +19,16 @@ TS: 18	Be calm when the unthinkable arrives.
 TS: 19	Be a patriot.
 TS: 20	Be as courageous as you can.
 "two plus two make four."
-SA: "Power is not only what you have but what the enemy thinks you have."
-SA: "Never go outside the experience of your people."
-SA: "Whenever possible go outside of the experience of the enemy."
-SA: "Make the enemy live up to its own book of rules."
-SA: "Ridicule is man's most potent weapon. There is no defense. It is almost impossible to counterattack ridicule. Also it infuriates the opposition, who then react to your advantage."
-SA: "A good tactic is one your people enjoy."
-SA: "A tactic that drags on too long becomes a drag."
-SA: "Keep the pressure on."
-SA: "The threat is usually more terrifying than the thing itself."
-SA: "The major premise for tactics is the development of operations that will maintain a constant pressure upon the opposition."
-SA: "If you push a negative hard and deep enough it will break through into its counterside; this is based on the principle that every positive has its negative."
-SA: "The price of a successful attack is a constructive alternative."
-SA: "Pick the target, freeze it, personalize it, and polarize it."
+SA1: ‘Power is not only what you have, but what the enemy thinks you have.’
+SA2: ‘Never go outside the expertise of your people.’
+SA3: ‘Whenever possible, go outside the expertise of the enemy.’
+SA4: ‘Make the enemy live up to its own book of rules.’
+SA5: ‘Ridicule is man’s most potent weapon.’
+SA6: ‘A good tactic is one your people enjoy.’
+SA7: ‘A tactic that drags on too long becomes a drag.’
+SA8: ‘Keep the pressure on. Never let up.’
+SA9: ‘The threat is usually more terrifying than the thing itself.’
+SA10: ‘The major premise for tactics is the development of operations that will maintain a constant pressure upon the opposition.’
+SA11: ‘If you push a negative hard and deep enough it will break through into its counterside [positive].’
+SA12: ‘The price of a successful attack is a constructive alternative.’
+SA13: ‘Pick the target, freeze it, personalize it, and polarize it.’
