@@ -18,7 +18,26 @@ capture_filenames() {
 # Replace sequences of spaces, commas, dashes, and underscores with a single underscore
 # Replace single quotes with underscores
 # Replace parentheses with hyphens
+#
+
+
 normalize_filenames() {
+    echo "Normalizing filenames..."
+    cat "$tmp_old" | sed -e 's/[, _-][, _-]*/_/g' -e "s/'/_/g" -e 's/[$$$$]/_/g' | tr '()' '-' > "$tmp_new"
+    echo "Normalized filenames:"
+    cat "$tmp_new"
+}
+
+
+b_normalize_filenames() {
+    echo "Normalizing filenames..."
+    cat "$tmp_old" | sed -e 's/[, _-][, _-]*/_/g' -e "s/'/_/g" -e 's/$$/_/g' -e 's/$$/_/g' | tr '()' '-' > "$tmp_new"
+    echo "Normalized filenames:"
+    cat "$tmp_new"
+}
+
+
+a_normalize_filenames() {
     echo "Normalizing filenames..."
     cat "$tmp_old" | sed -e 's/[, _-][, _-]*/_/g' -e "s/'/_/g" | tr '()' '-' > "$tmp_new"
     echo "Normalized filenames:"
