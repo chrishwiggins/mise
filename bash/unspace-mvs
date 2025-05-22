@@ -1,79 +1,66 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
 
-# Define temporary files using process ID to ensure uniqueness
-tmp_old="/tmp/old_$$"
-tmp_new="/tmp/new_$$"
-tmp_mvs="/tmp/mvs_$$.sh"
+# Create unique temp files (BSD/Linux portable)
+tmp_old=$(mktemp /tmp/unspace_old.XXXXXX)       || exit 1
+tmp_new=$(mktemp /tmp/unspace_new.XXXXXX)       || exit 1
+tmp_mvs=$(mktemp /tmp/unspace_mvs.XXXXXX.sh)    || exit 1
 
-# Function to capture filenames with problematic characters
-# WAS:    find . -type f | grep -E ' |,|-|_' > "$tmp_old"
+# Ensure cleanup on EXIT or interrupt
+trap 'rm -f "$tmp_old" "$tmp_new" "$tmp_mvs"' EXIT
+
 capture_filenames() {
     echo "Capturing filenames with problematic characters..."
-    find . \( -type f -o -type d \) | grep -E ' |,|-|_' > "$tmp_old"
-    echo "Captured filenames:"
-    cat "$tmp_old"
+    find . -depth \
+        | sed 's|^\./||' \
+        | grep -E "[ _\-\[\]\(\),'\"]" \
+        > "$tmp_old"
+    echo "  found $(wc -l < "$tmp_old") entries"
 }
-
-# Function to normalize filenames
-# Replace sequences of spaces, commas, dashes, and underscores with a single underscore
-# Replace single quotes with underscores
-# Replace parentheses with hyphens
-#
-
 
 normalize_filenames() {
     echo "Normalizing filenames..."
-    cat "$tmp_old" | sed -e 's/[, _-][, _-]*/_/g' -e "s/'/_/g" -e 's/[$$$$]/_/g' | tr '()' '-' > "$tmp_new"
-    echo "Normalized filenames:"
-    cat "$tmp_new"
+    perl -pe '
+        s/\[[^]]*\]//g;                       # strip [bracketed] content
+        s/[, _\-\[\]()'"'"'"]+/_/g;          # collapse punctuation+spaces → _
+        s/_+/_/g;                             # collapse multiple underscores
+        s/^_//;                               # trim leading underscore
+        s/_$//;                               # trim trailing underscore
+        s/_\.(?=\w+$)/./;                    # drop underscore before extension
+    ' "$tmp_old" > "$tmp_new"
+    echo "  sample before → after:"
+    paste -d ' → ' <(head -n3 "$tmp_old") <(head -n3 "$tmp_new")
 }
 
-
-b_normalize_filenames() {
-    echo "Normalizing filenames..."
-    cat "$tmp_old" | sed -e 's/[, _-][, _-]*/_/g' -e "s/'/_/g" -e 's/$$/_/g' -e 's/$$/_/g' | tr '()' '-' > "$tmp_new"
-    echo "Normalized filenames:"
-    cat "$tmp_new"
-}
-
-
-a_normalize_filenames() {
-    echo "Normalizing filenames..."
-    cat "$tmp_old" | sed -e 's/[, _-][, _-]*/_/g' -e "s/'/_/g" | tr '()' '-' > "$tmp_new"
-    echo "Normalized filenames:"
-    cat "$tmp_new"
-}
-
-# Function to generate move commands
 generate_move_commands() {
     echo "Generating move commands..."
-    paste -d '\t' "$tmp_old" "$tmp_new" | awk -F '\t' '{print "mv -f \"" $1 "\" \"" $2 "\""}' > "$tmp_mvs"
-    echo "Move commands:"
-    cat "$tmp_mvs"
+    paste -d $'\t' "$tmp_old" "$tmp_new" \
+        | awk -F '\t' '
+            $1 != $2 {
+                dir = gensub("/[^/]+$","","",$2)
+                print "mkdir -p \"" dir "\""
+                print "mv -i -- \"" $1 "\" \"" $2 "\""
+            }
+        ' > "$tmp_mvs"
+    echo "  $(wc -l < "$tmp_mvs") commands ready"
 }
 
-# Function to execute move commands
 execute_move_commands() {
-    echo "Executing move commands..."
-    source "$tmp_mvs"
+    if [[ -s "$tmp_mvs" ]]; then
+        echo "Executing move commands..."
+        bash "$tmp_mvs"
+    else
+        echo "Nothing to rename—all filenames already clean."
+    fi
 }
 
-# Function to clean up temporary files
-cleanup() {
-    echo "Cleaning up temporary files..."
-    rm "$tmp_old" "$tmp_new" "$tmp_mvs"
-}
-
-# Main script execution
 main() {
     capture_filenames
     normalize_filenames
     generate_move_commands
     execute_move_commands
-    cleanup
 }
 
-# Execute the main function
 main
-
 
