@@ -507,6 +507,7 @@ alias pbpy "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; py3  /tmp/$$.py"
 alias pbtex echo i think you mean pblat
 alias pbR "pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; R -f /tmp/$$.py"
 alias pblat "pbpaste >! /tmp/$$.tex ; wc -w /tmp/$$.tex; pdflatex /tmp/$$.tex; open $$.pdf"
+alias pbtoc "pbpaste | ununi >! /tmp/$$.md ; toc /tmp/$$.md ; open /tmp/$$.pdf"
 alias pbmpl "pbpaste >! /tmp/$$.mpl ; wc -w /tmp/$$.mpl ; maple  /tmp/$$.mpl"
 alias mute 'osascript -e "set volume output muted true"'
 alias hamlet open https://www.litcharts.com/shakescleare/shakespeare-translations/hamlet/act-1-scene-1
@@ -531,3 +532,5 @@ alias tim "echo https://snyder.substack.com/p/on-tyranny | pbcopy"
 alias usenix "echo https://www.youtube.com/watch?v=ajGX7odA87k | pbcopy"
 alias stripdf 'exiftool -all= \!:1 -o stripped.pdf; qpdf --linearize stripped.pdf \!:2'
 alias dsi-dir "echo 'in 428 mudd (in the DSI (in Mudd (to the right of Blue Java (behind some glass doors))))'|pbcopy"
+#alias countdown 'set seconds = `date -j -f "%Y-%m-%d" "\!:1" "+%s"`; @ days = ( $seconds - `date "+%s"` ) / 86400; echo $days days until \!:1'
+alias ununi sed -f /Users/wiggins/mise/sed/ununicode.sed
