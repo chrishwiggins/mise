@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+import sys
+
+# Hard-coded NATO phonetic & digit mapping
+MAPPING = {
+    'A': 'Alfa',    'B': 'Bravo',   'C': 'Charlie', 'D': 'Delta',
+    'E': 'Echo',    'F': 'Foxtrot', 'G': 'Golf',    'H': 'Hotel',
+    'I': 'India',   'J': 'Juliett', 'K': 'Kilo',    'L': 'Lima',
+    'M': 'Mike',    'N': 'November','O': 'Oscar',   'P': 'Papa',
+    'Q': 'Quebec',  'R': 'Romeo',   'S': 'Sierra',  'T': 'Tango',
+    'U': 'Uniform', 'V': 'Victor',  'W': 'Whiskey', 'X': 'X-ray',
+    'Y': 'Yankee',  'Z': 'Zulu',
+    '0': 'Zero',    '1': 'One',     '2': 'Two',     '3': 'Three',
+    '4': 'Four',    '5': 'Five',    '6': 'Six',     '7': 'Seven',
+    '8': 'Eight',   '9': 'Nine'
+}
+
+def main():
+    prog = sys.argv[0]
+    # No arguments: dump the full mapping
+    if len(sys.argv) == 1:
+        for key in sorted(MAPPING):
+            print(f"{key} {MAPPING[key]}")
+        return
+
+    # One argument: spell each char
+    if len(sys.argv) == 2:
+        text = sys.argv[1]
+        for ch in text:
+            code = MAPPING.get(ch.upper())
+            if code:
+                print(code)
+            else:
+                # not in A–Z or 0–9
+                print(f"[{ch}]")
+        return
+
+    # Too many args
+    print(f"Usage: {prog} [string_of_letters_and_numbers]")
+
+if __name__ == '__main__':
+    main()
