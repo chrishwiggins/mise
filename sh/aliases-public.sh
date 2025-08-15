@@ -38,6 +38,7 @@ alias cd-mise cd $mise
 # alias datestr 'date +%Y-%m-%dT%H:%M:%S '
 # alias datestr 'date +%Y-%m-%dT%Hh%Mm%Ss'
 alias datestr    date +%Y_%m_%dT%Hh%Mm%Ss
+alias datetxt 'date "+%a, %Y-%m-%d, %H:%M"'
 alias datecp "datestr|pbcopy"
 alias dstr datestr
 alias pbdate 'datestr| pbcopy'
@@ -117,9 +118,10 @@ alias avail "vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | p
 alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
 alias setd 'setenv dstr $ndir/cwnote_`date +%Y_%m_%d`.md'
 alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr:;echo $vstr'
-alias v 'setv; vi +star $vstr; echo vstr:;echo $vstr'
-alias d 'setd; date +"%a %b %d, week %U of %Y" >>! $dstr; vi +star $dstr; echo dstr:;echo $dstr'
-alias o 'setv; vi +star $vstr; oai-f $vstr'
+alias v 'setv; vi $vstr; echo vstr:;echo $vstr'
+alias tv 'setv; datetxt >$vstr ; vi +16 -c startinsert $vstr; echo vstr:;echo $vstr'
+alias d 'setd; date +"%a %b %d, week %U of %Y" >>! $dstr; vi $dstr; echo dstr:;echo $dstr'
+alias o 'setv; vi $vstr; oai-f $vstr'
 alias sv 'source $vstr'
 alias gv 'smail $vstr'
 # v & b (quicknotes+longnotes)
