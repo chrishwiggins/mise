@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+
+import sys
+import tkinter as tk
+from datetime import datetime, timedelta
+import re
+import json
+import os
+from pathlib import Path
+
+LOG_FILE = Path.home() / ".xmultitimer_log"
+
+def save_timers_log(timers):
+    """Save all timers to log file"""
+    log_data = {
+        "timers": [
+            {
+                "thing": t["thing"],
+                "target_time": t["target_time"].isoformat(),
+                "time_str": t.get("time_str", "unknown")
+            }
+            for t in timers
+        ],
+        "saved_at": datetime.now().isoformat()
+    }
+    try:
+        with open(LOG_FILE, 'w') as f:
+            json.dump(log_data, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Could not save log: {e}", file=sys.stderr)
+
+def load_timers_log():
+    """Load timers from log file"""
+    if not LOG_FILE.exists():
+        return []
+    try:
+        with open(LOG_FILE, 'r') as f:
+            data = json.load(f)
+            timers = []
+            for t in data.get("timers", []):
+                target = datetime.fromisoformat(t["target_time"])
+                timers.append({
+                    "thing": t["thing"],
+                    "target_time": target,
+                    "time_str": t.get("time_str", "unknown")
+                })
+            return timers
+    except Exception as e:
+        print(f"Warning: Could not load log: {e}", file=sys.stderr)
+        return []
+
+def parse_time(time_str):
+    """Parse time string in various formats"""
+    # Try HH:MM format
+    if ':' in time_str:
+        parts = time_str.split(':')
+        if len(parts) == 2:
+            hours, minutes = map(int, parts)
+            target = datetime.now().replace(hour=hours, minute=minutes, second=0)
+            if target < datetime.now():
+                target += timedelta(days=1)
+            return target
+    
+    # Try duration formats (5m, 1h, 30s, etc)
+    duration_match = re.match(r'^(\d+)([hms])$', time_str.lower())
+    if duration_match:
+        value, unit = duration_match.groups()
+        value = int(value)
+        if unit == 'h':
+            return datetime.now() + timedelta(hours=value)
+        elif unit == 'm':
+            return datetime.now() + timedelta(minutes=value)
+        elif unit == 's':
+            return datetime.now() + timedelta(seconds=value)
+    
+    # Try plain number as minutes
+    try:
+        minutes = int(time_str)
+        return datetime.now() + timedelta(minutes=minutes)
+    except ValueError:
+        pass
+    
+    raise ValueError(f"Cannot parse time: {time_str}")
+
+class TimerWidget:
+    """Individual timer widget within the main window"""
+    def __init__(self, parent, thing, target_time, on_remove=None):
+        self.parent = parent
+        self.thing = thing
+        self.target_time = target_time
+        self.on_remove = on_remove
+        self.expired = False
+        
+        # Colors matching the retro style
+        self.bg_color = "#ffffff"
+        self.fg_color = "#000000"
+        self.timer_color = "#ff0000"
+        self.expired_bg = "#ff0000"
+        self.shadow_color = "#808080"
+        
+        # Container frame with 3D border
+        self.container = tk.Frame(parent, bg=self.bg_color, bd=0)
+        
+        # 3D border effect
+        self.top_border = tk.Frame(self.container, bg=self.fg_color, height=1)
+        self.top_border.pack(fill=tk.X)
+        
+        self.main_frame = tk.Frame(self.container, bg=self.bg_color)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=0)
+        
+        self.bottom_border = tk.Frame(self.container, bg=self.shadow_color, height=1)
+        self.bottom_border.pack(fill=tk.X)
+        
+        # Timer content
+        self.content_frame = tk.Frame(self.main_frame, bg=self.bg_color)
+        self.content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Left side: thing and timer
+        self.left_frame = tk.Frame(self.content_frame, bg=self.bg_color)
+        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self.thing_label = tk.Label(
+            self.left_frame,
+            text=f"[ {self.thing.upper()} ]",
+            font=("Lucida", 9, "bold"),
+            fg=self.fg_color,
+            bg=self.bg_color,
+            anchor=tk.W,
+            padx=8,
+            pady=2
+        )
+        self.thing_label.pack(fill=tk.X)
+        
+        self.timer_label = tk.Label(
+            self.left_frame,
+            text="00:00:00",
+            font=("Lucida", 11, "bold"),
+            fg=self.timer_color,
+            bg=self.bg_color,
+            anchor=tk.W,
+            padx=8,
+            pady=2
+        )
+        self.timer_label.pack(fill=tk.X)
+        
+        # Right side: remove button (X11 style)
+        self.button_frame = tk.Frame(self.content_frame, bg=self.bg_color)
+        self.button_frame.pack(side=tk.RIGHT, padx=5)
+        
+        self.remove_btn = tk.Button(
+            self.button_frame,
+            text="X",
+            font=("Lucida", 8, "bold"),
+            fg=self.fg_color,
+            bg=self.bg_color,
+            bd=1,
+            relief=tk.RAISED,
+            padx=4,
+            pady=0,
+            command=self.remove
+        )
+        self.remove_btn.pack()
+        
+        self.flash_state = False
+        
+    def update(self):
+        """Update timer display"""
+        now = datetime.now()
+        remaining = self.target_time - now
+        
+        if remaining.total_seconds() <= 0:
+            # Timer expired
+            self.timer_label.configure(text="EXPIRED")
+            if not self.expired:
+                self.expired = True
+                self.start_flash()
+            return True  # Keep updating for flash effect
+        else:
+            # Calculate time components
+            total_seconds = int(remaining.total_seconds())
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            
+            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            self.timer_label.configure(text=time_str)
+            return False
+    
+    def start_flash(self):
+        """Start flashing when expired"""
+        self.flash()
+    
+    def flash(self):
+        """Flash effect for expired timer"""
+        if not self.expired:
+            return
+            
+        if self.flash_state:
+            # Normal colors
+            self.main_frame.configure(bg=self.bg_color)
+            self.content_frame.configure(bg=self.bg_color)
+            self.left_frame.configure(bg=self.bg_color)
+            self.button_frame.configure(bg=self.bg_color)
+            self.thing_label.configure(bg=self.bg_color, fg=self.fg_color)
+            self.timer_label.configure(bg=self.bg_color, fg=self.timer_color)
+            self.remove_btn.configure(bg=self.bg_color, fg=self.fg_color)
+        else:
+            # Inverted colors
+            self.main_frame.configure(bg=self.expired_bg)
+            self.content_frame.configure(bg=self.expired_bg)
+            self.left_frame.configure(bg=self.expired_bg)
+            self.button_frame.configure(bg=self.expired_bg)
+            self.thing_label.configure(bg=self.expired_bg, fg=self.bg_color)
+            self.timer_label.configure(bg=self.expired_bg, fg=self.bg_color)
+            self.remove_btn.configure(bg=self.expired_bg, fg=self.bg_color)
+        
+        self.flash_state = not self.flash_state
+        self.container.after(500, self.flash)
+    
+    def remove(self):
+        """Remove this timer"""
+        if self.on_remove:
+            self.on_remove(self)
+        self.container.destroy()
+    
+    def pack(self, **kwargs):
+        self.container.pack(**kwargs)
+
+class MultiTimer:
+    def __init__(self, initial_timers=None):
+        self.timers = []
+        self.widgets = []
+        
+        # Create window
+        self.root = tk.Tk()
+        self.root.title("MULTI-TIMER")
+        self.root.resizable(False, False)
+        
+        # Retro colors
+        self.bg_color = "#ffffff"
+        self.fg_color = "#000000"
+        self.border_color = "#000000"
+        self.shadow_color = "#808080"
+        
+        # Configure window
+        self.root.configure(bg=self.bg_color)
+        
+        # Main container with 3D border
+        self.outer_frame = tk.Frame(self.root, bg=self.bg_color, bd=0)
+        self.outer_frame.pack(padx=3, pady=3)
+        
+        # 3D border
+        self.top_border = tk.Frame(self.outer_frame, bg=self.border_color, height=2)
+        self.top_border.pack(fill=tk.X)
+        
+        self.mid_frame = tk.Frame(self.outer_frame, bg=self.bg_color)
+        self.mid_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.left_border = tk.Frame(self.mid_frame, bg=self.border_color, width=2)
+        self.left_border.pack(side=tk.LEFT, fill=tk.Y)
+        
+        self.main_frame = tk.Frame(self.mid_frame, bg=self.bg_color, bd=0)
+        self.main_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self.right_border = tk.Frame(self.mid_frame, bg=self.shadow_color, width=2)
+        self.right_border.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.bottom_border = tk.Frame(self.outer_frame, bg=self.shadow_color, height=2)
+        self.bottom_border.pack(fill=tk.X)
+        
+        # Title bar
+        self.title_frame = tk.Frame(self.main_frame, bg=self.bg_color)
+        self.title_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.title_label = tk.Label(
+            self.title_frame,
+            text="== ACTIVE TIMERS ==",
+            font=("Lucida", 10, "bold"),
+            fg=self.fg_color,
+            bg=self.bg_color
+        )
+        self.title_label.pack(side=tk.LEFT)
+        
+        # Add timer button
+        self.add_btn = tk.Button(
+            self.title_frame,
+            text="[+ADD]",
+            font=("Lucida", 9, "bold"),
+            fg=self.fg_color,
+            bg=self.bg_color,
+            bd=1,
+            relief=tk.RAISED,
+            padx=6,
+            pady=1,
+            command=self.show_add_dialog
+        )
+        self.add_btn.pack(side=tk.RIGHT)
+        
+        # Separator
+        self.sep_frame = tk.Frame(self.main_frame, bg=self.bg_color, height=4)
+        self.sep_frame.pack(fill=tk.X, padx=5)
+        self.sep_top = tk.Frame(self.sep_frame, height=1, bg=self.shadow_color)
+        self.sep_top.pack(fill=tk.X)
+        self.sep_bottom = tk.Frame(self.sep_frame, height=1, bg=self.border_color)
+        self.sep_bottom.pack(fill=tk.X)
+        
+        # Timer list frame
+        self.timer_list_frame = tk.Frame(self.main_frame, bg=self.bg_color)
+        self.timer_list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Status bar
+        self.status_frame = tk.Frame(self.main_frame, bg=self.bg_color)
+        self.status_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        self.status_label = tk.Label(
+            self.status_frame,
+            text="Ready",
+            font=("Lucida", 8),
+            fg=self.fg_color,
+            bg=self.bg_color,
+            anchor=tk.W
+        )
+        self.status_label.pack(side=tk.LEFT)
+        
+        # Make draggable
+        self.root.bind("<Button-1>", self.start_drag)
+        self.root.bind("<B1-Motion>", self.on_drag)
+        self.root.bind("<ButtonRelease-1>", self.stop_drag)
+        
+        self.drag_x = 0
+        self.drag_y = 0
+        
+        # Add initial timers
+        if initial_timers:
+            for timer_data in initial_timers:
+                self.add_timer(timer_data["thing"], timer_data["target_time"])
+        
+        # Start update loop
+        self.update_all_timers()
+        
+        # Set window to stay on top
+        self.root.attributes('-topmost', True)
+        
+        # Position window
+        self.root.update_idletasks()
+        screen_width = self.root.winfo_screenwidth()
+        x = screen_width - self.root.winfo_width() - 50
+        y = 50
+        self.root.geometry(f"+{x}+{y}")
+        
+    def start_drag(self, event):
+        self.drag_x = event.x
+        self.drag_y = event.y
+    
+    def on_drag(self, event):
+        x = self.root.winfo_x() + event.x - self.drag_x
+        y = self.root.winfo_y() + event.y - self.drag_y
+        self.root.geometry(f"+{x}+{y}")
+    
+    def stop_drag(self, event):
+        pass
+    
+    def add_timer(self, thing, target_time):
+        """Add a new timer"""
+        timer_data = {
+            "thing": thing,
+            "target_time": target_time,
+            "time_str": "manual"
+        }
+        self.timers.append(timer_data)
+        
+        widget = TimerWidget(
+            self.timer_list_frame,
+            thing,
+            target_time,
+            on_remove=self.remove_timer
+        )
+        widget.pack(fill=tk.X, pady=2)
+        self.widgets.append(widget)
+        
+        self.update_status()
+        self.save_state()
+    
+    def remove_timer(self, widget):
+        """Remove a timer"""
+        if widget in self.widgets:
+            idx = self.widgets.index(widget)
+            self.widgets.remove(widget)
+            if idx < len(self.timers):
+                self.timers.pop(idx)
+        self.update_status()
+        self.save_state()
+    
+    def update_status(self):
+        """Update status bar"""
+        active = len([w for w in self.widgets if not w.expired])
+        expired = len([w for w in self.widgets if w.expired])
+        total = len(self.widgets)
+        
+        if total == 0:
+            self.status_label.configure(text="No timers")
+        else:
+            self.status_label.configure(
+                text=f"{active} active, {expired} expired, {total} total"
+            )
+    
+    def update_all_timers(self):
+        """Update all timer displays"""
+        for widget in self.widgets:
+            widget.update()
+        
+        self.update_status()
+        
+        # Schedule next update
+        self.root.after(1000, self.update_all_timers)
+    
+    def save_state(self):
+        """Save current timers to log"""
+        timer_data = []
+        for i, widget in enumerate(self.widgets):
+            if i < len(self.timers):
+                timer_data.append(self.timers[i])
+        save_timers_log(timer_data)
+    
+    def show_add_dialog(self):
+        """Show dialog to add new timer"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Add Timer")
+        dialog.configure(bg=self.bg_color)
+        dialog.resizable(False, False)
+        
+        # Make dialog modal
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Position relative to main window
+        x = self.root.winfo_x() + 50
+        y = self.root.winfo_y() + 50
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Thing entry
+        tk.Label(dialog, text="Event:", font=("Lucida", 10), 
+                bg=self.bg_color, fg=self.fg_color).grid(row=0, column=0, padx=10, pady=5, sticky=tk.W)
+        thing_entry = tk.Entry(dialog, font=("Lucida", 10), width=20)
+        thing_entry.grid(row=0, column=1, padx=10, pady=5)
+        thing_entry.focus()
+        
+        # Time entry
+        tk.Label(dialog, text="Time:", font=("Lucida", 10),
+                bg=self.bg_color, fg=self.fg_color).grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
+        time_entry = tk.Entry(dialog, font=("Lucida", 10), width=20)
+        time_entry.grid(row=1, column=1, padx=10, pady=5)
+        
+        # Help text
+        help_text = "Examples: 5m, 1h, 14:30, 30s"
+        tk.Label(dialog, text=help_text, font=("Lucida", 8),
+                bg=self.bg_color, fg=self.shadow_color).grid(row=2, column=1, padx=10, pady=2)
+        
+        # Buttons
+        button_frame = tk.Frame(dialog, bg=self.bg_color)
+        button_frame.grid(row=3, column=0, columnspan=2, pady=10)
+        
+        def add_timer():
+            thing = thing_entry.get().strip()
+            time_str = time_entry.get().strip()
+            if thing and time_str:
+                try:
+                    target_time = parse_time(time_str)
+                    self.add_timer(thing, target_time)
+                    dialog.destroy()
+                except ValueError as e:
+                    tk.messagebox.showerror("Error", str(e))
+        
+        tk.Button(button_frame, text="Add", font=("Lucida", 9),
+                 command=add_timer, width=8).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Cancel", font=("Lucida", 9),
+                 command=dialog.destroy, width=8).pack(side=tk.LEFT, padx=5)
+        
+        # Bind Enter key to add
+        dialog.bind('<Return>', lambda e: add_timer())
+        
+    def run(self):
+        self.root.mainloop()
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == '--restart':
+        # Load from log
+        timers = load_timers_log()
+        if timers:
+            # Filter out expired timers unless they expired recently (last hour)
+            now = datetime.now()
+            active_timers = []
+            for t in timers:
+                if t["target_time"] > now or (now - t["target_time"]).total_seconds() < 3600:
+                    active_timers.append(t)
+            
+            if active_timers:
+                print(f"Restarting {len(active_timers)} timer(s) from log")
+                app = MultiTimer(active_timers)
+            else:
+                print("All logged timers have expired. Starting fresh.")
+                app = MultiTimer()
+        else:
+            print("No timer log found. Starting fresh.")
+            app = MultiTimer()
+    elif len(sys.argv) == 3:
+        # Single timer from command line
+        thing = sys.argv[1]
+        time_str = sys.argv[2]
+        try:
+            target_time = parse_time(time_str)
+            app = MultiTimer([{"thing": thing, "target_time": target_time}])
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    elif len(sys.argv) == 1:
+        # Start empty
+        app = MultiTimer()
+    else:
+        print("Usage: xmultitimer                    # Start with GUI")
+        print("       xmultitimer <thing> <time>      # Start with one timer")
+        print("       xmultitimer --restart           # Restart from log")
+        print("")
+        print("  time can be:")
+        print("    HH:MM  - specific time (e.g., 14:30)")
+        print("    5m     - 5 minutes from now")
+        print("    1h     - 1 hour from now")
+        print("    30s    - 30 seconds from now")
+        print("    10     - 10 minutes from now")
+        if LOG_FILE.exists():
+            print(f"\nLog file: {LOG_FILE}")
+        sys.exit(1)
+    
+    app.run()
+
+if __name__ == "__main__":
+    main()
