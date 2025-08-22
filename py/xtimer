@@ -4,6 +4,36 @@ import sys
 import tkinter as tk
 from datetime import datetime, timedelta
 import re
+import json
+import os
+from pathlib import Path
+
+LOG_FILE = Path.home() / ".xtimer_log"
+
+def save_timer_log(thing, target_time, time_str):
+    """Save timer info to log file"""
+    log_data = {
+        "thing": thing,
+        "target_time": target_time.isoformat(),
+        "time_str": time_str,
+        "started_at": datetime.now().isoformat()
+    }
+    try:
+        with open(LOG_FILE, 'w') as f:
+            json.dump(log_data, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Could not save log: {e}", file=sys.stderr)
+
+def load_timer_log():
+    """Load last timer from log file"""
+    if not LOG_FILE.exists():
+        return None
+    try:
+        with open(LOG_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Warning: Could not load log: {e}", file=sys.stderr)
+        return None
 
 def parse_time(time_str):
     """Parse time string in various formats"""
@@ -232,26 +262,56 @@ class RetroTimer:
         self.root.mainloop()
 
 def main():
-    if len(sys.argv) != 3:
-        print("Usage: timer <thing> <time>")
+    # Check for --restart flag
+    if len(sys.argv) == 2 and sys.argv[1] == '--restart':
+        log_data = load_timer_log()
+        if log_data:
+            thing = log_data['thing']
+            # Calculate remaining time from original target
+            original_target = datetime.fromisoformat(log_data['target_time'])
+            if original_target > datetime.now():
+                # Timer hasn't expired yet, use original target
+                target_time = original_target
+                print(f"Restarting timer: {thing} at {target_time.strftime('%H:%M:%S')}")
+            else:
+                # Timer already expired, restart with original duration if possible
+                time_str = log_data.get('time_str', '5m')
+                target_time = parse_time(time_str)
+                print(f"Restarting expired timer: {thing} for {time_str}")
+            
+            save_timer_log(thing, target_time, log_data.get('time_str', 'unknown'))
+            timer = RetroTimer(thing, target_time)
+            timer.run()
+        else:
+            print("No timer log found. Start a new timer first.")
+            sys.exit(1)
+    elif len(sys.argv) != 3:
+        print("Usage: xtimer <thing> <time>")
+        print("       xtimer --restart")
+        print("")
         print("  time can be:")
         print("    HH:MM  - specific time (e.g., 14:30)")
         print("    5m     - 5 minutes from now")
         print("    1h     - 1 hour from now")
         print("    30s    - 30 seconds from now")
         print("    10     - 10 minutes from now")
+        print("")
+        print("  --restart  - restart the last timer from log")
+        if LOG_FILE.exists():
+            print(f"\nLog file: {LOG_FILE}")
         sys.exit(1)
-    
-    thing = sys.argv[1]
-    time_str = sys.argv[2]
-    
-    try:
-        target_time = parse_time(time_str)
-        timer = RetroTimer(thing, target_time)
-        timer.run()
-    except ValueError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+    else:
+        thing = sys.argv[1]
+        time_str = sys.argv[2]
+        
+        try:
+            target_time = parse_time(time_str)
+            save_timer_log(thing, target_time, time_str)
+            timer = RetroTimer(thing, target_time)
+            timer.run()
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
 
 if __name__ == "__main__":
     main()
