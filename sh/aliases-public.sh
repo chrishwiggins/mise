@@ -119,7 +119,7 @@ alias setv 'setenv vstr $ndir/cwnote_`date +%Y_%m_%dT%H_%M_%S`.md'
 alias setd 'setenv dstr $ndir/cwnote_`date +%Y_%m_%d`.md'
 alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr:;echo $vstr'
 alias v 'setv; vi $vstr; echo vstr:;echo $vstr'
-alias tv 'setv; datetxt >$vstr ; vi +16 -c startinsert $vstr; echo vstr:;echo $vstr'
+alias tv 'setv; echo % `datetxt` >$vstr ; vi +16 -c startinsert $vstr; echo vstr:;echo $vstr'
 alias d 'setd; date +"%a %b %d, week %U of %Y" >>! $dstr; vi $dstr; echo dstr:;echo $dstr'
 alias o 'setv; vi $vstr; oai-f $vstr'
 alias sv 'source $vstr'
@@ -536,3 +536,5 @@ alias stripdf 'exiftool -all= \!:1 -o stripped.pdf; qpdf --linearize stripped.pd
 alias dsi-dir "echo 'in 428 mudd (in the DSI (in Mudd (to the right of Blue Java (behind some glass doors))))'|pbcopy"
 #alias countdown 'set seconds = `date -j -f "%Y-%m-%d" "\!:1" "+%s"`; @ days = ( $seconds - `date "+%s"` ) / 86400; echo $days days until \!:1'
 alias ununi sed -f /Users/wiggins/mise/sed/ununicode.sed
+alias gitlog "echo 'write a human-readable commit message of sufficient detail that future developers will understand what was changed and updated and the current state of the repo' | pbcopy"
+alias gitpush "echo 'push to github with a human-readable commit message of sufficient detail that future developers will understand what was changed and updated and the current state of the repo' | pbcopy"

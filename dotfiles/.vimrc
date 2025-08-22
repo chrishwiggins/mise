@@ -83,3 +83,6 @@ autocmd FileType python setlocal nospell
 " make it easier to see trailing whitespace
 set listchars=tab:>-,nbsp:_,trail:·,extends:>,precedes:<,eol:¶
 set list
+
+" I like to see the ruler, so I can see where I am in the file.
+set ruler
