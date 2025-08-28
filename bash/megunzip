@@ -1,11 +1,102 @@
 #!/bin/bash
-# keep gunzipping until there are no *.gz found
 
-# uses find | wc -l 
-dat=`find . -name '*.gz' | wc -l`
-while [ "$dat" -gt 0 ]
-do
-    echo found $dat files to megunzip 
-    gunzip *.gz
-    dat=`find . -name '*.gz' | wc -l`
+################################################################################
+# MEGUNZIP - The Ultimate Recursive Gunzip Tool
+################################################################################
+#
+# PURPOSE: This script finds ALL files ending in .gz in a directory and 
+#          uncompresses them. If a file has been gzipped multiple times
+#          (like file.txt.gz.gz.gz), it will keep uncompressing until
+#          the original file is restored.
+#
+# HOW TO USE:
+#   ./megunzip           - Process current directory
+#   ./megunzip /my/path  - Process specific directory
+#
+# WHAT IT DOES:
+#   1. Searches for all .gz files in the specified directory
+#   2. For each file, keeps gunzipping until no .gz remains
+#   3. Shows you what it's doing as it works
+#
+################################################################################
+
+# This is a FUNCTION - think of it like a recipe that we can use over and over
+# Its job: Take ONE file and keep uncompressing it until it's fully uncompressed
+gunzip_recursive() {
+    # The "$1" means "the first thing passed to this function" - in our case, a filename
+    # "local" means this variable only exists inside this function (like Vegas rules)
+    local file="$1"
+    
+    # This is a WHILE LOOP - it keeps doing something as long as a condition is true
+    # The [[ ]] is how bash checks conditions (like asking a yes/no question)
+    # "$file" == *.gz asks: "Does this filename end with .gz?"
+    # If YES, do everything between "do" and "done"
+    while [[ "$file" == *.gz ]]; do
+        # Print a message so you know what's happening (echo = print to screen)
+        echo "Gunzipping: $file"
+        # This is the ACTUAL UNCOMPRESSION - gunzip is the program that unzips .gz files
+        # It will turn "file.txt.gz" into "file.txt"
+        gunzip "$file"
+        
+        # After gunzipping, we need to update our filename variable
+        # ${file%.gz} means "take $file and chop off the .gz at the end"
+        # So if file was "data.txt.gz", it becomes "data.txt"
+        # This prepares us to check if THAT file also ends in .gz (like data.txt.gz.gz)
+        file="${file%.gz}"
+        
+        # SAFETY CHECK: Make sure the file still exists after gunzipping
+        # -f checks "is this a regular file that exists?"
+        # The ! means "NOT" - so this whole thing means "if the file does NOT exist"
+        if [[ ! -f "$file" ]]; then
+            # If the file doesn't exist anymore, stop the loop
+            # "break" means "exit this while loop right now"
+            break
+        fi
+    done
+    # When we get here, the file has been fully uncompressed (no more .gz extensions)
+}
+
+# MAIN PROGRAM STARTS HERE
+
+# This checks if you gave the script a directory to work on
+# $# is "the number of arguments you typed after the script name"
+# -eq means "equals" 
+# So this asks: "Did you type zero arguments?"
+if [[ $# -eq 0 ]]; then
+    # If you didn't specify a directory, use the current directory
+    # "." is computer-speak for "the directory I'm currently in"
+    dir="."
+else
+    # If you DID specify a directory, use that one
+    # $1 means "the first argument you typed"
+    dir="$1"
+fi
+
+# SAFETY CHECK: Make sure the directory actually exists before we try to use it
+# -d checks "is this a directory that exists?"
+# ! means "NOT", so this asks "is this NOT a valid directory?"
+if [[ ! -d "$dir" ]]; then
+    # If the directory doesn't exist, complain and quit
+    # "echo" prints the error message
+    echo "Error: Directory '$dir' does not exist"
+    # "exit 1" means "quit the program with an error code"
+    # (0 = success, anything else = something went wrong)
+    exit 1
+fi
+
+# THE MAIN WORKHORSE - Find all .gz files and process them
+
+# "find" is a program that searches for files
+# "$dir" - search in this directory
+# "-type f" - only look for regular files (not directories or other weird things)
+# "-name '*.gz'" - only files whose names end with .gz
+# The | (pipe) sends the list of files to the next command
+# "while read -r file" means "for each line that find gives us, call it 'file'"
+find "$dir" -type f -name "*.gz" | while read -r file; do
+    # For each .gz file we found, run our recursive gunzip function on it
+    # This calls our "recipe" from above with this specific file
+    gunzip_recursive "$file"
 done
+
+# When everything is done, print a happy message
+echo "Done!"

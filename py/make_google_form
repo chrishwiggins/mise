@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""
+Google Form Creator
+
+This script automates the creation of Google Forms using the Google Forms API.
+It creates a form with a custom title, description (from a preamble file),
+and questions (from a questions file). The script requires a service account
+with appropriate permissions.
+
+Requirements:
+    - Google Cloud project with Forms API enabled
+    - Service account credentials (credentials.json) with Forms API access
+    - Required Python packages: google-api-python-client, google-auth
+
+Usage:
+    python google_form_creator.py -t "Form Title" -p preamble.md -q questions.md
+
+    Required arguments:
+        -t, --title: The title of the Google Form
+        -p, --preamble: Path to markdown file containing form description/preamble
+        -q, --questions: Path to markdown file containing questions (one per line)
+
+Example preamble.md:
+    Welcome to our survey! This form will collect feedback about...
+
+Example questions.md:
+    1. What is your experience with...?
+    2. How would you rate...?
+    3. Please describe...
+
+Author: [Your Name]
+Date: February 2025
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+from typing import List, Optional
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+from google.auth.exceptions import GoogleAuthError
+
+def validate_file(file_path: str) -> str:
+    """
+    Validate that a file exists and is readable.
+    
+    Args:
+        file_path (str): Path to the file to validate
+        
+    Returns:
+        str: The validated file path
+        
+    Raises:
+        argparse.ArgumentTypeError: If file doesn't exist or isn't readable
+    """
+    path = Path(file_path)
+    if not path.exists():
+        raise argparse.ArgumentTypeError(f"File '{file_path}' does not exist")
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"'{file_path}' is not a file")
+    if not os.access(file_path, os.R_OK):
+        raise argparse.ArgumentTypeError(f"File '{file_path}' is not readable")
+    return file_path
+
+def read_file_safe(file_path: str, file_type: str) -> str:
+    """
+    Safely read file content with error handling.
+    
+    Args:
+        file_path (str): Path to the file to read
+        file_type (str): Type of file for error messages
+        
+    Returns:
+        str: Content of the file
+        
+    Raises:
+        SystemExit: If file cannot be read
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read().strip()
+            if not content:
+                print(f"Error: {file_type} file is empty")
+                sys.exit(1)
+            return content
+    except UnicodeDecodeError:
+        print(f"Error: {file_type} file must be a valid text file")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading {file_type} file: {e}")
+        sys.exit(1)
+
+def create_google_form(form_title: str, preamble_file: str, questions_file: str) -> None:
+    """
+    Creates a Google Form with the specified title, preamble, and questions.
+    
+    Args:
+        form_title (str): Title of the Google Form
+        preamble_file (str): Path to file containing form description/preamble
+        questions_file (str): Path to file containing questions
+        
+    Raises:
+        SystemExit: If there's an error reading files or creating the form
+    """
+    try:
+        # Verify credentials file exists
+        creds_path = Path('credentials.json')
+        if not creds_path.exists():
+            print("\n" + "="*60)
+            print("ERROR: Missing required file: credentials.json")
+            print("="*60)
+            print("\nREQUIRED FILES FOR THIS SCRIPT:")
+            print("  1. credentials.json - Service account credentials")
+            print("  2. preamble.md     - Form description text")
+            print("  3. questions.md    - Questions (one per line)")
+            print("\nSETUP INSTRUCTIONS:")
+            print("  1. Go to https://console.cloud.google.com")
+            print("  2. Create/select a project")
+            print("  3. Enable: Google Forms API and Google Drive API")
+            print("  4. Create service account & download credentials.json")
+            print("  5. Place all files in same directory as this script")
+            print("="*60)
+            sys.exit(1)
+
+        # Define required API scopes
+        SCOPES = [
+            "https://www.googleapis.com/auth/forms.body",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        
+        try:
+            creds = service_account.Credentials.from_service_account_file(
+                str(creds_path), scopes=SCOPES
+            )
+        except GoogleAuthError as e:
+            print(f"Error with credentials: {e}")
+            sys.exit(1)
+        
+        # Initialize API clients
+        try:
+            service = build("forms", "v1", credentials=creds)
+            drive_service = build("drive", "v3", credentials=creds)
+        except Exception as e:
+            print(f"Error connecting to Google APIs: {e}")
+            sys.exit(1)
+        
+        # Create initial form
+        print("Creating form...", end='', flush=True)
+        try:
+            form = service.forms().create(
+                body={"info": {"title": form_title}}
+            ).execute()
+            form_id = form["formId"]
+            print(" done")
+        except Exception as e:
+            print("\nError creating form:", e)
+            sys.exit(1)
+        
+        # Read and add preamble
+        print("Adding preamble...", end='', flush=True)
+        preamble_text = read_file_safe(preamble_file, "preamble")
+        description_update = {
+            "requests": [
+                {
+                    "updateFormInfo": {
+                        "info": {"description": preamble_text},
+                        "updateMask": "description",
+                    }
+                }
+            ]
+        }
+        try:
+            service.forms().batchUpdate(formId=form_id, body=description_update).execute()
+            print(" done")
+        except Exception as e:
+            print("\nError adding preamble:", e)
+            sys.exit(1)
+        
+        # Read and process questions
+        print("Adding questions...", end='', flush=True)
+        questions_text = read_file_safe(questions_file, "questions")
+        questions = [q.strip() for q in questions_text.splitlines() if q.strip()]
+        
+        if not questions:
+            print("\nError: No valid questions found in questions file")
+            sys.exit(1)
+        
+        # Prepare and execute questions batch request
+        batch_request = {"requests": []}
+        for i, question_text in enumerate(questions):
+            batch_request["requests"].append(
+                {
+                    "createItem": {
+                        "item": {
+                            "title": question_text,
+                            "questionItem": {
+                                "question": {
+                                    "required": True,
+                                    "textQuestion": {"paragraph": True},
+                                }
+                            },
+                        },
+                        "location": {"index": i},
+                    }
+                }
+            )
+        
+        try:
+            service.forms().batchUpdate(formId=form_id, body=batch_request).execute()
+            print(" done")
+        except Exception as e:
+            print("\nError adding questions:", e)
+            sys.exit(1)
+        
+        # Success output
+        print("\nForm created successfully!")
+        print(f"Number of questions added: {len(questions)}")
+        print(f"\nView and edit form:")
+        print(f"https://docs.google.com/forms/d/{form_id}/edit")
+        print(f"\nShare this link with respondents:")
+        print(f"https://docs.google.com/forms/d/{form_id}/viewform")
+        
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        sys.exit(1)
+
+def main() -> None:
+    """
+    Main function to handle command-line arguments and execute form creation.
+    """
+    parser = argparse.ArgumentParser(
+        description="Create a Google Form from markdown files containing preamble and questions.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+REQUIRED FILES:
+  credentials.json  - Service account credentials from Google Cloud Console
+  preamble.md      - Form description/introduction text
+  questions.md     - Questions list (one per line)
+
+SETUP INSTRUCTIONS:
+  1. Create a Google Cloud project
+  2. Enable Google Forms API and Google Drive API
+  3. Create a service account and download credentials.json
+  4. Place credentials.json in the same directory as this script
+
+Examples:
+  python make_google_form -t "Course Survey" -p preamble.md -q questions.md
+  python make_google_form --title "Feedback Form" --preamble desc.md --questions qs.md
+        """
+    )
+    
+    parser.add_argument(
+        "-t", "--title",
+        required=True,
+        help="Title of the Google Form"
+    )
+    parser.add_argument(
+        "-p", "--preamble",
+        required=True,
+        type=validate_file,
+        help="Path to the preamble markdown file"
+    )
+    parser.add_argument(
+        "-q", "--questions",
+        required=True,
+        type=validate_file,
+        help="Path to the questions markdown file"
+    )
+    
+    args = parser.parse_args()
+    create_google_form(args.title, args.preamble, args.questions)
+
+if __name__ == "__main__":
+    main()
