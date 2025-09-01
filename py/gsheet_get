@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""
+Secure Google Sheets downloader - downloads Google Sheets as TSV files.
+Supports both OAuth2 and service account authentication.
+
+Usage:
+    python3 gsheet_get_secure.py SHEET_ID [output.tsv]
+    python3 gsheet_get_secure.py --setup
+"""
+
+import gspread
+from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+import pandas as pd
+import argparse
+import os
+import sys
+import pickle
+import json
+from pathlib import Path
+
+
+# ============================================================================
+# CONFIGURATION - Secure credential locations
+# ============================================================================
+
+SECURE_CREDENTIAL_PATHS = [
+    "~/.config/gsheet/credentials.json",      # Linux/Mac standard location
+    "~/.gsheet/credentials.json",              # Alternative home directory location
+    "~/.0/credentials.json",                   # Your custom location
+    "~/Library/Application Support/gsheet/credentials.json",  # macOS specific
+]
+
+TOKEN_CACHE_DIR = "~/.gsheet_token"
+TOKEN_CACHE_FILE = "token.pickle"
+
+
+# ============================================================================
+# SETUP FUNCTIONS
+# ============================================================================
+
+def run_setup():
+    """Interactive setup to help users configure credentials securely."""
+    print("🔧 Google Sheets Downloader - Secure Setup")
+    print("=" * 50)
+    print()
+    
+    # Create secure directories
+    print("📁 Creating secure directories...")
+    config_dir = Path("~/.config/gsheet").expanduser()
+    config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    
+    token_dir = Path(TOKEN_CACHE_DIR).expanduser()
+    token_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    print(f"   ✓ Created {config_dir}")
+    print(f"   ✓ Created {token_dir}")
+    print()
+    
+    # Look for existing credentials
+    creds_found = None
+    current_dir_creds = Path("credentials.json")
+    
+    # Check current directory first
+    if current_dir_creds.exists():
+        print(f"📋 Found credentials.json in current directory")
+        response = input("   Move it to secure location ~/.config/gsheet/? (recommended) [Y/n]: ").strip().lower()
+        if response != 'n':
+            target = config_dir / "credentials.json"
+            current_dir_creds.rename(target)
+            target.chmod(0o600)
+            print(f"   ✓ Moved and secured credentials to {target}")
+            creds_found = target
+    
+    # Check other locations
+    if not creds_found:
+        for path_str in SECURE_CREDENTIAL_PATHS:
+            path = Path(path_str).expanduser()
+            if path.exists():
+                print(f"✅ Found existing credentials at: {path}")
+                creds_found = path
+                break
+    
+    if not creds_found:
+        print("⚠️  No credentials.json found!")
+        print()
+        print("To get OAuth2 credentials:")
+        print("1. Go to https://console.cloud.google.com/")
+        print("2. Create/select a project")
+        print("3. Enable Google Sheets API")
+        print("4. Go to Credentials → Create Credentials → OAuth client ID")
+        print("5. Choose 'Desktop app'")
+        print("6. Download the JSON file")
+        print(f"7. Save it as: {config_dir}/credentials.json")
+    else:
+        print()
+        print("✨ Setup complete!")
+        print()
+        print("Your configuration:")
+        print(f"  Credentials: {creds_found}")
+        print(f"  Token cache: {token_dir}/{TOKEN_CACHE_FILE}")
+        print()
+        print("To download a sheet:")
+        print("  python3 gsheet_get_secure.py SHEET_ID output.tsv")
+
+
+# ============================================================================
+# AUTHENTICATION FUNCTIONS
+# ============================================================================
+
+def find_credentials():
+    """
+    Find credentials file in standard secure locations.
+    Returns path to credentials or None if not found.
+    """
+    for path_str in SECURE_CREDENTIAL_PATHS:
+        path = Path(path_str).expanduser()
+        if path.exists():
+            return str(path)
+    
+    # Check current directory (with warning)
+    if Path("credentials.json").exists():
+        print("⚠️  WARNING: Using credentials.json from current directory.")
+        print("   Run 'python3 gsheet_get_secure.py --setup' to move it to a secure location.")
+        return "credentials.json"
+    
+    return None
+
+
+def get_credentials(creds_path=None):
+    """Get credentials - supports both OAuth2 and service account."""
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+    
+    # Find credentials if not specified
+    if not creds_path:
+        creds_path = find_credentials()
+        if not creds_path:
+            print("❌ No credentials found!", file=sys.stderr)
+            print("   Run: python3 gsheet_get_secure.py --setup", file=sys.stderr)
+            sys.exit(1)
+    
+    creds_path = Path(creds_path).expanduser()
+    
+    # Check if it's a service account
+    try:
+        with open(creds_path, 'r') as f:
+            creds_data = json.load(f)
+            if creds_data.get('type') == 'service_account':
+                print("🔐 Using service account authentication")
+                return service_account.Credentials.from_service_account_file(
+                    str(creds_path), scopes=SCOPES
+                )
+    except:
+        pass
+    
+    # Use OAuth2 flow
+    print("🔐 Using OAuth2 authentication")
+    token_dir = Path(TOKEN_CACHE_DIR).expanduser()
+    token_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    token_path = token_dir / TOKEN_CACHE_FILE
+    
+    creds = None
+    
+    # Try to load cached token
+    if token_path.exists():
+        try:
+            with open(token_path, "rb") as token:
+                creds = pickle.load(token)
+                if creds and creds.valid:
+                    print(f"   Using cached token from {token_path}")
+        except:
+            print("   Cached token invalid, will re-authenticate")
+    
+    # Refresh or get new token
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            print("   Refreshing expired token...")
+            creds.refresh(Request())
+        else:
+            print("   Starting OAuth2 flow...")
+            print("   A browser window will open for authentication.")
+            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
+            creds = flow.run_local_server(port=0)
+        
+        # Save token with secure permissions
+        with open(token_path, "wb") as token:
+            pickle.dump(creds, token)
+        token_path.chmod(0o600)
+        print(f"   Token saved to {token_path}")
+    
+    return creds
+
+
+# ============================================================================
+# MAIN FUNCTIONALITY
+# ============================================================================
+
+def download_google_sheet(sheet_id, output_file="output.tsv", creds_path=None):
+    """Download a Google Sheet and save as TSV file."""
+    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+    
+    print(f"📊 Downloading sheet: {sheet_id}")
+    
+    creds = get_credentials(creds_path)
+    gc = gspread.authorize(creds)
+    
+    try:
+        spreadsheet = gc.open_by_url(sheet_url)
+        worksheet = spreadsheet.get_worksheet(0)
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
+        
+        # Save as TSV
+        df.to_csv(output_file, sep="\t", index=False)
+        
+        print(f"✅ Success! Data saved to: {output_file}")
+        print(f"   Shape: {df.shape[0]} rows × {df.shape[1]} columns")
+        
+        return df
+        
+    except Exception as e:
+        print(f"❌ Error accessing sheet: {e}", file=sys.stderr)
+        if "403" in str(e) or "404" in str(e):
+            print("   Make sure:", file=sys.stderr)
+            print("   1. The sheet ID is correct", file=sys.stderr)
+            print("   2. The sheet is shared with your Google account", file=sys.stderr)
+            if "service_account" in str(type(creds)):
+                print("   3. For service accounts, share with the service account email", file=sys.stderr)
+        raise
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Securely download Google Sheets as TSV files",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --setup                          # Run secure setup
+  %(prog)s SHEET_ID                         # Download to output.tsv
+  %(prog)s SHEET_ID data.tsv                # Download to data.tsv
+  %(prog)s SHEET_ID --creds ~/my/creds.json # Use specific credentials
+
+Sheet ID is the part after /d/ in the Google Sheets URL:
+  https://docs.google.com/spreadsheets/d/SHEET_ID/edit
+        """
+    )
+    
+    parser.add_argument(
+        "sheet_id",
+        nargs="?",
+        help="Google Sheet ID (from the URL)"
+    )
+    parser.add_argument(
+        "output_file",
+        nargs="?",
+        default="output.tsv",
+        help="Output TSV file (default: output.tsv)"
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Run interactive setup to configure credentials"
+    )
+    parser.add_argument(
+        "--creds",
+        "-c",
+        help="Path to credentials.json (optional, will auto-detect if not provided)"
+    )
+    
+    args = parser.parse_args()
+    
+    # Run setup if requested
+    if args.setup:
+        run_setup()
+        return 0
+    
+    # Otherwise, need a sheet ID
+    if not args.sheet_id:
+        parser.print_help()
+        print("\n❌ Error: Sheet ID is required (unless using --setup)", file=sys.stderr)
+        return 1
+    
+    try:
+        download_google_sheet(args.sheet_id, args.output_file, args.creds)
+        return 0
+        
+    except KeyboardInterrupt:
+        print("\n⚠️  Cancelled by user", file=sys.stderr)
+        return 1
+    except Exception as e:
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
