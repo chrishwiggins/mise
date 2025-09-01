@@ -19,6 +19,7 @@ import os
 import sys
 import pickle
 import json
+import re
 from pathlib import Path
 
 
@@ -193,11 +194,40 @@ def get_credentials(creds_path=None):
 
 
 # ============================================================================
+# URL PARSING
+# ============================================================================
+
+def extract_sheet_id(input_string):
+    """
+    Extract Google Sheet ID from URL or return the input if it's already an ID.
+    """
+    # Check if it's a URL
+    if input_string.startswith('https://'):
+        # Extract ID from various Google Sheets URL formats
+        patterns = [
+            r'/spreadsheets/d/([a-zA-Z0-9-_]+)',  # Regular sheets
+            r'/forms/d/([a-zA-Z0-9-_]+)',         # Forms
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, input_string)
+            if match:
+                return match.group(1)
+        
+        raise ValueError(f"Could not extract sheet ID from URL: {input_string}")
+    
+    # If it's not a URL, assume it's already a sheet ID
+    return input_string
+
+
+# ============================================================================
 # MAIN FUNCTIONALITY
 # ============================================================================
 
-def download_google_sheet(sheet_id, output_file="output.tsv", creds_path=None):
+def download_google_sheet(sheet_input, output_file="output.tsv", creds_path=None):
     """Download a Google Sheet and save as TSV file."""
+    # Extract sheet ID from URL or use as-is if already an ID
+    sheet_id = extract_sheet_id(sheet_input)
     sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
     
     print(f"📊 Downloading sheet: {sheet_id}")
@@ -240,16 +270,18 @@ Examples:
   %(prog)s SHEET_ID                         # Download to output.tsv
   %(prog)s SHEET_ID data.tsv                # Download to data.tsv
   %(prog)s SHEET_ID --creds ~/my/creds.json # Use specific credentials
+  %(prog)s "https://docs.google.com/spreadsheets/d/SHEET_ID/edit" # Use full URL
 
 Sheet ID is the part after /d/ in the Google Sheets URL:
   https://docs.google.com/spreadsheets/d/SHEET_ID/edit
+Or you can provide the full URL directly.
         """
     )
     
     parser.add_argument(
-        "sheet_id",
+        "sheet_input",
         nargs="?",
-        help="Google Sheet ID (from the URL)"
+        help="Google Sheet URL or ID"
     )
     parser.add_argument(
         "output_file",
@@ -275,14 +307,14 @@ Sheet ID is the part after /d/ in the Google Sheets URL:
         run_setup()
         return 0
     
-    # Otherwise, need a sheet ID
-    if not args.sheet_id:
+    # Otherwise, need a sheet ID or URL
+    if not args.sheet_input:
         parser.print_help()
-        print("\n❌ Error: Sheet ID is required (unless using --setup)", file=sys.stderr)
+        print("\n❌ Error: Sheet URL or ID is required (unless using --setup)", file=sys.stderr)
         return 1
     
     try:
-        download_google_sheet(args.sheet_id, args.output_file, args.creds)
+        download_google_sheet(args.sheet_input, args.output_file, args.creds)
         return 0
         
     except KeyboardInterrupt:
