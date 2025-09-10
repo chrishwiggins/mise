@@ -538,3 +538,5 @@ alias dsi-dir "echo 'in 428 mudd (in the DSI (in Mudd (to the right of Blue Java
 alias ununi sed -f /Users/wiggins/mise/sed/ununicode.sed
 alias gitlog "echo 'write a human-readable commit message of sufficient detail that future developers will understand what was changed and updated and the current state of the repo' | pbcopy"
 alias gitpush "echo 'push to github with a human-readable commit message of sufficient detail that future developers will understand what was changed and updated and the current state of the repo' | pbcopy"
+#alias claudepaste 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile && rm -f $tmpfile'¶
+alias pbclaude 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile'¶
