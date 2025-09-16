@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""
+Convert EML files to plain text format.
+Usage: python3 eml2txt.py <input.eml> [output.txt]
+"""
+
+import sys
+import email
+import html2text
+from email.policy import default
+
+def eml_to_text(eml_file, output_file=None):
+    """Convert EML file to plain text."""
+    
+    # Read the EML file
+    with open(eml_file, 'r', encoding='utf-8', errors='ignore') as f:
+        msg = email.message_from_file(f, policy=default)
+    
+    # Extract headers
+    output_lines = []
+    output_lines.append(f"From: {msg.get('From', 'Unknown')}")
+    output_lines.append(f"To: {msg.get('To', 'Unknown')}")
+    if msg.get('Cc'):
+        output_lines.append(f"Cc: {msg.get('Cc')}")
+    output_lines.append(f"Date: {msg.get('Date', 'Unknown')}")
+    output_lines.append(f"Subject: {msg.get('Subject', 'No Subject')}")
+    output_lines.append("-" * 60)
+    output_lines.append("")
+    
+    # Extract body content
+    if msg.is_multipart():
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            if content_type == "text/plain":
+                body = part.get_content()
+                if body:
+                    output_lines.append(body.strip())
+            elif content_type == "text/html":
+                html_body = part.get_content()
+                if html_body:
+                    # Convert HTML to text
+                    h = html2text.HTML2Text()
+                    h.ignore_links = False
+                    h.ignore_images = True
+                    text_body = h.handle(html_body)
+                    output_lines.append(text_body.strip())
+    else:
+        # Single part message
+        content_type = msg.get_content_type()
+        body = msg.get_content()
+        if content_type == "text/html":
+            h = html2text.HTML2Text()
+            h.ignore_links = False
+            h.ignore_images = True
+            body = h.handle(body)
+        output_lines.append(body.strip())
+    
+    # Join all lines
+    result = "\n".join(output_lines)
+    
+    # Write to output file or stdout
+    if output_file:
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(result)
+        print(f"Converted {eml_file} to {output_file}")
+    else:
+        print(result)
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python3 eml2txt.py <input.eml> [output.txt]")
+        sys.exit(1)
+    
+    eml_file = sys.argv[1]
+    output_file = sys.argv[2] if len(sys.argv) > 2 else None
+    
+    try:
+        eml_to_text(eml_file, output_file)
+    except FileNotFoundError:
+        print(f"Error: File '{eml_file}' not found.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
