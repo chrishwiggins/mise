@@ -152,7 +152,7 @@ Notes:
         '''
     )
     
-    parser.add_argument('city', help='City name to search for')
+    parser.add_argument('city', nargs='?', help='City name to search for')
     parser.add_argument('-a', '--all', action='store_true',
                         help='Show all matching airports (default: max 5 per timezone)')
     parser.add_argument('-c', '--codes', action='store_true',
@@ -161,6 +161,19 @@ Notes:
                         help='Output only the first/best matching code')
     
     args = parser.parse_args()
+    
+    # If no city provided, show examples
+    if not args.city:
+        print("Find airport IATA codes by city name using fuzzy search\n")
+        print("Examples:")
+        print("  iata 'new york'    # Find NYC area airports")
+        print("  iata london        # Find London airports")
+        print("  iata -c tokyo      # Get just the codes")
+        print("  iata -1 paris      # Get the best/first code")
+        print("  iata -a moscow     # Show all matches (not just top 5)")
+        print("\nTry searching for any city name - fuzzy matching will find close matches!")
+        print("★ indicates major international airports")
+        return
     
     # Search for airports
     tz_groups = search_airports(args.city)

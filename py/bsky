@@ -1,0 +1,579 @@
+#!/usr/bin/env python3
+"""
+BlueskyTools - A comprehensive CLI for Bluesky/AT Protocol operations
+
+Usage:
+    blueskytools search <username> [options]  - Search posts from a user
+    blueskytools open <at_uri>                 - Open a post in browser
+    blueskytools fetch <username> [options]    - Fetch and export posts
+    blueskytools resolve <did_or_handle>       - Resolve DID to handle or vice versa
+"""
+
+import argparse
+import sys
+import json
+import re
+import subprocess
+import csv
+from datetime import datetime
+from typing import List, Dict, Optional, Any
+import requests
+from urllib.parse import quote
+
+
+class BlueskyAPI:
+    """Wrapper for Bluesky AT Protocol API calls"""
+    
+    BASE_URL = "https://public.api.bsky.app/xrpc"
+    
+    @staticmethod
+    def get_author_feed(actor: str, limit: int = 100, cursor: Optional[str] = None) -> Optional[Dict]:
+        """Fetch posts from a user's feed"""
+        params = {"actor": actor, "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        
+        try:
+            response = requests.get(f"{BlueskyAPI.BASE_URL}/app.bsky.feed.getAuthorFeed", params=params)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching posts: {e}", file=sys.stderr)
+            return None
+    
+    @staticmethod
+    def get_post_thread(uri: str) -> Optional[Dict]:
+        """Get a specific post thread"""
+        try:
+            response = requests.get(
+                f"{BlueskyAPI.BASE_URL}/app.bsky.feed.getPostThread",
+                params={"uri": uri}
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching post: {e}", file=sys.stderr)
+            return None
+    
+    @staticmethod
+    def search_posts(query: str, limit: int = 100, cursor: Optional[str] = None) -> Optional[Dict]:
+        """Search all posts (not user-specific)"""
+        params = {"q": query, "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        
+        try:
+            response = requests.get(f"{BlueskyAPI.BASE_URL}/app.bsky.feed.searchPosts", params=params)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException:
+            return None
+    
+    @staticmethod
+    def resolve_handle(handle: str) -> Optional[Dict]:
+        """Resolve a handle to get user info"""
+        try:
+            response = requests.get(
+                f"{BlueskyAPI.BASE_URL}/com.atproto.identity.resolveHandle",
+                params={"handle": handle}
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException:
+            return None
+
+
+class PostFilter:
+    """Filter posts based on various criteria"""
+    
+    @staticmethod
+    def by_keywords(posts: List[Dict], keywords: List[str], case_sensitive: bool = False) -> List[Dict]:
+        """Filter posts containing any of the keywords"""
+        import re
+        
+        filtered = []
+        for item in posts:
+            try:
+                post = item.get("post", item)
+                text = post["record"]["text"]
+                
+                if not case_sensitive:
+                    text = text.lower()
+                
+                found = False
+                for keyword in keywords:
+                    if not case_sensitive:
+                        keyword = keyword.lower()
+                    
+                    # Use word boundaries for short keywords
+                    if len(keyword) <= 3:
+                        pattern = r'\b' + re.escape(keyword) + r'\b'
+                        if re.search(pattern, text):
+                            found = True
+                            break
+                    else:
+                        if keyword in text:
+                            found = True
+                            break
+                
+                if found:
+                    filtered.append(item)
+            except (KeyError, TypeError):
+                continue
+        
+        return filtered
+    
+    @staticmethod
+    def by_date_range(posts: List[Dict], start_date: Optional[str] = None, 
+                      end_date: Optional[str] = None) -> List[Dict]:
+        """Filter posts by date range"""
+        filtered = []
+        
+        for item in posts:
+            try:
+                post = item.get("post", item)
+                created_at = post["record"]["createdAt"]
+                post_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                
+                if start_date:
+                    start = datetime.fromisoformat(start_date)
+                    if post_date < start:
+                        continue
+                
+                if end_date:
+                    end = datetime.fromisoformat(end_date)
+                    if post_date > end:
+                        continue
+                
+                filtered.append(item)
+            except (KeyError, ValueError):
+                continue
+        
+        return filtered
+
+
+class PostFormatter:
+    """Format posts for different output types"""
+    
+    @staticmethod
+    def to_text(posts: List[Dict], verbose: bool = False) -> str:
+        """Format posts as human-readable text"""
+        output = []
+        for i, item in enumerate(posts, 1):
+            post = item.get("post", item)
+            
+            output.append(f"--- Post {i} ---")
+            output.append(f"Date: {post['record']['createdAt']}")
+            output.append(f"Author: @{post['author']['handle']}")
+            
+            if verbose:
+                output.append(f"URI: {post['uri']}")
+                output.append(f"Likes: {post.get('likeCount', 0)}")
+                output.append(f"Reposts: {post.get('repostCount', 0)}")
+                output.append(f"Replies: {post.get('replyCount', 0)}")
+            
+            text = post['record']['text']
+            if not verbose and len(text) > 280:
+                text = text[:280] + "..."
+            output.append(f"Text: {text}")
+            
+            # Add web URL
+            handle = post['author']['handle']
+            post_id = post['uri'].split('/')[-1]
+            output.append(f"URL: https://bsky.app/profile/{handle}/post/{post_id}")
+            output.append("")
+        
+        return "\n".join(output)
+    
+    @staticmethod
+    def to_json(posts: List[Dict], minimal: bool = False) -> str:
+        """Format posts as JSON"""
+        if minimal:
+            # Extract only essential fields
+            minimal_posts = []
+            for item in posts:
+                post = item.get("post", item)
+                minimal_posts.append({
+                    "text": post["record"]["text"],
+                    "author": post["author"]["handle"],
+                    "created_at": post["record"]["createdAt"],
+                    "uri": post["uri"],
+                    "url": f"https://bsky.app/profile/{post['author']['handle']}/post/{post['uri'].split('/')[-1]}"
+                })
+            return json.dumps(minimal_posts, indent=2, ensure_ascii=False)
+        
+        return json.dumps(posts, indent=2, ensure_ascii=False)
+    
+    @staticmethod
+    def to_csv(posts: List[Dict]) -> str:
+        """Format posts as CSV"""
+        import io
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Header
+        writer.writerow(["Date", "Author", "Text", "Likes", "Reposts", "Replies", "URL"])
+        
+        for item in posts:
+            post = item.get("post", item)
+            handle = post['author']['handle']
+            post_id = post['uri'].split('/')[-1]
+            url = f"https://bsky.app/profile/{handle}/post/{post_id}"
+            
+            writer.writerow([
+                post["record"]["createdAt"],
+                f"@{handle}",
+                post["record"]["text"],
+                post.get("likeCount", 0),
+                post.get("repostCount", 0),
+                post.get("replyCount", 0),
+                url
+            ])
+        
+        return output.getvalue()
+
+
+class URLConverter:
+    """Convert between AT URIs and web URLs"""
+    
+    @staticmethod
+    def at_uri_to_web_url(at_uri: str) -> Optional[str]:
+        """Convert AT Protocol URI to Bluesky web URL"""
+        match = re.match(r'at://([^/]+)/app\.bsky\.feed\.post/([^/]+)', at_uri)
+        
+        if not match:
+            return None
+        
+        post_id = match.group(2)
+        
+        # Get the post to find the handle
+        data = BlueskyAPI.get_post_thread(at_uri)
+        if data:
+            handle = data["thread"]["post"]["author"]["handle"]
+            return f"https://bsky.app/profile/{handle}/post/{post_id}"
+        
+        return None
+    
+    @staticmethod
+    def web_url_to_at_uri(web_url: str) -> Optional[str]:
+        """Convert Bluesky web URL to AT Protocol URI"""
+        match = re.match(r'https://bsky\.app/profile/([^/]+)/post/([^/]+)', web_url)
+        
+        if not match:
+            return None
+        
+        handle = match.group(1)
+        post_id = match.group(2)
+        
+        # Resolve handle to DID
+        data = BlueskyAPI.resolve_handle(handle)
+        if data:
+            did = data.get("did")
+            return f"at://{did}/app.bsky.feed.post/{post_id}"
+        
+        return None
+
+
+def cmd_search(args):
+    """Search posts from a user"""
+    print(f"🔍 Searching posts from @{args.username}...")
+    
+    all_posts = []
+    cursor = None
+    
+    # Fetch posts
+    pages = args.pages if args.pages else 1
+    for page in range(pages):
+        data = BlueskyAPI.get_author_feed(args.username, limit=args.limit, cursor=cursor)
+        
+        if not data:
+            if page == 0:
+                print("Failed to fetch posts. Check the username.", file=sys.stderr)
+                return 1
+            break
+        
+        posts = data.get('feed', [])
+        all_posts.extend(posts)
+        
+        if args.verbose:
+            print(f"  Page {page + 1}: fetched {len(posts)} posts")
+        
+        cursor = data.get('cursor')
+        if not cursor or len(posts) == 0:
+            break
+    
+    print(f"📊 Total posts fetched: {len(all_posts)}")
+    
+    # Apply filters
+    filtered = all_posts
+    
+    if args.keywords:
+        print(f"🔎 Filtering for keywords: {', '.join(args.keywords)}")
+        filtered = PostFilter.by_keywords(filtered, args.keywords, args.case_sensitive)
+    
+    if args.start_date or args.end_date:
+        filtered = PostFilter.by_date_range(filtered, args.start_date, args.end_date)
+    
+    print(f"✅ Found {len(filtered)} matching posts\n")
+    
+    if not filtered:
+        return 0
+    
+    # Format output
+    if args.format == "json":
+        print(PostFormatter.to_json(filtered, minimal=not args.verbose))
+    elif args.format == "csv":
+        print(PostFormatter.to_csv(filtered))
+    else:
+        print(PostFormatter.to_text(filtered, verbose=args.verbose))
+    
+    # Save to file if requested
+    if args.output:
+        with open(args.output, 'w', encoding='utf-8') as f:
+            if args.format == "json":
+                f.write(PostFormatter.to_json(filtered, minimal=not args.verbose))
+            elif args.format == "csv":
+                f.write(PostFormatter.to_csv(filtered))
+            else:
+                f.write(PostFormatter.to_text(filtered, verbose=args.verbose))
+        print(f"\n💾 Saved to {args.output}")
+    
+    return 0
+
+
+def cmd_open(args):
+    """Open a post or profile in browser"""
+    url = args.uri
+    
+    # Check if it's already a web URL
+    if url.startswith("https://bsky.app/"):
+        print(f"🌐 Opening: {url}")
+    # Check if it's an AT URI
+    elif url.startswith("at://"):
+        web_url = URLConverter.at_uri_to_web_url(url)
+        if web_url:
+            print(f"🔗 Converted to: {web_url}")
+            url = web_url
+        else:
+            print("Failed to convert AT URI to web URL", file=sys.stderr)
+            return 1
+    # Assume it's a handle
+    else:
+        url = f"https://bsky.app/profile/{url}"
+        print(f"👤 Opening profile: {url}")
+    
+    # Open in browser
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", url])
+        elif sys.platform == "linux":
+            subprocess.run(["xdg-open", url])
+        elif sys.platform == "win32":
+            subprocess.run(["start", url], shell=True)
+    except Exception as e:
+        print(f"Failed to open browser: {e}", file=sys.stderr)
+        return 1
+    
+    return 0
+
+
+def cmd_fetch(args):
+    """Fetch and export posts from a user"""
+    print(f"📥 Fetching all posts from @{args.username}...")
+    
+    all_posts = []
+    cursor = None
+    page = 0
+    
+    # Fetch all posts
+    while True:
+        data = BlueskyAPI.get_author_feed(args.username, limit=100, cursor=cursor)
+        
+        if not data:
+            if page == 0:
+                print("Failed to fetch posts. Check the username.", file=sys.stderr)
+                return 1
+            break
+        
+        posts = data.get('feed', [])
+        all_posts.extend(posts)
+        
+        page += 1
+        print(f"  Page {page}: fetched {len(posts)} posts (total: {len(all_posts)})")
+        
+        if args.max_posts and len(all_posts) >= args.max_posts:
+            all_posts = all_posts[:args.max_posts]
+            print(f"  Reached maximum of {args.max_posts} posts")
+            break
+        
+        cursor = data.get('cursor')
+        if not cursor or len(posts) == 0:
+            break
+    
+    print(f"\n✅ Total posts fetched: {len(all_posts)}")
+    
+    # Apply filters if any
+    filtered = all_posts
+    
+    if args.keywords:
+        print(f"🔎 Filtering for keywords: {', '.join(args.keywords)}")
+        filtered = PostFilter.by_keywords(filtered, args.keywords)
+        print(f"  Matched: {len(filtered)} posts")
+    
+    # Save to file
+    if not args.output:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.output = f"{args.username}_{timestamp}.{args.format}"
+    
+    with open(args.output, 'w', encoding='utf-8') as f:
+        if args.format == "json":
+            f.write(PostFormatter.to_json(filtered, minimal=args.minimal))
+        elif args.format == "csv":
+            f.write(PostFormatter.to_csv(filtered))
+        else:
+            f.write(PostFormatter.to_text(filtered, verbose=not args.minimal))
+    
+    print(f"💾 Saved {len(filtered)} posts to {args.output}")
+    
+    # Print stats
+    if args.stats:
+        total_likes = sum(p.get("post", p).get("likeCount", 0) for p in filtered)
+        total_reposts = sum(p.get("post", p).get("repostCount", 0) for p in filtered)
+        total_replies = sum(p.get("post", p).get("replyCount", 0) for p in filtered)
+        
+        print(f"\n📊 Statistics:")
+        print(f"  Total likes: {total_likes:,}")
+        print(f"  Total reposts: {total_reposts:,}")
+        print(f"  Total replies: {total_replies:,}")
+        print(f"  Average engagement: {(total_likes + total_reposts + total_replies) / len(filtered):.1f} per post")
+    
+    return 0
+
+
+def cmd_resolve(args):
+    """Resolve DID to handle or vice versa"""
+    identifier = args.identifier
+    
+    # Check if it's a DID
+    if identifier.startswith("did:"):
+        # TODO: Implement DID to handle resolution
+        print("DID to handle resolution not yet implemented", file=sys.stderr)
+        return 1
+    
+    # Check if it's an AT URI
+    if identifier.startswith("at://"):
+        web_url = URLConverter.at_uri_to_web_url(identifier)
+        if web_url:
+            print(f"🔗 Web URL: {web_url}")
+        else:
+            print("Failed to resolve AT URI", file=sys.stderr)
+            return 1
+    # Check if it's a web URL
+    elif identifier.startswith("https://bsky.app/"):
+        at_uri = URLConverter.web_url_to_at_uri(identifier)
+        if at_uri:
+            print(f"🔗 AT URI: {at_uri}")
+        else:
+            print("Failed to resolve web URL", file=sys.stderr)
+            return 1
+    # Assume it's a handle
+    else:
+        data = BlueskyAPI.resolve_handle(identifier)
+        if data:
+            print(f"👤 Handle: @{identifier}")
+            print(f"🆔 DID: {data['did']}")
+        else:
+            print(f"Failed to resolve handle: {identifier}", file=sys.stderr)
+            return 1
+    
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="blueskytools",
+        description="🦋 BlueskyTools - CLI for Bluesky/AT Protocol operations",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s search blu3skyus3r123 -k nyt "new york times" --pages 5
+  %(prog)s open at://did:plc:xxx/app.bsky.feed.post/yyy
+  %(prog)s fetch blu3skyus3r123 --format json -o posts.json
+  %(prog)s resolve blu3skyus3r123
+        """
+    )
+    
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # Search command
+    search_parser = subparsers.add_parser(
+        "search",
+        help="Search posts from a user",
+        description="Search and filter posts from a Bluesky user"
+    )
+    search_parser.add_argument("username", help="Username to search (without @)")
+    search_parser.add_argument("-k", "--keywords", nargs="+", help="Keywords to search for")
+    search_parser.add_argument("-p", "--pages", type=int, default=1, help="Number of pages to fetch (default: 1)")
+    search_parser.add_argument("-l", "--limit", type=int, default=100, help="Posts per page (default: 100)")
+    search_parser.add_argument("-f", "--format", choices=["text", "json", "csv"], default="text", 
+                              help="Output format (default: text)")
+    search_parser.add_argument("-o", "--output", help="Save output to file")
+    search_parser.add_argument("-v", "--verbose", action="store_true", help="Show more details")
+    search_parser.add_argument("-c", "--case-sensitive", action="store_true", help="Case-sensitive search")
+    search_parser.add_argument("--start-date", help="Filter posts after this date (ISO format)")
+    search_parser.add_argument("--end-date", help="Filter posts before this date (ISO format)")
+    
+    # Open command
+    open_parser = subparsers.add_parser(
+        "open",
+        help="Open a post or profile in browser",
+        description="Open a Bluesky post or profile in your default browser"
+    )
+    open_parser.add_argument("uri", help="AT URI, web URL, or handle to open")
+    
+    # Fetch command
+    fetch_parser = subparsers.add_parser(
+        "fetch",
+        help="Fetch and export posts",
+        description="Fetch all posts from a user and export to file"
+    )
+    fetch_parser.add_argument("username", help="Username to fetch (without @)")
+    fetch_parser.add_argument("-f", "--format", choices=["json", "csv", "text"], default="json",
+                            help="Export format (default: json)")
+    fetch_parser.add_argument("-o", "--output", help="Output filename (auto-generated if not specified)")
+    fetch_parser.add_argument("-m", "--max-posts", type=int, help="Maximum posts to fetch")
+    fetch_parser.add_argument("-k", "--keywords", nargs="+", help="Filter by keywords")
+    fetch_parser.add_argument("--minimal", action="store_true", help="Minimal output (less data)")
+    fetch_parser.add_argument("--stats", action="store_true", help="Show engagement statistics")
+    
+    # Resolve command
+    resolve_parser = subparsers.add_parser(
+        "resolve",
+        help="Resolve handles, DIDs, and URIs",
+        description="Convert between different Bluesky identifiers"
+    )
+    resolve_parser.add_argument("identifier", help="Handle, DID, AT URI, or web URL to resolve")
+    
+    # Parse arguments
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        return 1
+    
+    # Execute command
+    if args.command == "search":
+        return cmd_search(args)
+    elif args.command == "open":
+        return cmd_open(args)
+    elif args.command == "fetch":
+        return cmd_fetch(args)
+    elif args.command == "resolve":
+        return cmd_resolve(args)
+    
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

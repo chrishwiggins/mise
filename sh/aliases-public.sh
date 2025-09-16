@@ -305,7 +305,8 @@ alias acal "open 'https://www.registrar.columbia.edu/event/academic-calendar?acf
 alias zip4 "open 'https://tools.usps.com/zip-code-lookup.htm?byaddress'"
 # alias rest sudo shutdown -s now
 alias rest pmset sleepnow
-alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
+#alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
+alias oed "c-cu https://resolver.library.columbia.edu/AKV9469"
 alias sheets "open 'https://drive.google.com/drive/u/0/#search?q=type%3Aspreadsheet'"
 
 alias kreps "echo 'https://twitter.com/jaykreps/status/219977241839411200' | pbcopy "
