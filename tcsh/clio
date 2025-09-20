@@ -8,6 +8,8 @@ echo $str
 #open 'http://encrypted.google.com/search?hl=en&lr=&safe=off&c2coff=1&q='$str'&btnG=Search'
 #chrome-profile-open 1 'https://clio.columbia.edu/quicksearch?q='$str'&commit=Search'
 chrome-profile-open 1 'https://clio-columbia-edu.ezproxy.cul.columbia.edu/quicksearch?q='$str'&commit=Search'
+# https://clio.columbia.edu/quicksearch?q=word+%22a+phrase%22#gsc.tab=0&gsc.q=word%20%22a%20phrase%22&gsc.page=1
+chrome-profile-open 1 'https://clio.columbia.edu/quicksearch?q='$str'
 
 
 # examples
