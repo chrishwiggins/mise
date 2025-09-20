@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+"""
+StableDiff - Standalone SDXL image generator using Diffusers (no server required)
+"""
+import sys
+import argparse
+from pathlib import Path
+
+def setup_environment():
+    """Setup environment for Apple Silicon"""
+    import os
+    os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+    import warnings
+    warnings.filterwarnings("ignore")
+
+def generate_image(prompt, negative_prompt="", steps=20, width=1024, height=1024, cfg_scale=7.0, output="output.png", seed=None, fast_mode=False):
+    """Generate image using Diffusers library directly"""
+    
+    print("🚀 Loading Stable Diffusion XL with Diffusers...")
+    
+    try:
+        from diffusers import StableDiffusionXLPipeline
+        import torch
+        from PIL import Image
+        import random
+        import time
+    except ImportError as e:
+        print(f"❌ Missing required packages: {e}")
+        print("Installing required packages...")
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "diffusers", "transformers", "accelerate"])
+        from diffusers import StableDiffusionXLPipeline
+        import torch
+        from PIL import Image
+        import random
+        import time
+    
+    # Set device and optimizations
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    print(f"🔧 Using device: {device}")
+    
+    # Load pipeline with optimizations
+    model_path = "/private/tmp/55923/stable-diffusion-webui/models/Stable-diffusion/sd_xl_base_1.0.safetensors"
+    
+    load_start = time.time()
+    
+    # Always use HuggingFace version for better compatibility
+    print("📦 Loading SDXL model from Hugging Face...")
+    pipe = StableDiffusionXLPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,  # Use float32 for Apple Silicon
+        use_safetensors=True
+    )
+    
+    # Move to device first, then apply optimizations
+    try:
+        pipe = pipe.to(device)
+    except NotImplementedError:
+        # Handle meta tensor issue with newer PyTorch
+        print("🔧 Using alternative device loading method...")
+        pipe.to_empty(device=device)
+        pipe = pipe.to(device)
+    
+    # Apply speed optimizations after moving to device
+    if fast_mode or steps <= 12:
+        print("⚡ Enabling speed optimizations...")
+        # Enable memory efficient attention
+        pipe.enable_attention_slicing()
+        if hasattr(pipe, 'enable_sequential_cpu_offload'):
+            pipe.enable_sequential_cpu_offload()
+    
+    # Warm up the model for faster subsequent runs
+    if not hasattr(generate_image, 'warmed_up'):
+        print("🔥 Warming up model...")
+        _ = pipe(
+            "test", 
+            width=512, 
+            height=512, 
+            num_inference_steps=1,
+            output_type="latent"
+        )
+        generate_image.warmed_up = True
+        print("✅ Model warmed up")
+    
+    load_time = time.time() - load_start
+    print(f"⏱️  Model loaded in {load_time:.1f}s")
+    
+    # Set seed if provided
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+    
+    generator = torch.Generator(device=device).manual_seed(seed)
+    
+    # Estimate generation time
+    base_time = 2.0 if steps <= 12 else 4.0 if steps <= 20 else 6.0
+    est_time = base_time * (width * height) / (512 * 512)
+    
+    print(f"🎨 Generating: {prompt}")
+    print(f"📐 Size: {width}x{height}, Steps: {steps}, CFG: {cfg_scale}, Seed: {seed}")
+    print(f"⏳ Estimated time: {est_time:.0f}s")
+    
+    # Generate image with timing
+    gen_start = time.time()
+    with torch.no_grad():
+        image = pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            num_inference_steps=steps,
+            guidance_scale=cfg_scale,
+            generator=generator
+        ).images[0]
+    
+    gen_time = time.time() - gen_start
+    
+    # Save image with metadata
+    output_path = Path(output).absolute()
+    
+    # Add generation info to filename if using presets
+    if width == 512 and steps <= 10:
+        output_path = output_path.with_stem(f"{output_path.stem}_draft")
+    elif width == 768 and steps <= 15:
+        output_path = output_path.with_stem(f"{output_path.stem}_preview")
+    elif steps >= 30:
+        output_path = output_path.with_stem(f"{output_path.stem}_quality")
+    
+    image.save(str(output_path))
+    
+    print(f"✅ Image saved to: {output_path}")
+    print(f"⏱️  Generated in {gen_time:.1f}s")
+    print(f"🌱 Seed: {seed} (use --seed {seed} to reproduce)")
+    
+    return True
+
+def print_detailed_help():
+    """Print detailed help with examples"""
+    help_text = """
+╔════════════════════════════════════════════════════════════════════╗
+║                 StableDiff - SDXL Image Generator                   ║
+║                    (Standalone - No Server Required)                ║
+╚════════════════════════════════════════════════════════════════════╝
+
+Generate stunning images with Stable Diffusion XL directly.
+
+USAGE:
+    stablediff "your prompt here" [options]
+
+OPTIONS:
+    --negative TEXT    Things to avoid in the image (default: none)
+    --steps INT        Number of denoising steps (default: 20, range: 1-50)
+    --width INT        Image width in pixels (default: 1024)
+    --height INT       Image height in pixels (default: 1024)
+    --cfg FLOAT        CFG scale - prompt adherence (default: 7.0, range: 1-20)
+    --seed INT         Seed for reproducibility (default: random)
+    --output FILE      Output filename (default: output.png)
+
+SPEED MODES (Fast → Slow):
+
+  🚀 DRAFT (fastest ~5-10s):
+    stablediff "robot warrior" --draft
+    
+  👁️  PREVIEW (fast ~10-20s):
+    stablediff "robot warrior" --preview
+    
+  📐 NORMAL (default ~30-60s):
+    stablediff "robot warrior"
+    
+  💎 QUALITY (slow ~60-90s):
+    stablediff "robot warrior" --quality
+    
+  🔥 ULTRA (slowest ~90-120s):
+    stablediff "robot warrior" --ultra
+
+WORKFLOW EXAMPLES:
+
+  1. Fast iteration:
+    stablediff "cyberpunk city" --draft
+    stablediff "cyberpunk city at night" --draft
+    stablediff "neon cyberpunk city at night" --draft
+    
+  2. Found good prompt? Get high quality:
+    stablediff "neon cyberpunk city at night" --quality --seed 12345
+
+  3. Different variations:
+    stablediff "portrait wizard" --negative "blurry" --preview
+    stablediff "portrait wizard old" --negative "blurry" --preview  
+    stablediff "portrait old wizard staff" --negative "blurry" --quality
+
+MANUAL CONTROL:
+
+  Custom settings:
+    stablediff "landscape" --width 768 --height 512 --steps 15
+
+  Reproducible results:
+    stablediff "robot" --seed 12345 --quality
+
+FEATURES:
+  ✓ No web server needed - runs directly
+  ✓ First image takes ~20 seconds to load model
+  ✓ Subsequent images are faster
+  ✓ Uses Apple Silicon Metal acceleration
+  ✓ Full SDXL quality
+
+TIPS:
+  • Higher steps (30-50) = better quality but slower
+  • CFG 7-9 = balanced results, 10+ = stronger prompt adherence
+  • Common sizes: 512x512, 768x768, 1024x1024, 768x1024, 1024x768
+  • Use negative prompts to avoid unwanted elements
+  • Use --seed for reproducible results
+"""
+    print(help_text)
+
+def main():
+    # Show detailed help if no arguments
+    if len(sys.argv) == 1:
+        print_detailed_help()
+        sys.exit(0)
+    
+    parser = argparse.ArgumentParser(
+        description='Generate images with Stable Diffusion XL',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='Run without arguments to see detailed help and examples.'
+    )
+    parser.add_argument('prompt', help='Text prompt for image generation')
+    parser.add_argument('--negative', default='', help='Negative prompt')
+    parser.add_argument('--steps', type=int, default=20, help='Number of steps (default: 20)')
+    parser.add_argument('--width', type=int, default=1024, help='Width (default: 1024)')
+    parser.add_argument('--height', type=int, default=1024, help='Height (default: 1024)')
+    parser.add_argument('--cfg', type=float, default=7.0, help='CFG scale (default: 7.0)')
+    parser.add_argument('--seed', type=int, default=None, help='Seed for reproducibility (default: random)')
+    parser.add_argument('--output', default='output.png', help='Output filename (default: output.png)')
+    
+    # Quality modes
+    parser.add_argument('--draft', action='store_true', help='Fast draft mode (512x512, 8 steps)')
+    parser.add_argument('--preview', action='store_true', help='Quick preview (768x768, 12 steps)')
+    parser.add_argument('--quality', action='store_true', help='High quality mode (1024x1024, 30 steps)')
+    parser.add_argument('--ultra', action='store_true', help='Ultra quality mode (1024x1024, 50 steps)')
+    
+    # Speed optimizations
+    parser.add_argument('--fast', action='store_true', help='Enable all speed optimizations')
+    
+    args = parser.parse_args()
+    
+    # Apply quality presets
+    if args.draft:
+        args.width = args.height = 512
+        args.steps = 8
+        args.cfg = 6.0
+        print("🚀 DRAFT MODE: Fast 512x512 preview")
+    elif args.preview:
+        args.width = args.height = 768
+        args.steps = 12
+        args.cfg = 6.5
+        print("👁️  PREVIEW MODE: Quick 768x768 preview")
+    elif args.quality:
+        args.width = args.height = 1024
+        args.steps = 30
+        args.cfg = 7.5
+        print("💎 QUALITY MODE: High-quality 1024x1024")
+    elif args.ultra:
+        args.width = args.height = 1024
+        args.steps = 50
+        args.cfg = 8.0
+        print("🔥 ULTRA MODE: Maximum quality 1024x1024")
+    
+    setup_environment()
+    
+    try:
+        if not generate_image(
+            args.prompt, 
+            args.negative, 
+            args.steps, 
+            args.width, 
+            args.height, 
+            args.cfg, 
+            args.output,
+            args.seed,
+            args.fast
+        ):
+            sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n⚠️  Generation cancelled")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
