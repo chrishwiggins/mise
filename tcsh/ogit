@@ -1,2 +1,2 @@
 #open http://github.com/`git remote -v | cut -d: -f2 | cut -d\  -f1| head -1`
-open http://github.com/`git remote -v | cut -d: -f2 | sed -e 's/[\/]*github.com\///' | awk '{print $1}' | head -1`
+open http://github.com/`git remote -v | cut -d: -f2 | sed -e 's/[\/]*github.com\///' | awk '{print $1}' | head -1 | sed 's/\.git$//'`

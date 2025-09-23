@@ -1,0 +1,60 @@
+#!/bin/bash
+# GitHub collaborators via API - FAST!
+
+# Check if gh CLI is installed
+if ! command -v gh &> /dev/null; then
+    echo "Error: GitHub CLI (gh) is required. Install with: brew install gh"
+    exit 1
+fi
+
+echo "GitHub Collaborators (from recent repos):"
+echo "=========================================="
+echo
+
+# Get list of repos you've contributed to recently
+gh api graphql -f query='
+query {
+  viewer {
+    repositories(first: 50, orderBy: {field: PUSHED_AT, direction: DESC}) {
+      nodes {
+        nameWithOwner
+        collaborators(first: 20) {
+          nodes {
+            login
+            name
+            id
+          }
+        }
+        mentionableUsers(first: 20) {
+          nodes {
+            login
+            name
+            id
+          }
+        }
+      }
+    }
+    repositoriesContributedTo(first: 30, orderBy: {field: PUSHED_AT, direction: DESC}) {
+      nodes {
+        nameWithOwner
+        mentionableUsers(first: 20) {
+          nodes {
+            login
+            name
+            id
+          }
+        }
+      }
+    }
+  }
+}' --jq '
+  [
+    .data.viewer.repositories.nodes[].collaborators.nodes[]?,
+    .data.viewer.repositories.nodes[].mentionableUsers.nodes[]?,
+    .data.viewer.repositoriesContributedTo.nodes[].mentionableUsers.nodes[]?
+  ] |
+  map(select(.login != "chrishwiggins")) |
+  unique_by(.login) |
+  .[] |
+  "• \(.name // .login) (@\(.login), ID: \(.id))"
+'
