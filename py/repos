@@ -1,0 +1,13 @@
+#!/bin/bash
+# List repositories I've pushed to recently - using events API
+
+echo "Recent GitHub repositories:"
+echo
+
+# Get recent events and filter for push events
+gh api users/chrishwiggins/events --jq '
+  .[] |
+  select(.type == "PushEvent") |
+  {repo: .repo.name, date: .created_at}' |
+  jq -s 'unique_by(.repo) | sort_by(.date) | reverse | .[:10]' |
+  jq -r '.[] | "\(.repo) (\(.date | fromdateiso8601 | strftime("%b %d")))"'
