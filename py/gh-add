@@ -1,0 +1,52 @@
+#!/bin/bash
+# Add a GitHub user as collaborator to a repository
+# Usage: gh-add [person] [repo]
+
+if [[ $# -ne 2 ]]; then
+    echo "Usage: gh-add [person] [repo]"
+    echo ""
+    echo "Available people from gfile.asc:"
+    if [[ -f ~/gd/local/prj/comms/gfile.asc ]]; then
+        while IFS=';' read -r username userid repos; do
+            if [[ -n "$username" && "$username" != *"@"* ]]; then
+                echo "  $username"
+            fi
+        done < ~/gd/local/prj/comms/gfile.asc
+    fi
+    echo ""
+    echo "Recent repositories (use 'repos' command for full list):"
+    ~/gd/local/prj/comms/repos 2>/dev/null | head -5
+    exit 1
+fi
+
+person="$1"
+repo="$2"
+
+# Check if person exists in gfile.asc
+if [[ -f ~/gd/local/prj/comms/gfile.asc ]]; then
+    found=$(grep "^$person;" ~/gd/local/prj/comms/gfile.asc)
+    if [[ -z "$found" ]]; then
+        echo "Person '$person' not found in gfile.asc"
+        echo "Available people:"
+        while IFS=';' read -r username userid repos; do
+            if [[ -n "$username" && "$username" != *"@"* ]]; then
+                echo "  $username"
+            fi
+        done < ~/gd/local/prj/comms/gfile.asc
+        exit 1
+    fi
+fi
+
+# Add collaborator using gh CLI
+echo "Adding $person as collaborator to $repo..."
+gh api repos/"$repo"/collaborators/"$person" --method PUT --field permission=push
+
+if [[ $? -eq 0 ]]; then
+    echo "Successfully added $person to $repo as collaborator"
+else
+    echo "Failed to add $person to $repo"
+    echo "Make sure:"
+    echo "  - You have admin access to the repository"
+    echo "  - The repository name is correct (format: owner/repo)"
+    echo "  - You're authenticated with gh CLI (run 'gh auth login')"
+fi
