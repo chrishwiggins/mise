@@ -53,7 +53,7 @@ query {
     .data.viewer.repositories.nodes[].mentionableUsers.nodes[]?,
     .data.viewer.repositoriesContributedTo.nodes[].mentionableUsers.nodes[]?
   ] |
-  map(select(.login != "chrishwiggins")) |
+  map(select(.login != "'$(gh api user --jq '.login')'")) |
   unique_by(.login) |
   .[] |
   "• \(.name // .login) (@\(.login), ID: \(.id))"
