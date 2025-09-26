@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Smart unzip with filename protection
+
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: sunzip <zipfile> [destination_dir]"
+    exit 1
+fi
+
+ZIPFILE=$(realpath "$1")
+DESTDIR="${2:-$(basename "$ZIPFILE" .zip)}"
+
+if [[ ! -f "$ZIPFILE" ]]; then
+    echo "Error: File not found: $ZIPFILE"
+    exit 1
+fi
+
+echo "Extracting to: $DESTDIR"
+mkdir -p "$DESTDIR"
+cd "$DESTDIR"
+
+# Extract, auto-skipping problematic files
+echo "Extracting files..."
+# Extract with auto-skip on errors (answers 'n' to continue prompts)
+(echo n; echo n; echo n) | unzip -o "$ZIPFILE" 2>&1 | grep -v "Continue?" | grep -v "replace" || true
+
+# Sanitize all extracted files/dirs
+echo "Sanitizing filenames..."
+
+# First pass: rename directories (depth-first)
+find . -depth -type d -name "*[^a-zA-Z0-9._-]*" | while IFS= read -r dir; do
+    if [[ "$dir" == "." ]]; then continue; fi
+
+    parent=$(dirname "$dir")
+    base=$(basename "$dir")
+
+    # Simple sanitization
+    newname=$(echo "$base" | sed 's/[^a-zA-Z0-9._-]/_/g' | sed 's/__*/_/g' | sed 's/^_//;s/_$//')
+
+    if [[ -n "$newname" ]] && [[ "$base" != "$newname" ]]; then
+        # Handle collisions
+        counter=1
+        finalname="$newname"
+        while [[ -e "$parent/$finalname" ]]; do
+            finalname="${newname}_${counter}"
+            ((counter++))
+        done
+
+        echo "  Dir: $base -> $finalname"
+        mv "$dir" "$parent/$finalname"
+    fi
+done
+
+# Second pass: rename files
+find . -type f -name "*[^a-zA-Z0-9._-]*" | while IFS= read -r file; do
+    dir=$(dirname "$file")
+    base=$(basename "$file")
+
+    # Get extension
+    ext=""
+    if [[ "$base" == *.* ]]; then
+        ext=".${base##*.}"
+        name_part="${base%.*}"
+    else
+        name_part="$base"
+    fi
+
+    # Sanitize name part
+    newname=$(echo "$name_part" | sed 's/[^a-zA-Z0-9._-]/_/g' | sed 's/__*/_/g' | sed 's/^_//;s/_$//')
+
+    # Truncate if too long
+    if [[ ${#newname} -gt 200 ]]; then
+        newname="${newname:0:200}"
+    fi
+
+    # Add extension back
+    [[ -n "$newname" ]] && newname="${newname}${ext}"
+
+    if [[ -n "$newname" ]] && [[ "$base" != "$newname" ]]; then
+        # Handle collisions
+        counter=1
+        finalname="$newname"
+        while [[ -e "$dir/$finalname" ]]; do
+            if [[ -n "$ext" ]]; then
+                base_part="${newname%.*}"
+                finalname="${base_part}_${counter}${ext}"
+            else
+                finalname="${newname}_${counter}"
+            fi
+            ((counter++))
+        done
+
+        echo "  File: $(echo "$base" | cut -c1-50)... -> $finalname"
+        mv "$file" "$dir/$finalname"
+    fi
+done
+
+# Count results
+FILE_COUNT=$(find . -type f | wc -l | tr -d ' ')
+echo "Done! Extracted $FILE_COUNT files with sanitized names"
