@@ -541,3 +541,4 @@ alias gitlog "echo 'write a human-readable commit message of sufficient detail t
 alias gitpush "echo 'push to github with a human-readable commit message of sufficient detail that future developers will understand what was changed and updated and the current state of the repo' | pbcopy"
 #alias claudepaste 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile && rm -f $tmpfile'¶
 alias pbclaude 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile'¶
+alias liar 'date >> ~/youreabsolutelyright.txt; pbpaste >> ~/youreabsolutelyright.txt; echo "====" >> ~/youreabsolutelyright.txt'
