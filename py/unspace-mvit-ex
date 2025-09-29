@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+import os
+import re
+import argparse
+
+# Regex patterns for normalization
+BRACKET_PATTERN = re.compile(r"\[[^]]*\]")
+PUNCT_PATTERN = re.compile(r"[,\s\-\[\]\(\)'\"]+")
+
+
+def normalize_name(path):
+    """Normalize a filename by removing bracketed content, replacing punctuation/whitespace
+    with underscores, collapsing multiple underscores, trimming leading/trailing underscores,
+    and removing underscore before extension."""
+    dirpath, basename = os.path.split(path)
+    root, ext = os.path.splitext(basename)
+    # Remove all bracketed segments
+    root = BRACKET_PATTERN.sub("", root)
+    # Replace punctuation and whitespace with underscore
+    root = PUNCT_PATTERN.sub("_", root)
+    # Collapse multiple underscores
+    root = re.sub(r"_+", "_", root)
+    # Trim leading/trailing underscores
+    root = root.strip("_")
+    # Combine and return new path
+    return os.path.join(dirpath, f"{root}{ext}")
+
+
+def collect_directories(root_dir):
+    """Collect all directories in depth-first order (deepest first)"""
+    all_dirs = []
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        for dirname in dirnames:
+            full_path = os.path.join(dirpath, dirname)
+            # Calculate depth for sorting (deepest first)
+            depth = full_path.count(os.sep)
+            all_dirs.append((depth, full_path))
+
+    # Sort by depth descending (deepest directories first)
+    all_dirs.sort(key=lambda x: x[0], reverse=True)
+    return [path for depth, path in all_dirs]
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Normalize filenames and directory names by removing bracketed IDs and cleaning punctuation."
+    )
+    parser.add_argument(
+        "directory",
+        nargs="?",
+        default=".",
+        help="Directory to process (default: current directory)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be renamed without making changes",
+    )
+    parser.add_argument(
+        "--files-only",
+        action="store_true",
+        help="Only process files, not directories (original behavior)",
+    )
+    parser.add_argument(
+        "--dirs-only",
+        action="store_true",
+        help="Only process directories, not files",
+    )
+    args = parser.parse_args()
+
+    # Process directories first (if requested)
+    if not args.files_only:
+        print("Processing directories...")
+        directories = collect_directories(args.directory)
+        for old_path in directories:
+            new_path = normalize_name(old_path)
+            if new_path != old_path:
+                print(f"Renaming dir: {old_path} -> {new_path}")
+                if not args.dry_run:
+                    try:
+                        os.rename(old_path, new_path)
+                    except OSError as e:
+                        print(f"Error renaming {old_path}: {e}")
+
+    # Process files (if requested)
+    if not args.dirs_only:
+        print("Processing files...")
+        # Re-walk since directory structure may have changed
+        for dirpath, dirnames, filenames in os.walk(args.directory):
+            for filename in filenames:
+                old_path = os.path.join(dirpath, filename)
+                new_path = normalize_name(old_path)
+                if new_path != old_path:
+                    print(f"Renaming file: {old_path} -> {new_path}")
+                    if not args.dry_run:
+                        try:
+                            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+                            os.rename(old_path, new_path)
+                        except OSError as e:
+                            print(f"Error renaming {old_path}: {e}")
+
+
+if __name__ == "__main__":
+    main()
