@@ -6,4 +6,4 @@ echo
 
 # Get repositories sorted by push date
 gh repo list chrishwiggins --limit 20 --json name,pushedAt |
-  jq -r 'sort_by(.pushedAt) | reverse | .[] | "\(.name) (\(.pushedAt | fromdateiso8601 | strftime("%b %d")))"'
+  jq -r 'sort_by(.pushedAt) | reverse | .[] | "\(.name) (\(.pushedAt | fromdateiso8601 | strftime("%b %d"))) - https://github.com/chrishwiggins/\(.name)"'
