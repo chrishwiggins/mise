@@ -1,19 +1,26 @@
 #!/bin/bash
 
-# Set a default URL to about:blank if no URL is provided, or use the provided URL
+# Usage: chrome-profile-open [profile_number] [url]
+# Opens Chrome with specified profile (0 or empty = Default, N = Profile N)
+
+# Parse arguments
+PROFILE_NUM="${1:-0}"
 URL="${2:-about:blank}"
 
-# Determine the profile directory based on the first argument
-if [ $# -eq 0 ]; then
-    # No arguments provided, use the Default profile
-    PROFILE_DIRECTORY="Default"
-elif [ "$1" -eq 0 ]; then
-    # First argument is 0, use the Default profile
+# Determine profile directory
+if [[ "$PROFILE_NUM" == "0" ]] || [[ -z "$PROFILE_NUM" ]]; then
     PROFILE_DIRECTORY="Default"
 else
-    # Use the provided profile number
-    PROFILE_DIRECTORY="Profile $1"
+    PROFILE_DIRECTORY="Profile ${PROFILE_NUM}"
 fi
 
-# Execute the command with the determined profile and URL
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --profile-directory="$PROFILE_DIRECTORY" "$URL"
+# Setup logging
+LOG_DIR="/tmp/chrome-log"
+mkdir -p "$LOG_DIR"
+
+# Launch Chrome in background
+exec /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+    --profile-directory="$PROFILE_DIRECTORY" \
+    "$URL" \
+    2>"${LOG_DIR}/$$" &
+
