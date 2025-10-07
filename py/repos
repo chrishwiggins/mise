@@ -4,6 +4,18 @@
 echo "Recent GitHub repositories:"
 echo
 
+# Set limit based on command line argument
+if [ $# -eq 0 ]; then
+    # No arguments provided, default to 20
+    LIMIT="--limit 20"
+elif [ "$1" -eq 0 ] 2>/dev/null; then
+    # Argument is 0, no limit
+    LIMIT=""
+else
+    # Use provided argument as limit
+    LIMIT="--limit $1"
+fi
+
 # Get repositories sorted by push date
-gh repo list chrishwiggins --limit 20 --json name,pushedAt |
-  jq -r 'sort_by(.pushedAt) | reverse | .[] | "\(.name) (\(.pushedAt | fromdateiso8601 | strftime("%b %d"))) - https://github.com/chrishwiggins/\(.name)"'
+gh repo list chrishwiggins $LIMIT --json name,pushedAt |
+  jq -r 'sort_by(.pushedAt) | reverse | .[] | "\(.name) (\(.pushedAt | fromdateiso8601 | strftime("%Y-%m-%d"))) - https://github.com/chrishwiggins/\(.name)"'
