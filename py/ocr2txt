@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""
+OCR cleanup script for academic documents.
+
+This script processes OCR output files to fix common errors and formatting issues
+that occur when scanning academic papers and books. It handles:
+- Removal of repeated headers, footers, and page numbers
+- Rejoining hyphenated words split across lines
+- Reconstructing paragraphs broken by line wrapping
+- Fixing common character substitution errors
+- Extracting references into separate files
+
+Author: Generated with Claude Code
+Date: 2025-10-11
+Version: 1.0
+"""
+
+import re
+import sys
+import argparse
+from pathlib import Path
+
+
+def clean_ocr_text(text):
+    """
+    Clean OCR text by fixing common issues found in academic documents.
+
+    Args:
+        text (str): Raw OCR text to be cleaned
+
+    Returns:
+        str: Cleaned text with OCR errors fixed
+
+    This function performs the following cleanup operations in order:
+    1. Removes repeated chapter titles and page headers/footers
+    2. Fixes hyphenated words split across line breaks
+    3. Reconstructs paragraphs broken by line wrapping
+    4. Corrects common OCR character substitution errors
+    5. Cleans up excessive whitespace and formatting artifacts
+    """
+
+    # 1. Remove repeated chapter titles and page numbers
+    # These patterns match common academic document headers that get repeated
+    # Pattern: "CHAPTER |" - often appears at top of pages
+    text = re.sub(r'^CHAPTER\s*\|\s*$', '', text, flags=re.MULTILINE)
+
+    # Remove book title + page numbers (specific to this document type)
+    text = re.sub(r'^\d+\s+Digital Platforms and Algorithmic Subjectivities\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^The Californian Ideology Revisited\s+\d+\s*$', '', text, flags=re.MULTILINE)
+
+    # Remove standalone page numbers at line starts
+    text = re.sub(r'^\d+\s*$', '', text, flags=re.MULTILINE)
+
+    # 2. Fix hyphenated words split across lines
+    # OCR often breaks words with hyphens when they span line breaks
+    # Pattern: word- [newline] [whitespace] continuation
+    text = re.sub(r'-\s*\n\s*', '', text)
+
+    # 3. Fix broken paragraphs - join lines that don't end with punctuation
+    # Academic texts often have long paragraphs broken across multiple lines
+    # We need to intelligently rejoin these while preserving intentional breaks
+    lines = text.split('\n')
+    cleaned_lines = []
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Skip empty lines (preserve paragraph breaks)
+        if not line:
+            cleaned_lines.append('')
+            i += 1
+            continue
+
+        # Check if this line should be joined with the next line
+        # Conditions for joining:
+        # - Current line doesn't end with sentence-ending punctuation
+        # - Next line exists and is not empty
+        # - Next line doesn't start with uppercase (suggesting new sentence)
+        # - Next line is not just a page number
+        if (i + 1 < len(lines) and
+            not re.search(r'[.!?:]\s*$', line) and  # No sentence-ending punctuation
+            lines[i + 1].strip() and                # Next line is not empty
+            not re.match(r'^[A-Z]', lines[i + 1].strip()) and  # Next line doesn't start with capital
+            not re.match(r'^\d+\s*$', lines[i + 1].strip())):  # Next line is not just a page number
+            # Join with next line using a space
+            line += ' ' + lines[i + 1].strip()
+            i += 2  # Skip the next line since we've consumed it
+        else:
+            i += 1
+
+        cleaned_lines.append(line)
+
+    text = '\n'.join(cleaned_lines)
+
+    # 4. Fix common OCR character substitutions
+    # These are specific corrections for characters commonly misread by OCR
+    text = re.sub(r'Jiirgen', 'Jürgen', text)      # Fix German umlaut ü
+    text = re.sub(r'Séderberg', 'Söderberg', text) # Fix Swedish umlaut ö
+    text = re.sub(r'\$\.', 'S.', text)             # Fix $ misread as S
+    text = re.sub(r'21\*', '21st', text)           # Fix asterisk misread as "st"
+
+    # 5. Clean up multiple consecutive empty lines
+    # Reduce any sequence of 3+ empty lines to just 2 (paragraph break)
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+
+    # 6. Remove arrow characters from line numbers (→)
+    # OCR output often includes line numbers with arrows that need removal
+    text = re.sub(r'^\s*\d+→', '', text, flags=re.MULTILINE)
+
+    return text.strip()
+
+
+def extract_references(text):
+    """
+    Extract references section as separate content from the main text.
+
+    Args:
+        text (str): Cleaned text that may contain a references section
+
+    Returns:
+        tuple: (main_text, references) where:
+            - main_text (str): Text with references section removed
+            - references (str or None): References section if found, None otherwise
+
+    The function looks for common reference section headers like "References" or
+    "Reference" (case insensitive) and splits the document at that point.
+    """
+
+    # Look for references section (case insensitive)
+    # Matches "References" or "Reference" as a standalone section header
+    ref_match = re.search(r'\n\s*(References?)\s*\n', text, re.IGNORECASE)
+
+    if ref_match:
+        ref_start = ref_match.start()
+        main_text = text[:ref_start].strip()
+        references = text[ref_start:].strip()
+        return main_text, references
+
+    # No references section found
+    return text, None
+
+
+def process_file(input_path):
+    """
+    Process a single OCR file through the complete cleanup pipeline.
+
+    Args:
+        input_path (str or Path): Path to the input OCR file
+
+    This function:
+    1. Reads the input file with proper encoding handling
+    2. Applies all OCR cleanup transformations
+    3. Extracts references if present
+    4. Writes output files with appropriate naming
+    5. Reports results to the user
+
+    Output files:
+    - <basename>_cleaned.txt: Main text with OCR errors fixed
+    - <basename>.ref: References section (if found)
+    """
+
+    input_path = Path(input_path)
+
+    # Validate input file exists
+    if not input_path.exists():
+        print(f"Error: File {input_path} not found")
+        return
+
+    # Read input file with encoding fallback
+    # Try UTF-8 first, fall back to Latin-1 for older OCR files
+    try:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+    except UnicodeDecodeError:
+        # Try with different encoding for legacy files
+        with open(input_path, 'r', encoding='latin1') as f:
+            text = f.read()
+
+    # Apply OCR cleanup transformations
+    cleaned_text = clean_ocr_text(text)
+
+    # Extract references section for separate output
+    main_text, references = extract_references(cleaned_text)
+
+    # Generate output filenames based on input filename
+    base_name = input_path.stem
+    # Remove .ocr extension if present for cleaner output names
+    if base_name.endswith('.ocr'):
+        base_name = base_name[:-4]
+
+    output_dir = input_path.parent
+    main_output = output_dir / f"{base_name}_cleaned.txt"
+
+    # Write cleaned main text
+    with open(main_output, 'w', encoding='utf-8') as f:
+        f.write(main_text)
+
+    print(f"Cleaned text written to: {main_output}")
+
+    # Write references if found
+    if references:
+        ref_output = output_dir / f"{base_name}.ref"
+        with open(ref_output, 'w', encoding='utf-8') as f:
+            f.write(references)
+        print(f"References written to: {ref_output}")
+
+
+def main():
+    """
+    Command-line entry point for the OCR cleanup script.
+
+    Parses command-line arguments and processes the specified file.
+    """
+    parser = argparse.ArgumentParser(
+        description='Clean OCR text files by fixing common scanning errors',
+        epilog='Example: python3 ocr_cleanup.py document.ocr'
+    )
+    parser.add_argument(
+        'input_file',
+        help='Input OCR file to clean (typically .ocr or .txt extension)'
+    )
+
+    args = parser.parse_args()
+    process_file(args.input_file)
+
+
+if __name__ == '__main__':
+    main()
