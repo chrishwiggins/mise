@@ -9,7 +9,8 @@ echo $str
 #chrome-profile-open 1 'https://clio.columbia.edu/quicksearch?q='$str'&commit=Search'
 chrome-profile-open 1 'https://clio-columbia-edu.ezproxy.cul.columbia.edu/quicksearch?q='$str'&commit=Search'
 # https://clio.columbia.edu/quicksearch?q=word+%22a+phrase%22#gsc.tab=0&gsc.q=word%20%22a%20phrase%22&gsc.page=1
-chrome-profile-open 1 'https://clio.columbia.edu/quicksearch?q='$str'
+# broke as of 2025-10-11 chrome-profile-open 1 'https://clio.columbia.edu/quicksearch?q='$str'
+chrome-profile-open 1 'https://clio.columbia.edu/quicksearch?q='$str'&commit=Search#gsc.tab=0&gsc.q='$str'&gsc.page=1'
 
 
 # examples
