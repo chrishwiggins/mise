@@ -88,14 +88,19 @@ find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t | while rea
         transcript_length=$(echo "$transcript" | wc -c | tr -d ' ')
         log_message "  -> Transcript generated: ${transcript_length} characters"
 
-        # Create output filename without topic (will be renamed later)
-        output_file="${OUTPUT_DIR}/voicememo_${timestamp}.md"
+        # Get topic from transcript
+        log_message "  -> Analyzing transcript for topic..."
+        topic=$(get_topic_from_gemini "$transcript")
+        log_message "  -> Topic identified: $topic"
+
+        # Create output filename with topic
+        output_file="${OUTPUT_DIR}/${topic}_${timestamp}.md"
 
         # Write to markdown file with metadata
         {
-            echo "# Voice Memo"
+            echo "# Voice Memo: ${topic}"
             echo ""
-            echo "**Date:** $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "**Date:** $(date -r "$file_mod_time" '+%Y-%m-%d %H:%M:%S')"
             echo "**Original File:** ${file_basename}"
             echo ""
             echo "---"
@@ -118,35 +123,4 @@ done
 
 log_message "Voice memo processing completed"
 
-# Optional postprocessing: Rename files with topics
-if [ "$1" = "--rename" ]; then
-    log_message "Starting postprocessing: renaming files with topics..."
-
-    for md_file in "$OUTPUT_DIR"/voicememo_*.md; do
-        if [ -f "$md_file" ]; then
-            # Extract transcript from markdown file
-            transcript=$(sed -n '/^---$/,//p' "$md_file" | tail -n +2)
-
-            if [ -n "$transcript" ]; then
-                log_message "Analyzing $(basename "$md_file") for topic..."
-                topic=$(get_topic_from_gemini "$transcript")
-
-                # Create new filename with topic
-                timestamp=$(basename "$md_file" | sed 's/voicememo_//' | sed 's/.md$//')
-                new_filename="${OUTPUT_DIR}/${topic}_${timestamp}.md"
-
-                if [ "$md_file" != "$new_filename" ]; then
-                    mv "$md_file" "$new_filename"
-                    log_message "Renamed to: $(basename "$new_filename")"
-
-                    # Update the title in the file
-                    sed -i '' "s/# Voice Memo/# Voice Memo: ${topic}/" "$new_filename"
-                fi
-            fi
-        fi
-    done
-
-    log_message "Postprocessing completed"
-else
-    log_message "Run with --rename flag to add topic-based filenames as postprocessing step"
-fi
+log_message "All voice memos processed with topic-based filenames"
