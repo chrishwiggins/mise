@@ -19,18 +19,91 @@ log_message() {
     echo "$message"
 }
 
-# Function to get topic from Gemini
-get_topic_from_gemini() {
+# Function to get simple topic from keywords
+get_simple_topic() {
+    local transcript="$1"
+    local topic="voicememo"
+
+    # Convert to lowercase for matching
+    local lower_transcript=$(echo "$transcript" | tr '[:upper:]' '[:lower:]')
+
+    # Check for common keywords and patterns
+    if echo "$lower_transcript" | grep -q -E '\b(meeting|call|conference|discussion|talk|spoke|conversation)\b'; then
+        topic="meeting"
+    elif echo "$lower_transcript" | grep -q -E '\b(dear|recap|follow.up|followup)\b'; then
+        topic="followup"
+    elif echo "$lower_transcript" | grep -q -E '\b(grocery|shopping|store|buy)\b'; then
+        topic="shopping"
+    elif echo "$lower_transcript" | grep -q -E '\b(todo|task|reminder|remember)\b'; then
+        topic="reminder"
+    elif echo "$lower_transcript" | grep -q -E '\b(idea|thought|concept|brainstorm)\b'; then
+        topic="idea"
+    elif echo "$lower_transcript" | grep -q -E '\b(work|project|job|office)\b'; then
+        topic="work"
+    elif echo "$lower_transcript" | grep -q -E '\b(personal|family|home)\b'; then
+        topic="personal"
+    elif echo "$lower_transcript" | grep -q -E '\b(note|notes|memo)\b'; then
+        topic="note"
+    fi
+
+    echo "$topic"
+}
+
+# Function to get topic from Claude
+get_topic_from_claude() {
     local transcript="$1"
     local topic
+    local temp_file="/tmp/transcript_for_analysis_$$"
 
-    # Use Gemini to extract topic
-    topic=$(echo "$transcript" | gemini --model gemini-2.0-flash-exp prompt "Analyze this voice memo transcript and provide a single word or short phrase (max 3 words, no spaces, use underscores) that best describes the main topic. Only output the topic, nothing else: $transcript" 2>/dev/null | tr ' ' '_' | tr -cd '[:alnum:]_-')
+    # Debug: log transcript length and first few words
+    local transcript_length=$(echo "$transcript" | wc -c | tr -d ' ')
+    local first_words=$(echo "$transcript" | head -c 100)
+    echo "  -> DEBUG: Transcript length: $transcript_length chars, first 100 chars: $first_words" >> "$LOG_FILE"
 
-    # Default to "general" if Gemini fails or returns empty
-    if [ -z "$topic" ]; then
-        topic="general"
+    # Create prompt file for Claude
+    cat > "$temp_file" << 'PROMPT'
+Analyze this voice memo transcript and extract the main topic.
+
+Requirements:
+- Return ONLY 1-2 descriptive words that capture the main subject
+- Use underscores instead of spaces (e.g., meeting_notes, grocery_list)
+- Be specific and descriptive
+- Use lowercase
+- No punctuation except underscores
+- If it's about a person, use their name (e.g., john_call)
+- If it's a type of content, be specific (e.g., work_update, family_news, todo_list)
+
+Examples of good topics:
+- meeting_recap
+- grocery_list
+- work_update
+- family_call
+- idea_brainstorm
+- doctor_appointment
+- travel_plans
+
+Output only the topic, nothing else.
+
+Transcript:
+PROMPT
+
+    echo "$transcript" >> "$temp_file"
+
+    # Use Claude to analyze the transcript
+    topic=$(claude --print < "$temp_file" 2>/dev/null | head -n 1 | tr ' ' '_' | tr -cd '[:alnum:]_-' | tr '[:upper:]' '[:lower:]')
+
+    # Debug: log raw Claude output
+    echo "  -> DEBUG: Raw Claude output: '$topic'" >> "$LOG_FILE"
+
+    # Default to simple keyword extraction if Claude fails or returns empty
+    if [ -z "$topic" ] || [ ${#topic} -lt 2 ]; then
+        echo "  -> DEBUG: Claude failed, trying simple keyword extraction" >> "$LOG_FILE"
+        topic=$(get_simple_topic "$transcript")
+        echo "  -> DEBUG: Simple extraction result: '$topic'" >> "$LOG_FILE"
     fi
+
+    # Cleanup temp file
+    rm -f "$temp_file"
 
     echo "$topic"
 }
@@ -90,7 +163,7 @@ find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t | while rea
 
         # Get topic from transcript
         log_message "  -> Analyzing transcript for topic..."
-        topic=$(get_topic_from_gemini "$transcript")
+        topic=$(get_topic_from_claude "$transcript")
         log_message "  -> Topic identified: $topic"
 
         # Create output filename with topic
