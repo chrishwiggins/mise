@@ -364,7 +364,7 @@ alias toro open -a /Applications/TorBrowser.app/
 alias prand "python3 -c 'import random;print(random.randint(0,99))'"
 alias conda-nav open ~//anaconda3/Anaconda-Navigator.app
 #alias nb ~//anaconda3/bin/jupyter_mac.command
-alias nb open https://notebooklm.google.com/
+alias nb c-irl https://notebooklm.google.com/
 alias htm2pdf '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --print-to-pdf '
 alias htm2png '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --screenshot '
 alias salganik open http://www.bitbybitbook.com/en/ethics/
@@ -542,3 +542,4 @@ alias gitpush "echo 'push to github with a human-readable commit message of suff
 #alias claudepaste 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile && rm -f $tmpfile'¶
 alias pbclaude 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile'¶
 alias liar 'date >> ~/youreabsolutelyright.txt; pbpaste >> ~/youreabsolutelyright.txt; echo "====" >> ~/youreabsolutelyright.txt'
+alias nolie "echo 'no fraud, no placeholder code, no mock code, no random simulated code, only real code that works perfectly for the specified task' | pbcopy"
