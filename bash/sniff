@@ -1,0 +1,35 @@
+#!/bin/bash
+# WiFi network scanner - replacement for deprecated 'airport -s'
+# Enumerates available WiFi networks sorted by signal strength
+
+system_profiler SPAirPortDataType 2>/dev/null | \
+awk '
+BEGIN {
+    printf "%-40s %10s\n", "SSID", "RSSI"
+    print "--------------------------------------------------------------------------------"
+}
+/Other Local Wi-Fi Networks:/ { in_other=1; next }
+in_other && /^[[:space:]]*$/ { next }
+in_other && /:$/ {
+    gsub(/^[[:space:]]+/, "")
+    gsub(/:$/, "")
+    ssid=$0
+    getline
+    while ($0 ~ /^[[:space:]]/ && $0 !~ /:$/) {
+        if ($0 ~ /Signal \/ Noise:/) {
+            split($0, parts, ":")
+            signal = parts[2]
+            gsub(/^[[:space:]]+/, "", signal)
+            split(signal, sig_parts, "/")
+            sig = sig_parts[1]
+            gsub(/[[:space:]].*$/, "", sig)
+            print ssid "\t" sig
+            break
+        }
+        getline
+    }
+}
+' | sort -t$'\t' -k2 -rn | \
+while IFS=$'\t' read -r ssid signal; do
+    printf "%-40s %4s dBm\n" "$ssid" "$signal"
+done
