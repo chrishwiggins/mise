@@ -6,17 +6,53 @@ OUTPUT_DIR="$HOME/Documents/VoiceMemos"
 PROCESSED_LIST="$HOME/.voicememo_processed"
 LOG_FILE="$HOME/.voicememo_processing.log"
 
+# Handle -log flag: show directories and log, then exit
+if [[ "$1" == "-log" ]]; then
+    echo "Voicememos dir: $VOICEMEMO_DIR"
+    echo "Transcripts dir: $OUTPUT_DIR"
+    echo ""
+    if [[ -f "$LOG_FILE" ]]; then
+        tac "$LOG_FILE" | more
+    else
+        echo "No log file found at $LOG_FILE"
+    fi
+    exit 0
+fi
+
+# Handle -old flag: show archived pre-v2 log
+if [[ "$1" == "-old" ]]; then
+    if [[ -f "${LOG_FILE}.pre-v2" ]]; then
+        tac "${LOG_FILE}.pre-v2" | more
+    else
+        echo "No archived log at ${LOG_FILE}.pre-v2"
+    fi
+    exit 0
+fi
+
+# Rotate old format log if it exists and hasn't been rotated yet
+if [[ -f "$LOG_FILE" ]] && ! [[ -f "${LOG_FILE}.pre-v2" ]]; then
+    if grep -q '^\[' "$LOG_FILE"; then
+        mv "$LOG_FILE" "${LOG_FILE}.pre-v2"
+    fi
+fi
+
+# Parse command line arguments
+REVERSE_ORDER=false
+if [[ "$1" == "-r" ]]; then
+    REVERSE_ORDER=true
+fi
+
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
 # Create processed list file if it doesn't exist
 touch "$PROCESSED_LIST"
 
-# Function to log messages
+# Function to log messages (ISO 8601 format: YYYY-MM-DD-HH-MM-SS)
 log_message() {
-    local message="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-    echo "$message" >> "$LOG_FILE"
-    echo "$message"
+    local message="$(date '+%Y-%m-%d-%H-%M-%S')\t$1"
+    echo -e "$message" >> "$LOG_FILE"
+    echo -e "$message"
 }
 
 # Function to get simple topic from keywords
@@ -117,9 +153,16 @@ log_message "Output directory: $OUTPUT_DIR"
 total_files=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f | wc -l | tr -d ' ')
 log_message "Found $total_files voice memo files to check"
 
-# Find all m4a files in voice memos directory, sorted by modification time (newest first)
+# Find all m4a files in voice memos directory, sorted by modification time
+# Default: newest first (-t), with -r flag: oldest first (-tr)
 file_counter=0
-find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t | while read -r voice_file; do
+if [ "$REVERSE_ORDER" = true ]; then
+    file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -tr)
+else
+    file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t)
+fi
+
+echo "$file_list" | while read -r voice_file; do
     file_counter=$((file_counter + 1))
     # Get file basename and full path hash for tracking
     file_basename=$(basename "$voice_file")
@@ -184,8 +227,9 @@ find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t | while rea
         # Add to processed list
         echo "$file_hash" >> "$PROCESSED_LIST"
 
-        log_message "  -> Successfully saved as: $(basename "$output_file")"
-        log_message "  -> File processing complete"
+        output_size=$(ls -lh "$output_file" | awk '{print $5}')
+        word_count=$(wc -w < "$output_file" | tr -d ' ')
+        log_message "$(basename "$output_file")\tsz:${output_size}\twc:${word_count}"
 
         # Clean up temporary transcript
         rm -f "$whisper_output"
