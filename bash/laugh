@@ -1,0 +1,113 @@
+#!/bin/bash
+
+# Parse arguments: [option] [at <time>]
+option=4
+target_time=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    at)
+      shift
+      # Collect the rest as the time string
+      target_time="$*"
+      break
+      ;;
+    [1-4])
+      option=$1
+      shift
+      ;;
+    *)
+      echo "Invalid option. Please choose 1, 2, 3, or 4"
+      echo "Usage: $0 [option] [at <time>]"
+      echo "  1: Random mix of ha and hee"
+      echo "  2: Random number of repetitions"
+      echo "  3: Mix of ha, hee, ho"
+      echo "  4: Completely chaotic (default)"
+      echo ""
+      echo "Examples:"
+      echo "  $0 4"
+      echo "  $0 at 9:57:29 AM"
+      echo "  $0 2 at 10:30:00 PM"
+      exit 1
+      ;;
+  esac
+done
+
+# If a target time is specified, wait until then
+if [[ -n "$target_time" ]]; then
+  # Convert target time to epoch seconds
+  target_epoch=$(date -j -f "%I:%M:%S %p" "$target_time" +%s 2>/dev/null)
+  if [[ -z "$target_epoch" ]]; then
+    # Try 24-hour format
+    target_epoch=$(date -j -f "%H:%M:%S" "$target_time" +%s 2>/dev/null)
+  fi
+  if [[ -z "$target_epoch" ]]; then
+    echo "Could not parse time: $target_time"
+    echo "Accepted formats: '9:57:29 AM' or '09:57:29'"
+    exit 1
+  fi
+
+  now_epoch=$(date +%s)
+  wait_seconds=$((target_epoch - now_epoch))
+
+  # If time has passed today, assume tomorrow
+  if [[ $wait_seconds -lt 0 ]]; then
+    wait_seconds=$((wait_seconds + 86400))
+  fi
+
+  echo "Waiting until $target_time ($wait_seconds seconds)..."
+  sleep "$wait_seconds"
+fi
+
+case $option in
+  1)
+    echo "Option 1: Random mix of ha and hee"
+    while true; do
+      laugh=$(for i in {1..20}; do
+        if (( RANDOM % 2 )); then echo -n "ha "; else echo -n "hee "; fi
+      done)
+      say "$laugh"
+    done
+    ;;
+
+  2)
+    echo "Option 2: Random number of repetitions and random choice"
+    while true; do
+      count=$((RANDOM % 30 + 10))
+      if (( RANDOM % 2 )); then
+        say $(printf 'ha%.0s' $(seq 1 $count))
+      else
+        say $(printf 'hee%.0s' $(seq 1 $count))
+      fi
+    done
+    ;;
+
+  3)
+    echo "Option 3: Mix of ha, hee, ho with random spacing"
+    while true; do
+      laugh=""
+      for i in {1..25}; do
+        case $((RANDOM % 3)) in
+          0) laugh+="ha " ;;
+          1) laugh+="hee " ;;
+          2) laugh+="ho " ;;
+        esac
+      done
+      say "$laugh"
+    done
+    ;;
+
+  4)
+    echo "Option 4: Completely chaotic"
+    while true; do
+      sounds=("ha" "hee" "ho" "haha" "hehe")
+      laugh=""
+      count=$((RANDOM % 20 + 10))
+      for i in $(seq 1 $count); do
+        laugh+="${sounds[$RANDOM % ${#sounds[@]}]} "
+      done
+      say "$laugh"
+    done
+    ;;
+
+esac
