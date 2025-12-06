@@ -516,7 +516,8 @@ alias mute 'osascript -e "set volume output muted true"'
 alias hamlet open https://www.litcharts.com/shakescleare/shakespeare-translations/hamlet/act-1-scene-1
 alias newer 'find . -type f -newermt "\!:1"'
 alias yt-xcript yt-dlp --write-auto-sub --skip-download
-alias yt2mp4 "yt-dlp -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' "
+alias yt-mp3 'yt-dlp -x --audio-format mp3 -o "youtube_audio.%(ext)s"'
+alias yt-mp4 "yt-dlp -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' "
 #alias sniff "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s"
 alias plan "echo 'dream in years; plan in months; evaluate in weeks; ship daily'"
 alias nato "echo 'Alfa|Bravo|Charlie|Delta|Echo|Foxtrot|Golf|Hotel|India|Juliett|Kilo|Lima|Mike|November|Oscar|Papa|Quebec|Romeo|Sierra|Tango|Uniform|Victor|Whiskey|Xray|Yankee|Zulu'|tr '|' '\n'"

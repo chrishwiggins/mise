@@ -1,21 +1,35 @@
 #!/bin/bash
 # List repositories I've pushed to recently - using repo list API
 
-echo "Recent GitHub repositories:"
+# Default GitHub user
+USER="chrishwiggins"
+LIMIT="--limit 20"
+
+# Parse arguments
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -u|--user)
+            USER="$2"
+            shift 2
+            ;;
+        0)
+            LIMIT=""
+            shift
+            ;;
+        [0-9]*)
+            LIMIT="--limit $1"
+            shift
+            ;;
+        *)
+            USER="$1"
+            shift
+            ;;
+    esac
+done
+
+echo "Recent GitHub repositories for $USER:"
 echo
 
-# Set limit based on command line argument
-if [ $# -eq 0 ]; then
-    # No arguments provided, default to 20
-    LIMIT="--limit 20"
-elif [ "$1" -eq 0 ] 2>/dev/null; then
-    # Argument is 0, no limit
-    LIMIT=""
-else
-    # Use provided argument as limit
-    LIMIT="--limit $1"
-fi
-
 # Get repositories sorted by push date
-gh repo list chrishwiggins $LIMIT --json name,pushedAt |
-  jq -r 'sort_by(.pushedAt) | reverse | .[] | "\(.name) (\(.pushedAt | fromdateiso8601 | strftime("%Y-%m-%d"))) - https://github.com/chrishwiggins/\(.name)"'
+gh repo list "$USER" $LIMIT --json name,pushedAt |
+  jq -r --arg user "$USER" 'sort_by(.pushedAt) | reverse | .[] | "\(.name) (\(.pushedAt | fromdateiso8601 | strftime("%Y-%m-%d"))) - https://github.com/\($user)/\(.name)"'

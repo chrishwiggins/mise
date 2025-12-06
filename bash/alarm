@@ -1,0 +1,81 @@
+#!/bin/bash
+
+# Usage: alarm <message> at <time>
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: $0 <message> at <time>"
+  echo "Examples:"
+  echo "  $0 aya leave at 9:15 am"
+  echo "  $0 time for coffee at 14:30"
+  exit 0
+fi
+
+# Find "at" in arguments and split message from time
+message=""
+target_time=""
+found_at=false
+
+for arg in "$@"; do
+  if [[ "$arg" == "at" && "$found_at" == false ]]; then
+    found_at=true
+  elif [[ "$found_at" == false ]]; then
+    message+="$arg "
+  else
+    target_time+="$arg "
+  fi
+done
+
+# Trim trailing spaces
+message="${message% }"
+target_time="${target_time% }"
+
+if [[ -z "$message" ]]; then
+  echo "Error: No message specified"
+  exit 1
+fi
+
+if [[ -z "$target_time" ]]; then
+  echo "Error: No time specified (use 'at <time>')"
+  exit 1
+fi
+
+# Normalize time: uppercase AM/PM
+target_time_upper=$(echo "$target_time" | tr '[:lower:]' '[:upper:]')
+
+# Try various time formats
+target_epoch=""
+for fmt in "%I:%M:%S %p" "%I:%M %p" "%I %p" "%H:%M:%S" "%H:%M"; do
+  target_epoch=$(date -j -f "$fmt" "$target_time_upper" +%s 2>/dev/null)
+  [[ -n "$target_epoch" ]] && break
+done
+
+if [[ -z "$target_epoch" ]]; then
+  echo "Could not parse time: $target_time"
+  echo "Accepted formats: '3 pm', '9:15 am', '9:15:30 AM', '14:30', '14:30:00'"
+  exit 1
+fi
+
+now_epoch=$(date +%s)
+wait_seconds=$((target_epoch - now_epoch))
+
+# If time has passed today, assume tomorrow
+if [[ $wait_seconds -lt 0 ]]; then
+  wait_seconds=$((wait_seconds + 86400))
+fi
+
+echo "Alarm set: \"$message\" at $target_time ($wait_seconds seconds from now)"
+echo "Press any key to dismiss when it goes off."
+sleep "$wait_seconds"
+
+echo "ALARM: $message (press any key to stop)"
+while true; do
+  say "$message" &
+  say_pid=$!
+  if read -t 1 -n 1 -s; then
+    kill $say_pid 2>/dev/null
+    wait $say_pid 2>/dev/null
+    break
+  fi
+  wait $say_pid 2>/dev/null
+done
+echo "Alarm dismissed."
