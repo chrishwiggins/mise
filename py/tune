@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Guitar tuner - plays standard tuning reference tones."""
+
+import subprocess
+import sys
+
+# Standard tuning frequencies (Hz) - one octave up
+TUNING = [
+    ("E3", 164.81),
+    ("A3", 220.00),
+    ("D4", 293.66),
+    ("G4", 392.00),
+    ("B4", 493.88),
+    ("E5", 659.26),
+]
+
+def play_tone(freq, duration=3):
+    """Play a tone using sox (install with: brew install sox)."""
+    try:
+        subprocess.run(
+            ["play", "-n", "synth", str(duration), "sine", str(freq)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        print("Error: 'sox' not installed. Run: brew install sox")
+        sys.exit(1)
+
+def main():
+    # If no arguments, just play all strings once and exit
+    if len(sys.argv) == 1:
+        for note, freq in reversed(TUNING):
+            print(f"{note}...")
+            play_tone(freq, 1)
+        return
+
+    print("Guitar Tuner - Standard Tuning (EADGBE)")
+    print("-" * 40)
+
+    for i, (note, freq) in enumerate(TUNING, 1):
+        print(f"String {7-i}: {note} ({freq:.2f} Hz)")
+
+    print("\nPress Enter to play each string, 'q' to quit, or 'a' for all.")
+
+    while True:
+        choice = input("\nString (1-6), 'a' for all, 'q' to quit: ").strip().lower()
+
+        if choice == 'q':
+            break
+        elif choice == 'a':
+            for note, freq in reversed(TUNING):
+                print(f"Playing {note}...")
+                play_tone(freq, 2)
+        elif choice in "123456" and len(choice) == 1:
+            idx = 6 - int(choice)
+            note, freq = TUNING[idx]
+            print(f"Playing {note}...")
+            play_tone(freq, 3)
+        else:
+            print("Invalid input.")
+
+if __name__ == "__main__":
+    main()
