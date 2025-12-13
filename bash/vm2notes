@@ -1,0 +1,132 @@
+#!/bin/bash
+
+# Available local models (via ollama)
+LOCAL_MODELS="qwen2.5:7b phi4 olmo3 mistral:7b llama3:8b deepseek-r1:7b"
+
+show_help() {
+    echo "Usage: vm2notes [OPTIONS] <voice_memo_file>"
+    echo "Converts a voice memo transcript to structured notes and action items"
+    echo ""
+    echo "Options:"
+    echo "  -m, --model MODEL   Use specified model (default: claude)"
+    echo "  -h, --help          Show this help message"
+    echo ""
+    echo "Available models:"
+    echo "  claude              Claude via claude-cli (default)"
+    echo ""
+    echo "  Local models (via ollama):"
+    for m in $LOCAL_MODELS; do
+        echo "    $m"
+    done
+    echo ""
+    echo "Examples:"
+    echo "  vm2notes meeting.md"
+    echo "  vm2notes -m qwen2.5:7b meeting.md"
+    echo "  vm2notes --model phi4 meeting.md"
+}
+
+# Parse arguments
+MODEL="claude"
+INPUT_FILE=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -m|--model)
+            MODEL="$2"
+            shift 2
+            ;;
+        -*)
+            echo "Error: Unknown option $1"
+            show_help
+            exit 1
+            ;;
+        *)
+            INPUT_FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+# Check if a file was provided
+if [ -z "$INPUT_FILE" ]; then
+    echo "Error: No input file specified"
+    show_help
+    exit 1
+fi
+
+# Check if the file exists
+if [ ! -f "$INPUT_FILE" ]; then
+    echo "Error: File '$INPUT_FILE' not found"
+    exit 1
+fi
+
+# Get the base filename without extension for the output
+basename=$(basename "$INPUT_FILE" .md)
+dirname=$(dirname "$INPUT_FILE")
+output_file="${dirname}/${basename}_notes.md"
+
+# Create a temporary file with the transcript and prompt
+tmpfile=$(mktemp)
+cat > "$tmpfile" << 'PROMPT'
+You are tasked with converting a raw voice memo transcript into structured meeting notes. The transcript may contain transcription errors, repetitions, filler words, and incomplete sentences. Your job is to extract the meaningful content and organize it clearly.
+
+Follow these requirements strictly:
+1. NO EMOJIS - Do not use any emojis
+2. Create clean, professional markdown output
+3. Handle transcription artifacts gracefully (repeated phrases, misheard words, etc.)
+4. Infer meaning from context when transcription is unclear
+
+Create a markdown document with the following sections:
+
+## Summary
+A 2-3 sentence overview of what the meeting/memo was about.
+
+## Key Points
+Bullet points of the main topics discussed, decisions made, and important information shared.
+
+## Action Items
+A list of specific action items mentioned, formatted as:
+- [ ] Action item description (Owner if mentioned)
+
+If no clear action items were discussed, note "No explicit action items identified."
+
+## Participants
+List any people mentioned by name, if identifiable from the transcript.
+
+## Open Questions
+Any unresolved questions or topics that need follow-up.
+
+## Raw Notes
+Any additional context, quotes, or details worth preserving that don't fit the above categories.
+
+---
+
+Convert the following voice memo transcript into structured notes. Output ONLY the markdown content, starting with the Summary section:
+
+PROMPT
+
+cat "$INPUT_FILE" >> "$tmpfile"
+
+# Run the model
+echo "Processing transcript with $MODEL..."
+
+if [ "$MODEL" = "claude" ]; then
+    claude --print < "$tmpfile" > "$output_file" 2>&1
+else
+    ollama run --nowordwrap "$MODEL" < "$tmpfile" 2>/dev/null > "$output_file"
+fi
+
+# Clean up temp file
+rm -f "$tmpfile"
+
+# Check if output was generated
+if [ ! -s "$output_file" ]; then
+    echo "Error: Failed to generate notes (empty output)"
+    exit 1
+fi
+
+echo "Successfully created: $output_file"
