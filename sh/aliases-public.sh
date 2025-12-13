@@ -34,10 +34,11 @@ alias please sudo
 alias cd-mise cd $mise
 
 # handy, needed below
-# alias datestr 'date +%Y-%m-%dT%H-%M-%S '
-# alias datestr 'date +%Y-%m-%dT%H:%M:%S '
-# alias datestr 'date +%Y-%m-%dT%Hh%Mm%Ss'
-alias datestr    date +%Y_%m_%dT%Hh%Mm%Ss
+#alias datestr 'date +%Y-%m-%dT%H-%M-%S '
+#alias datestr 'date +%Y-%m-%dT%H:%M:%S '
+#alias datestr 'date +%Y-%m-%dT%Hh%Mm%Ss'
+#alias datestr    date +%Y_%m_%dT%Hh%Mm%Ss
+alias datestr    date +%Y-%m-%dT%Hh%Mm%Ss
 alias datetxt 'date "+%a, %Y-%m-%d, %H:%M"'
 alias datecp "datestr|pbcopy"
 alias dstr datestr
@@ -373,10 +374,10 @@ alias undos "tr '\r' '\n'"
 alias gpgp 'git pull; git push'
 alias nuzz open http://nuzzel.com/
 alias leaf fox https://v2.overleaf.com/project
-alias txt2aiff-quick 'say -r 270 -f \!:1 -o \!:1.aiff'
-alias txt2aiff 'say -r 200 -f \!:1 -o \!:1.aiff'
-alias txt2m4a 'say -r 200 -f \!:1 -o \!:1:r.m4a'
-alias txt2m4a-quick 'say -r 270 -f \!:1 -o \!:1:r.m4a'
+alias txt2aiff-quick 'say -v Jamie -r 270 -f \!:1 -o \!:1.aiff'
+alias txt2aiff 'say -v Jamie -r 200 -f \!:1 -o \!:1.aiff'
+alias txt2m4a 'say -v Jamie -r 200 -f \!:1 -o \!:1:r.m4a'
+alias txt2m4a-quick 'say -v Jamie -r 270 -f \!:1 -o \!:1:r.m4a'
 alias remkae make
 alias remkae make
 alias weahter weather
