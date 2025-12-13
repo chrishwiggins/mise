@@ -187,8 +187,8 @@ echo "$file_list" | while read -r voice_file; do
     temp_transcript="/tmp/voicememo_${timestamp}.txt"
 
     log_message "  -> Running Whisper transcription (this may take a moment)..."
-    # Run Whisper to transcribe
-    if whisper "$voice_file" --model base --output_format txt --output_dir /tmp --language en >/dev/null 2>&1; then
+    # Run Whisper to transcribe (use venv whisper to avoid system numpy conflicts)
+    if /Users/wiggins/.local/venvs/whisper/bin/whisper "$voice_file" --model base --output_format txt --output_dir /tmp --language en >/dev/null 2>&1; then
         log_message "  -> Whisper transcription completed successfully"
     else
         log_message "  -> ERROR: Whisper transcription failed"
