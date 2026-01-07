@@ -14,17 +14,30 @@ TUNING = [
     ("E5", 659.26),
 ]
 
+
 def play_tone(freq, duration=3):
-    """Play a tone using sox (install with: brew install sox)."""
+    """Play a guitar-like tone using sox (install with: brew install sox)."""
     try:
+        # Plucked string synthesis: fundamental + harmonics with decay
+        # Guitar strings have strong odd and even harmonics with quick attack and slow decay
         subprocess.run(
-            ["play", "-n", "synth", str(duration), "sine", str(freq)],
+            [
+                "play",
+                "-n",
+                "synth",
+                str(duration),
+                "pluck",
+                str(freq),
+                "reverb",
+                "20",
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
     except FileNotFoundError:
         print("Error: 'sox' not installed. Run: brew install sox")
         sys.exit(1)
+
 
 def main():
     # If no arguments, just play all strings once and exit
@@ -45,9 +58,9 @@ def main():
     while True:
         choice = input("\nString (1-6), 'a' for all, 'q' to quit: ").strip().lower()
 
-        if choice == 'q':
+        if choice == "q":
             break
-        elif choice == 'a':
+        elif choice == "a":
             for note, freq in reversed(TUNING):
                 print(f"Playing {note}...")
                 play_tone(freq, 2)
@@ -58,6 +71,7 @@ def main():
             play_tone(freq, 3)
         else:
             print("Invalid input.")
+
 
 if __name__ == "__main__":
     main()

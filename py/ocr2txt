@@ -42,24 +42,31 @@ def clean_ocr_text(text):
     # 1. Remove repeated chapter titles and page numbers
     # These patterns match common academic document headers that get repeated
     # Pattern: "CHAPTER |" - often appears at top of pages
-    text = re.sub(r'^CHAPTER\s*\|\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r"^CHAPTER\s*\|\s*$", "", text, flags=re.MULTILINE)
 
     # Remove book title + page numbers (specific to this document type)
-    text = re.sub(r'^\d+\s+Digital Platforms and Algorithmic Subjectivities\s*$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^The Californian Ideology Revisited\s+\d+\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(
+        r"^\d+\s+Digital Platforms and Algorithmic Subjectivities\s*$",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    text = re.sub(
+        r"^The Californian Ideology Revisited\s+\d+\s*$", "", text, flags=re.MULTILINE
+    )
 
     # Remove standalone page numbers at line starts
-    text = re.sub(r'^\d+\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r"^\d+\s*$", "", text, flags=re.MULTILINE)
 
     # 2. Fix hyphenated words split across lines
     # OCR often breaks words with hyphens when they span line breaks
     # Pattern: word- [newline] [whitespace] continuation
-    text = re.sub(r'-\s*\n\s*', '', text)
+    text = re.sub(r"-\s*\n\s*", "", text)
 
     # 3. Fix broken paragraphs - join lines that don't end with punctuation
     # Academic texts often have long paragraphs broken across multiple lines
     # We need to intelligently rejoin these while preserving intentional breaks
-    lines = text.split('\n')
+    lines = text.split("\n")
     cleaned_lines = []
 
     i = 0
@@ -68,7 +75,7 @@ def clean_ocr_text(text):
 
         # Skip empty lines (preserve paragraph breaks)
         if not line:
-            cleaned_lines.append('')
+            cleaned_lines.append("")
             i += 1
             continue
 
@@ -78,35 +85,39 @@ def clean_ocr_text(text):
         # - Next line exists and is not empty
         # - Next line doesn't start with uppercase (suggesting new sentence)
         # - Next line is not just a page number
-        if (i + 1 < len(lines) and
-            not re.search(r'[.!?:]\s*$', line) and  # No sentence-ending punctuation
-            lines[i + 1].strip() and                # Next line is not empty
-            not re.match(r'^[A-Z]', lines[i + 1].strip()) and  # Next line doesn't start with capital
-            not re.match(r'^\d+\s*$', lines[i + 1].strip())):  # Next line is not just a page number
+        if (
+            i + 1 < len(lines)
+            and not re.search(r"[.!?:]\s*$", line)  # No sentence-ending punctuation
+            and lines[i + 1].strip()  # Next line is not empty
+            and not re.match(
+                r"^[A-Z]", lines[i + 1].strip()
+            )  # Next line doesn't start with capital
+            and not re.match(r"^\d+\s*$", lines[i + 1].strip())
+        ):  # Next line is not just a page number
             # Join with next line using a space
-            line += ' ' + lines[i + 1].strip()
+            line += " " + lines[i + 1].strip()
             i += 2  # Skip the next line since we've consumed it
         else:
             i += 1
 
         cleaned_lines.append(line)
 
-    text = '\n'.join(cleaned_lines)
+    text = "\n".join(cleaned_lines)
 
     # 4. Fix common OCR character substitutions
     # These are specific corrections for characters commonly misread by OCR
-    text = re.sub(r'Jiirgen', 'Jürgen', text)      # Fix German umlaut ü
-    text = re.sub(r'Séderberg', 'Söderberg', text) # Fix Swedish umlaut ö
-    text = re.sub(r'\$\.', 'S.', text)             # Fix $ misread as S
-    text = re.sub(r'21\*', '21st', text)           # Fix asterisk misread as "st"
+    text = re.sub(r"Jiirgen", "Jürgen", text)  # Fix German umlaut ü
+    text = re.sub(r"Séderberg", "Söderberg", text)  # Fix Swedish umlaut ö
+    text = re.sub(r"\$\.", "S.", text)  # Fix $ misread as S
+    text = re.sub(r"21\*", "21st", text)  # Fix asterisk misread as "st"
 
     # 5. Clean up multiple consecutive empty lines
     # Reduce any sequence of 3+ empty lines to just 2 (paragraph break)
-    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
 
     # 6. Remove arrow characters from line numbers (→)
     # OCR output often includes line numbers with arrows that need removal
-    text = re.sub(r'^\s*\d+→', '', text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*\d+→", "", text, flags=re.MULTILINE)
 
     return text.strip()
 
@@ -129,7 +140,7 @@ def extract_references(text):
 
     # Look for references section (case insensitive)
     # Matches "References" or "Reference" as a standalone section header
-    ref_match = re.search(r'\n\s*(References?)\s*\n', text, re.IGNORECASE)
+    ref_match = re.search(r"\n\s*(References?)\s*\n", text, re.IGNORECASE)
 
     if ref_match:
         ref_start = ref_match.start()
@@ -170,11 +181,11 @@ def process_file(input_path):
     # Read input file with encoding fallback
     # Try UTF-8 first, fall back to Latin-1 for older OCR files
     try:
-        with open(input_path, 'r', encoding='utf-8') as f:
+        with open(input_path, "r", encoding="utf-8") as f:
             text = f.read()
     except UnicodeDecodeError:
         # Try with different encoding for legacy files
-        with open(input_path, 'r', encoding='latin1') as f:
+        with open(input_path, "r", encoding="latin1") as f:
             text = f.read()
 
     # Apply OCR cleanup transformations
@@ -186,14 +197,14 @@ def process_file(input_path):
     # Generate output filenames based on input filename
     base_name = input_path.stem
     # Remove .ocr extension if present for cleaner output names
-    if base_name.endswith('.ocr'):
+    if base_name.endswith(".ocr"):
         base_name = base_name[:-4]
 
     output_dir = input_path.parent
     main_output = output_dir / f"{base_name}_cleaned.txt"
 
     # Write cleaned main text
-    with open(main_output, 'w', encoding='utf-8') as f:
+    with open(main_output, "w", encoding="utf-8") as f:
         f.write(main_text)
 
     print(f"Cleaned text written to: {main_output}")
@@ -201,7 +212,7 @@ def process_file(input_path):
     # Write references if found
     if references:
         ref_output = output_dir / f"{base_name}.ref"
-        with open(ref_output, 'w', encoding='utf-8') as f:
+        with open(ref_output, "w", encoding="utf-8") as f:
             f.write(references)
         print(f"References written to: {ref_output}")
 
@@ -213,17 +224,16 @@ def main():
     Parses command-line arguments and processes the specified file.
     """
     parser = argparse.ArgumentParser(
-        description='Clean OCR text files by fixing common scanning errors',
-        epilog='Example: python3 ocr_cleanup.py document.ocr'
+        description="Clean OCR text files by fixing common scanning errors",
+        epilog="Example: python3 ocr_cleanup.py document.ocr",
     )
     parser.add_argument(
-        'input_file',
-        help='Input OCR file to clean (typically .ocr or .txt extension)'
+        "input_file", help="Input OCR file to clean (typically .ocr or .txt extension)"
     )
 
     args = parser.parse_args()
     process_file(args.input_file)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
