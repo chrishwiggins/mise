@@ -5,35 +5,133 @@ import sys
 import argparse
 
 zalgo_up = [
-    '\u030d', '\u030e', '\u0304', '\u0305', '\u033f', '\u0311', '\u0306', '\u0310', '\u0352',
-    '\u0357', '\u0351', '\u0307', '\u0308', '\u030a', '\u0342', '\u0343', '\u0344', '\u034a',
-    '\u034b', '\u034c', '\u0303', '\u0302', '\u030c', '\u0350', '\u0300', '\u0301', '\u030b',
-    '\u030f', '\u0312', '\u0313', '\u0314', '\u033d', '\u0309', '\u0363', '\u0364', '\u0365',
-    '\u0366', '\u0367', '\u0368', '\u0369', '\u036a', '\u036b', '\u036c', '\u036d', '\u036e',
-    '\u036f', '\u033e', '\u035b'
+    "\u030d",
+    "\u030e",
+    "\u0304",
+    "\u0305",
+    "\u033f",
+    "\u0311",
+    "\u0306",
+    "\u0310",
+    "\u0352",
+    "\u0357",
+    "\u0351",
+    "\u0307",
+    "\u0308",
+    "\u030a",
+    "\u0342",
+    "\u0343",
+    "\u0344",
+    "\u034a",
+    "\u034b",
+    "\u034c",
+    "\u0303",
+    "\u0302",
+    "\u030c",
+    "\u0350",
+    "\u0300",
+    "\u0301",
+    "\u030b",
+    "\u030f",
+    "\u0312",
+    "\u0313",
+    "\u0314",
+    "\u033d",
+    "\u0309",
+    "\u0363",
+    "\u0364",
+    "\u0365",
+    "\u0366",
+    "\u0367",
+    "\u0368",
+    "\u0369",
+    "\u036a",
+    "\u036b",
+    "\u036c",
+    "\u036d",
+    "\u036e",
+    "\u036f",
+    "\u033e",
+    "\u035b",
 ]
 
 zalgo_mid = [
-    '\u0315', '\u031b', '\u0340', '\u0341', '\u0358', '\u0321', '\u0322', '\u0327', '\u0328',
-    '\u0334', '\u0335', '\u0336', '\u034f', '\u035c', '\u035d', '\u035e', '\u035f', '\u0360',
-    '\u0362', '\u0338', '\u0337', '\u0361', '\u0489'
+    "\u0315",
+    "\u031b",
+    "\u0340",
+    "\u0341",
+    "\u0358",
+    "\u0321",
+    "\u0322",
+    "\u0327",
+    "\u0328",
+    "\u0334",
+    "\u0335",
+    "\u0336",
+    "\u034f",
+    "\u035c",
+    "\u035d",
+    "\u035e",
+    "\u035f",
+    "\u0360",
+    "\u0362",
+    "\u0338",
+    "\u0337",
+    "\u0361",
+    "\u0489",
 ]
 
 zalgo_down = [
-    '\u0316', '\u0317', '\u0318', '\u0319', '\u031c', '\u031d', '\u031e', '\u031f', '\u0320',
-    '\u0324', '\u0325', '\u0326', '\u0329', '\u032a', '\u032b', '\u032c', '\u032d', '\u032e',
-    '\u032f', '\u0330', '\u0331', '\u0332', '\u0333', '\u0339', '\u033a', '\u033b', '\u033c',
-    '\u0345', '\u0347', '\u0348', '\u0349', '\u034d', '\u034e', '\u0353', '\u0354', '\u0355',
-    '\u0356', '\u0359', '\u035a', '\u0323'
+    "\u0316",
+    "\u0317",
+    "\u0318",
+    "\u0319",
+    "\u031c",
+    "\u031d",
+    "\u031e",
+    "\u031f",
+    "\u0320",
+    "\u0324",
+    "\u0325",
+    "\u0326",
+    "\u0329",
+    "\u032a",
+    "\u032b",
+    "\u032c",
+    "\u032d",
+    "\u032e",
+    "\u032f",
+    "\u0330",
+    "\u0331",
+    "\u0332",
+    "\u0333",
+    "\u0339",
+    "\u033a",
+    "\u033b",
+    "\u033c",
+    "\u0345",
+    "\u0347",
+    "\u0348",
+    "\u0349",
+    "\u034d",
+    "\u034e",
+    "\u0353",
+    "\u0354",
+    "\u0355",
+    "\u0356",
+    "\u0359",
+    "\u035a",
+    "\u0323",
 ]
 
+
 def zalgofy(text, top=3, mid=3, bottom=3, randomize=True):
-    output = ''
-    
+    output = ""
+
     for char in text:
         output += char
-        
-        if char not in [' ', '\n', '\t']:
+
+        if char not in [" ", "\n", "\t"]:
             if randomize:
                 actual_top = random.randint(0, top)
                 actual_mid = random.randint(0, mid)
@@ -42,23 +140,24 @@ def zalgofy(text, top=3, mid=3, bottom=3, randomize=True):
                 actual_top = top
                 actual_mid = mid
                 actual_bottom = bottom
-            
+
             for _ in range(actual_top):
                 output += random.choice(zalgo_up)
-            
+
             for _ in range(actual_mid):
                 output += random.choice(zalgo_mid)
-            
+
             for _ in range(actual_bottom):
                 output += random.choice(zalgo_down)
-    
+
     return output
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate Zalgo text from the command line',
+        description="Generate Zalgo text from the command line",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
+        epilog="""
 ZONES:
   Each zone accepts a value from 0-20:
   -t/--top     : Diacritics above text (floating/ascending)
@@ -74,19 +173,58 @@ EXAMPLES:
   zalgo -X "heavy"                     # Preset: heavy (10,10,10)
   zalgo -H "HE COMES"                  # Preset: extreme (15,15,15)
   echo "piped text" | zalgo -t 5 -b 8 # Pipe input with custom levels
-        ''')
-    parser.add_argument('text', nargs='?', help='Text to zalgofy (or pipe input)')
-    parser.add_argument('-t', '--top', type=int, default=3, metavar='0-20', help='Top zone: diacritics above (default: 3)')
-    parser.add_argument('-m', '--mid', type=int, default=3, metavar='0-20', help='Middle zone: overlays/strikes (default: 3)')
-    parser.add_argument('-b', '--bottom', type=int, default=3, metavar='0-20', help='Bottom zone: diacritics below (default: 3)')
-    parser.add_argument('-a', '--all', type=int, metavar='0-20', help='Set all three zones to same level')
-    parser.add_argument('-n', '--no-random', action='store_true', help='Disable randomization (consistent corruption)')
-    parser.add_argument('-M', '--mini', action='store_true', help='Preset: minimal zalgo (1,1,1)')
-    parser.add_argument('-X', '--max', action='store_true', help='Preset: heavy chaos (10,10,10)')
-    parser.add_argument('-H', '--he-comes', action='store_true', help='Preset: HE COMES mode (15,15,15)')
-    
+        """,
+    )
+    parser.add_argument("text", nargs="?", help="Text to zalgofy (or pipe input)")
+    parser.add_argument(
+        "-t",
+        "--top",
+        type=int,
+        default=3,
+        metavar="0-20",
+        help="Top zone: diacritics above (default: 3)",
+    )
+    parser.add_argument(
+        "-m",
+        "--mid",
+        type=int,
+        default=3,
+        metavar="0-20",
+        help="Middle zone: overlays/strikes (default: 3)",
+    )
+    parser.add_argument(
+        "-b",
+        "--bottom",
+        type=int,
+        default=3,
+        metavar="0-20",
+        help="Bottom zone: diacritics below (default: 3)",
+    )
+    parser.add_argument(
+        "-a",
+        "--all",
+        type=int,
+        metavar="0-20",
+        help="Set all three zones to same level",
+    )
+    parser.add_argument(
+        "-n",
+        "--no-random",
+        action="store_true",
+        help="Disable randomization (consistent corruption)",
+    )
+    parser.add_argument(
+        "-M", "--mini", action="store_true", help="Preset: minimal zalgo (1,1,1)"
+    )
+    parser.add_argument(
+        "-X", "--max", action="store_true", help="Preset: heavy chaos (10,10,10)"
+    )
+    parser.add_argument(
+        "-H", "--he-comes", action="store_true", help="Preset: HE COMES mode (15,15,15)"
+    )
+
     args = parser.parse_args()
-    
+
     if args.mini:
         top = mid = bottom = 1
     elif args.max:
@@ -99,9 +237,9 @@ EXAMPLES:
         top = min(20, max(0, args.top))
         mid = min(20, max(0, args.mid))
         bottom = min(20, max(0, args.bottom))
-    
+
     randomize = not args.no_random
-    
+
     if args.text:
         text = args.text
     elif not sys.stdin.isatty():
@@ -109,9 +247,10 @@ EXAMPLES:
     else:
         parser.print_help()
         sys.exit(0)
-    
-    result = zalgofy(text.rstrip('\n'), top, mid, bottom, randomize)
+
+    result = zalgofy(text.rstrip("\n"), top, mid, bottom, randomize)
     print(result)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

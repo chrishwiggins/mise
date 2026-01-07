@@ -10,47 +10,55 @@ import os
 import pickle
 from pathlib import Path
 
+
 def get_cache_file():
     """Get the cache file path using XDG standards."""
-    if os.name == 'posix':
-        cache_dir = Path.home() / '.cache' / 'mise-track'
+    if os.name == "posix":
+        cache_dir = Path.home() / ".cache" / "mise-track"
     else:  # Windows
-        cache_dir = Path.home() / 'AppData' / 'Local' / 'mise-track'
+        cache_dir = Path.home() / "AppData" / "Local" / "mise-track"
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / 'data.pkl'
+    return cache_dir / "data.pkl"
+
 
 CACHE_FILE = get_cache_file()
+
 
 def load_cache():
     """Load cached data if it exists."""
     if CACHE_FILE.exists():
         try:
-            with open(CACHE_FILE, 'rb') as f:
+            with open(CACHE_FILE, "rb") as f:
                 return pickle.load(f)
         except Exception as e:
             print(f"Error loading cache: {e}")
-    return {'commits': [], 'file_counts': {}}
+    return {"commits": [], "file_counts": {}}
+
 
 def save_cache(cache):
     """Save data to cache."""
     try:
-        with open(CACHE_FILE, 'wb') as f:
+        with open(CACHE_FILE, "wb") as f:
             pickle.dump(cache, f)
     except Exception as e:
         print(f"Error saving cache: {e}")
+
 
 def check_rate_limit():
     """Check GitHub API rate limit."""
     url = "https://api.github.com/rate_limit"
     try:
         req = urllib.request.Request(url)
-        req.add_header('User-Agent', 'mise-track-script')
+        req.add_header("User-Agent", "mise-track-script")
         with urllib.request.urlopen(req) as response:
             data = json.loads(response.read())
-            return data['rate']['remaining'], datetime.fromtimestamp(data['rate']['reset'])
+            return data["rate"]["remaining"], datetime.fromtimestamp(
+                data["rate"]["reset"]
+            )
     except:
         return None, None
+
 
 def fetch_commits():
     """Fetch all commits from GitHub."""
@@ -62,7 +70,7 @@ def fetch_commits():
         url = f"https://api.github.com/repos/chrishwiggins/mise/commits?page={page}&per_page=100"
         try:
             req = urllib.request.Request(url)
-            req.add_header('User-Agent', 'mise-track-script')
+            req.add_header("User-Agent", "mise-track-script")
             with urllib.request.urlopen(req) as response:
                 commits = json.loads(response.read())
                 if not commits:
@@ -74,7 +82,9 @@ def fetch_commits():
                 page += 1
         except urllib.error.HTTPError as e:
             if e.code == 403:
-                print(f"Rate limited while fetching commits (got {len(all_commits)} so far)")
+                print(
+                    f"Rate limited while fetching commits (got {len(all_commits)} so far)"
+                )
                 break
             raise
 
@@ -89,15 +99,18 @@ def fetch_commits():
         return sampled
     return all_commits
 
+
 def fetch_file_count(sha):
     """Get file count for a specific commit."""
     url = f"https://api.github.com/repos/chrishwiggins/mise/git/trees/{sha}?recursive=1"
     try:
         req = urllib.request.Request(url)
-        req.add_header('User-Agent', 'mise-track-script')
+        req.add_header("User-Agent", "mise-track-script")
         with urllib.request.urlopen(req) as response:
             data = json.loads(response.read())
-            return len([item for item in data.get('tree', []) if item['type'] == 'blob'])
+            return len(
+                [item for item in data.get("tree", []) if item["type"] == "blob"]
+            )
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return None  # Rate limited
@@ -105,15 +118,16 @@ def fetch_file_count(sha):
     except:
         return 0
 
+
 def main():
-    if '--check' in sys.argv:
+    if "--check" in sys.argv:
         remaining, reset_dt = check_rate_limit()
         if remaining is not None:
             print(f"API calls remaining: {remaining}/60")
             print(f"Resets at: {reset_dt.strftime('%H:%M:%S')}")
         sys.exit(0)
 
-    if '--fresh' in sys.argv:
+    if "--fresh" in sys.argv:
         if CACHE_FILE.exists():
             CACHE_FILE.unlink()
             print(f"Cache cleared ({CACHE_FILE})")
@@ -122,25 +136,25 @@ def main():
     cache = load_cache()
 
     # Step 1: Get commits if we don't have them
-    if not cache.get('commits'):
+    if not cache.get("commits"):
         remaining, _ = check_rate_limit()
         if remaining and remaining < 10:
             print(f"Only {remaining} API calls left - not enough to fetch commits")
             print("Wait for rate limit reset or use --cached")
             sys.exit(1)
 
-        cache['commits'] = fetch_commits()
-        if not cache['commits']:
+        cache["commits"] = fetch_commits()
+        if not cache["commits"]:
             print("Failed to fetch commits")
             sys.exit(1)
         save_cache(cache)
         print(f"Cached {len(cache['commits'])} commits")
 
-    commits = cache['commits']
-    file_counts = cache.get('file_counts', {})
+    commits = cache["commits"]
+    file_counts = cache.get("file_counts", {})
 
     # Step 2: Identify missing data
-    missing_shas = [c['sha'] for c in commits if c['sha'] not in file_counts]
+    missing_shas = [c["sha"] for c in commits if c["sha"] not in file_counts]
 
     print(f"Analysis: {len(commits)} commits total")
     print(f"Have data for: {len(file_counts)} commits")
@@ -154,20 +168,27 @@ def main():
             print("Cannot check rate limit - proceeding cautiously")
             fetch_limit = 10
         elif remaining < 5:
-            print(f"Only {remaining} API calls left - need to wait for rate limit reset")
+            print(
+                f"Only {remaining} API calls left - need to wait for rate limit reset"
+            )
             print(f"Rate limit resets at {reset_dt.strftime('%H:%M:%S')}")
 
             # Calculate wait time
             import time
+
             wait_time = (reset_dt - datetime.now()).total_seconds() + 1
             if wait_time > 0:
-                print(f"Sleeping {wait_time:.0f} seconds ({wait_time/60:.1f} minutes) for rate limit to reset...")
+                print(
+                    f"Sleeping {wait_time:.0f} seconds ({wait_time/60:.1f} minutes) for rate limit to reset..."
+                )
                 time.sleep(wait_time)
                 # Re-check rate limit after waiting
                 remaining, reset_dt = check_rate_limit()
                 if remaining and remaining > 5:
                     fetch_limit = max(0, remaining - 3)
-                    print(f"Rate limit reset! Will fetch {min(fetch_limit, len(missing_shas))} missing data points")
+                    print(
+                        f"Rate limit reset! Will fetch {min(fetch_limit, len(missing_shas))} missing data points"
+                    )
                 else:
                     fetch_limit = 0
             else:
@@ -175,7 +196,9 @@ def main():
         else:
             # Use most of remaining calls, leave a few as buffer
             fetch_limit = max(0, remaining - 3)
-            print(f"Will attempt to fetch {min(fetch_limit, len(missing_shas))} missing data points")
+            print(
+                f"Will attempt to fetch {min(fetch_limit, len(missing_shas))} missing data points"
+            )
 
         fetched = 0
         for sha in missing_shas[:fetch_limit]:
@@ -190,16 +213,18 @@ def main():
                 print(f"  Fetched {fetched}/{min(fetch_limit, len(missing_shas))}")
 
         if fetched > 0:
-            cache['file_counts'] = file_counts
+            cache["file_counts"] = file_counts
             save_cache(cache)
             print(f"Fetched {fetched} new data points")
 
     # Step 4: Generate plot with available data
     dates, counts = [], []
     for commit in commits:
-        sha = commit['sha']
+        sha = commit["sha"]
         if sha in file_counts:
-            date = datetime.fromisoformat(commit['commit']['committer']['date'].replace('Z', '+00:00'))
+            date = datetime.fromisoformat(
+                commit["commit"]["committer"]["date"].replace("Z", "+00:00")
+            )
             dates.append(date)
             counts.append(file_counts[sha])
 
@@ -209,26 +234,32 @@ def main():
 
     # Create plot
     plt.figure(figsize=(12, 6))
-    plt.plot(dates, counts, marker='o', markersize=3, linewidth=1.5)
-    plt.title('mise Repository File Count Over Time', fontsize=14, fontweight='bold')
-    plt.xlabel('Date')
-    plt.ylabel('Number of Files')
+    plt.plot(dates, counts, marker="o", markersize=3, linewidth=1.5)
+    plt.title("mise Repository File Count Over Time", fontsize=14, fontweight="bold")
+    plt.xlabel("Date")
+    plt.ylabel("Number of Files")
     plt.grid(True, alpha=0.3)
     plt.gcf().autofmt_xdate()
 
     # Add completion info
     completion = len(file_counts) / len(commits) * 100
-    plt.text(0.02, 0.98, f'Current files: {counts[-1]}\nData: {completion:.0f}% complete',
-            transform=plt.gca().transAxes, verticalalignment='top',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    plt.text(
+        0.02,
+        0.98,
+        f"Current files: {counts[-1]}\nData: {completion:.0f}% complete",
+        transform=plt.gca().transAxes,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
+    )
 
     plt.tight_layout()
-    plt.savefig('/tmp/mise-track.png', dpi=150, bbox_inches='tight')
+    plt.savefig("/tmp/mise-track.png", dpi=150, bbox_inches="tight")
     print(f"\nPlot saved to /tmp/mise-track.png")
 
     print(f"\nStats: {len(dates)} data points, {len(missing_shas)} still missing")
     if missing_shas:
         print("Run again to fetch more data")
+
 
 if __name__ == "__main__":
     main()
