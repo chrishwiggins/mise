@@ -41,16 +41,17 @@ from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from google.auth.exceptions import GoogleAuthError
 
+
 def validate_file(file_path: str) -> str:
     """
     Validate that a file exists and is readable.
-    
+
     Args:
         file_path (str): Path to the file to validate
-        
+
     Returns:
         str: The validated file path
-        
+
     Raises:
         argparse.ArgumentTypeError: If file doesn't exist or isn't readable
     """
@@ -63,22 +64,23 @@ def validate_file(file_path: str) -> str:
         raise argparse.ArgumentTypeError(f"File '{file_path}' is not readable")
     return file_path
 
+
 def read_file_safe(file_path: str, file_type: str) -> str:
     """
     Safely read file content with error handling.
-    
+
     Args:
         file_path (str): Path to the file to read
         file_type (str): Type of file for error messages
-        
+
     Returns:
         str: Content of the file
-        
+
     Raises:
         SystemExit: If file cannot be read
     """
     try:
-        with open(file_path, 'r', encoding='utf-8') as file:
+        with open(file_path, "r", encoding="utf-8") as file:
             content = file.read().strip()
             if not content:
                 print(f"Error: {file_type} file is empty")
@@ -91,25 +93,28 @@ def read_file_safe(file_path: str, file_type: str) -> str:
         print(f"Error reading {file_type} file: {e}")
         sys.exit(1)
 
-def create_google_form(form_title: str, preamble_file: str, questions_file: str) -> None:
+
+def create_google_form(
+    form_title: str, preamble_file: str, questions_file: str
+) -> None:
     """
     Creates a Google Form with the specified title, preamble, and questions.
-    
+
     Args:
         form_title (str): Title of the Google Form
         preamble_file (str): Path to file containing form description/preamble
         questions_file (str): Path to file containing questions
-        
+
     Raises:
         SystemExit: If there's an error reading files or creating the form
     """
     try:
         # Verify credentials file exists
-        creds_path = Path('credentials.json')
+        creds_path = Path("credentials.json")
         if not creds_path.exists():
-            print("\n" + "="*60)
+            print("\n" + "=" * 60)
             print("ERROR: Missing required file: credentials.json")
-            print("="*60)
+            print("=" * 60)
             print("\nREQUIRED FILES FOR THIS SCRIPT:")
             print("  1. credentials.json - Service account credentials")
             print("  2. preamble.md     - Form description text")
@@ -120,7 +125,7 @@ def create_google_form(form_title: str, preamble_file: str, questions_file: str)
             print("  3. Enable: Google Forms API and Google Drive API")
             print("  4. Create service account & download credentials.json")
             print("  5. Place all files in same directory as this script")
-            print("="*60)
+            print("=" * 60)
             sys.exit(1)
 
         # Define required API scopes
@@ -128,7 +133,7 @@ def create_google_form(form_title: str, preamble_file: str, questions_file: str)
             "https://www.googleapis.com/auth/forms.body",
             "https://www.googleapis.com/auth/drive",
         ]
-        
+
         try:
             creds = service_account.Credentials.from_service_account_file(
                 str(creds_path), scopes=SCOPES
@@ -136,7 +141,7 @@ def create_google_form(form_title: str, preamble_file: str, questions_file: str)
         except GoogleAuthError as e:
             print(f"Error with credentials: {e}")
             sys.exit(1)
-        
+
         # Initialize API clients
         try:
             service = build("forms", "v1", credentials=creds)
@@ -144,21 +149,21 @@ def create_google_form(form_title: str, preamble_file: str, questions_file: str)
         except Exception as e:
             print(f"Error connecting to Google APIs: {e}")
             sys.exit(1)
-        
+
         # Create initial form
-        print("Creating form...", end='', flush=True)
+        print("Creating form...", end="", flush=True)
         try:
-            form = service.forms().create(
-                body={"info": {"title": form_title}}
-            ).execute()
+            form = (
+                service.forms().create(body={"info": {"title": form_title}}).execute()
+            )
             form_id = form["formId"]
             print(" done")
         except Exception as e:
             print("\nError creating form:", e)
             sys.exit(1)
-        
+
         # Read and add preamble
-        print("Adding preamble...", end='', flush=True)
+        print("Adding preamble...", end="", flush=True)
         preamble_text = read_file_safe(preamble_file, "preamble")
         description_update = {
             "requests": [
@@ -171,21 +176,23 @@ def create_google_form(form_title: str, preamble_file: str, questions_file: str)
             ]
         }
         try:
-            service.forms().batchUpdate(formId=form_id, body=description_update).execute()
+            service.forms().batchUpdate(
+                formId=form_id, body=description_update
+            ).execute()
             print(" done")
         except Exception as e:
             print("\nError adding preamble:", e)
             sys.exit(1)
-        
+
         # Read and process questions
-        print("Adding questions...", end='', flush=True)
+        print("Adding questions...", end="", flush=True)
         questions_text = read_file_safe(questions_file, "questions")
         questions = [q.strip() for q in questions_text.splitlines() if q.strip()]
-        
+
         if not questions:
             print("\nError: No valid questions found in questions file")
             sys.exit(1)
-        
+
         # Prepare and execute questions batch request
         batch_request = {"requests": []}
         for i, question_text in enumerate(questions):
@@ -205,14 +212,14 @@ def create_google_form(form_title: str, preamble_file: str, questions_file: str)
                     }
                 }
             )
-        
+
         try:
             service.forms().batchUpdate(formId=form_id, body=batch_request).execute()
             print(" done")
         except Exception as e:
             print("\nError adding questions:", e)
             sys.exit(1)
-        
+
         # Success output
         print("\nForm created successfully!")
         print(f"Number of questions added: {len(questions)}")
@@ -220,13 +227,14 @@ def create_google_form(form_title: str, preamble_file: str, questions_file: str)
         print(f"https://docs.google.com/forms/d/{form_id}/edit")
         print(f"\nShare this link with respondents:")
         print(f"https://docs.google.com/forms/d/{form_id}/viewform")
-        
+
     except KeyboardInterrupt:
         print("\nOperation cancelled by user")
         sys.exit(1)
     except Exception as e:
         print(f"Unexpected error: {e}")
         sys.exit(1)
+
 
 def main() -> None:
     """
@@ -250,29 +258,28 @@ SETUP INSTRUCTIONS:
 Examples:
   python make_google_form -t "Course Survey" -p preamble.md -q questions.md
   python make_google_form --title "Feedback Form" --preamble desc.md --questions qs.md
-        """
+        """,
     )
-    
+
+    parser.add_argument("-t", "--title", required=True, help="Title of the Google Form")
     parser.add_argument(
-        "-t", "--title",
-        required=True,
-        help="Title of the Google Form"
-    )
-    parser.add_argument(
-        "-p", "--preamble",
+        "-p",
+        "--preamble",
         required=True,
         type=validate_file,
-        help="Path to the preamble markdown file"
+        help="Path to the preamble markdown file",
     )
     parser.add_argument(
-        "-q", "--questions",
+        "-q",
+        "--questions",
         required=True,
         type=validate_file,
-        help="Path to the questions markdown file"
+        help="Path to the questions markdown file",
     )
-    
+
     args = parser.parse_args()
     create_google_form(args.title, args.preamble, args.questions)
+
 
 if __name__ == "__main__":
     main()

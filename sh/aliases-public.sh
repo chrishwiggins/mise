@@ -319,7 +319,8 @@ alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
 #alias cwnotes 'head `ls -1t $ndir/cwnote_201* | normalize` | more'
 #alias cwnotes 'head `ls -1t $ndir/cwnote_2023_*T*_*_*.md | normalize` | more'
 #alias cwnotes 'head `ls -1t $ndir/cwnote_2024_*T*_*_*.md | normalize` | more'
-alias cwnotes 'head `ls -1t $ndir/cwnote_2025_*T*_*_*.md | normalize` | more'
+#alias cwnotes 'head `ls -1t $ndir/cwnote_2025_*T*_*_*.md | normalize` | more'
+alias cwnotes 'head `ls -1t $ndir/cwnote_2026_*T*_*_*.md | normalize` | more'
 
 
 alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"

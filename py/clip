@@ -7,9 +7,11 @@ import argparse
 import numpy as np
 from datetime import datetime
 
+
 def show_examples():
     """Show usage examples for different features"""
-    print("""
+    print(
+        """
 🎨 Text-to-Image Generator with CLIP/Stable Diffusion
 
 USAGE:
@@ -53,11 +55,13 @@ OPTIONS:
   --device cpu/auto Force device (auto=detect best)
 
 TIP: CPU is slower but more reliable on Apple Silicon Macs
-""")
+"""
+    )
+
 
 def generate_image(args):
     """Generate image with given parameters"""
-    
+
     # Device selection
     if args.device == "auto":
         if torch.cuda.is_available():
@@ -69,25 +73,25 @@ def generate_image(args):
     else:
         device = args.device
         dtype = torch.float32 if device == "cpu" else torch.float16
-    
+
     print(f"🖥️  Using device: {device}")
-    
+
     # Load model
     model_id = "runwayml/stable-diffusion-v1-5"
     print("📦 Loading Stable Diffusion model...")
-    
+
     pipe = StableDiffusionPipeline.from_pretrained(
         model_id,
         torch_dtype=dtype,
         safety_checker=None,
         requires_safety_checker=False,
-        use_safetensors=True
+        use_safetensors=True,
     )
-    
+
     # Use faster scheduler
     pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
     pipe = pipe.to(device)
-    
+
     # Enable optimizations
     if device == "mps":
         pipe.enable_attention_slicing()
@@ -96,20 +100,20 @@ def generate_image(args):
             pipe.enable_xformers_memory_efficient_attention()
         except:
             pipe.enable_attention_slicing()
-    
+
     print(f"🎨 Generating: '{args.prompt}'")
     if args.negative:
         print(f"🚫 Avoiding: '{args.negative}'")
-    
+
     # Set up generation parameters
     generator = None
     if args.seed is not None:
         generator = torch.Generator(device=device).manual_seed(args.seed)
         print(f"🎲 Using seed: {args.seed}")
-    
+
     # Generate image
     start_time = datetime.now()
-    
+
     if device == "cpu":
         image = pipe(
             prompt=args.prompt,
@@ -118,7 +122,7 @@ def generate_image(args):
             guidance_scale=args.guidance,
             width=args.width,
             height=args.height,
-            generator=generator
+            generator=generator,
         ).images[0]
     else:
         with torch.autocast(device):
@@ -129,65 +133,89 @@ def generate_image(args):
                 guidance_scale=args.guidance,
                 width=args.width,
                 height=args.height,
-                generator=generator
+                generator=generator,
             ).images[0]
-    
+
     # Calculate generation time
     duration = (datetime.now() - start_time).total_seconds()
-    
+
     # Verify image quality
     img_array = np.array(image)
     if img_array.max() == img_array.min():
         print("⚠️  Warning: Image appears to be solid color - try CPU device")
-    
+
     # Save image
     if args.output:
         filename = args.output
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_prompt = "".join(c for c in args.prompt[:20] if c.isalnum() or c in (' ', '-', '_')).strip()
-        safe_prompt = safe_prompt.replace(' ', '_')
+        safe_prompt = "".join(
+            c for c in args.prompt[:20] if c.isalnum() or c in (" ", "-", "_")
+        ).strip()
+        safe_prompt = safe_prompt.replace(" ", "_")
         filename = f"{safe_prompt}_{timestamp}.png"
-    
+
     image.save(filename)
-    
+
     # Show results
     print(f"✅ Image saved: {filename}")
     print(f"⏱️  Generation time: {duration:.1f}s")
-    print(f"📊 Image stats: {args.width}x{args.height}, range: {img_array.min()}-{img_array.max()}")
-    
+    print(
+        f"📊 Image stats: {args.width}x{args.height}, range: {img_array.min()}-{img_array.max()}"
+    )
+
     return filename
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Text-to-Image Generator", add_help=False)
-    parser.add_argument("prompt", nargs="?", help="Text description of image to generate")
-    parser.add_argument("--steps", type=int, default=25, help="Number of inference steps (default: 25)")
-    parser.add_argument("--guidance", type=float, default=7.5, help="Guidance scale (default: 7.5)")
-    parser.add_argument("--width", type=int, default=512, help="Image width (default: 512)")
-    parser.add_argument("--height", type=int, default=512, help="Image height (default: 512)")
+    parser = argparse.ArgumentParser(
+        description="Text-to-Image Generator", add_help=False
+    )
+    parser.add_argument(
+        "prompt", nargs="?", help="Text description of image to generate"
+    )
+    parser.add_argument(
+        "--steps", type=int, default=25, help="Number of inference steps (default: 25)"
+    )
+    parser.add_argument(
+        "--guidance", type=float, default=7.5, help="Guidance scale (default: 7.5)"
+    )
+    parser.add_argument(
+        "--width", type=int, default=512, help="Image width (default: 512)"
+    )
+    parser.add_argument(
+        "--height", type=int, default=512, help="Image height (default: 512)"
+    )
     parser.add_argument("--seed", type=int, help="Random seed for reproducibility")
-    parser.add_argument("--negative", type=str, default="", help="Negative prompt (what to avoid)")
+    parser.add_argument(
+        "--negative", type=str, default="", help="Negative prompt (what to avoid)"
+    )
     parser.add_argument("--output", type=str, help="Output filename")
-    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda", "mps"], 
-                       help="Device to use (default: auto)")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "cuda", "mps"],
+        help="Device to use (default: auto)",
+    )
     parser.add_argument("--help", "-h", action="store_true", help="Show this help")
-    
+
     args = parser.parse_args()
-    
+
     # Show help or examples if no prompt provided
     if args.help or not args.prompt:
         show_examples()
         return
-    
+
     # Validate parameters
     if args.steps < 1 or args.steps > 100:
         print("❌ Error: Steps must be between 1-100")
         return
-    
+
     if args.width % 8 != 0 or args.height % 8 != 0:
         print("❌ Error: Width and height must be divisible by 8")
         return
-    
+
     # Generate image
     try:
         generate_image(args)
@@ -195,6 +223,7 @@ def main():
         print("\n🛑 Generation cancelled")
     except Exception as e:
         print(f"❌ Error: {e}")
+
 
 if __name__ == "__main__":
     main()

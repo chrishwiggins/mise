@@ -3,6 +3,7 @@ import re
 import sys
 from datetime import datetime, timedelta
 import argparse
+
 try:
     import airportsdata
     import pytz
@@ -12,86 +13,90 @@ except ImportError:
     sys.exit(1)
 
 # Load IATA airport codes
-AIRPORTS = airportsdata.load('IATA')
+AIRPORTS = airportsdata.load("IATA")
+
 
 def get_timezone(code: str):
     """Get timezone for an airport code"""
     airport = AIRPORTS.get(code.upper())
     if not airport:
         return None
-    return pytz.timezone(airport['tz'])
+    return pytz.timezone(airport["tz"])
+
 
 def convert_time(time_str: str, from_code: str, to_code: str, date=None) -> str:
     """Convert time from one airport timezone to another"""
     # Parse time
-    time_match = re.match(r'(\d{1,2})[.:h](\d{2})', time_str)
+    time_match = re.match(r"(\d{1,2})[.:h](\d{2})", time_str)
     if not time_match:
         return time_str
-    
+
     hour, minute = int(time_match.group(1)), int(time_match.group(2))
-    
+
     # Validate time
     if hour >= 24 or minute >= 60:
         return time_str
-    
+
     # Get timezones
     from_tz = get_timezone(from_code)
     to_tz = get_timezone(to_code)
-    
+
     if not from_tz or not to_tz:
         return time_str
-    
+
     # Create datetime object
     if date is None:
         date = datetime.now()
-    
+
     # Create naive datetime
     naive_dt = datetime(date.year, date.month, date.day, hour, minute)
-    
+
     # Localize to source timezone and convert to target
     from_dt = from_tz.localize(naive_dt)
     to_dt = from_dt.astimezone(to_tz)
-    
+
     # Handle day changes
     day_change = ""
     if to_dt.day < naive_dt.day:
         day_change = " (-1d)"
     elif to_dt.day > naive_dt.day:
         day_change = " (+1d)"
-    
+
     # Format output to match input format
-    if '.' in time_str:
+    if "." in time_str:
         return f"{to_dt.hour:02d}.{to_dt.minute:02d}{day_change}"
-    elif ':' in time_str:
+    elif ":" in time_str:
         return f"{to_dt.hour:02d}:{to_dt.minute:02d}{day_change}"
-    elif 'h' in time_str:
+    elif "h" in time_str:
         return f"{to_dt.hour:02d}h{to_dt.minute:02d}{day_change}"
     else:
         return f"{to_dt.hour:02d}.{to_dt.minute:02d}{day_change}"
 
+
 def process_text(text: str, from_code: str, to_code: str) -> str:
     """Process text and convert all found times"""
     # Regex to find times in formats: HH.MM, HH:MM, HHhMM
-    time_pattern = r'\b(\d{1,2})[.:h](\d{2})\b'
-    
+    time_pattern = r"\b(\d{1,2})[.:h](\d{2})\b"
+
     def replace_time(match):
         time_str = match.group(0)
         hour, minute = int(match.group(1)), int(match.group(2))
-        
+
         # Only convert valid 24-hour times
         if hour < 24 and minute < 60:
             converted = convert_time(time_str, from_code, to_code)
             if converted != time_str:
                 return f"{converted}"
         return time_str
-    
+
     return re.sub(time_pattern, replace_time, text)
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Convert times between airport timezones using IATA codes',
+        description="Convert times between airport timezones using IATA codes",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
+        epilog="""
 Examples:
   %(prog)s JFK LAX
     Reads from stdin, converts JFK (New York) times to LAX (Los Angeles) time
@@ -112,75 +117,88 @@ Common IATA codes:
   Europe: LHR (London), CDG (Paris), FRA (Frankfurt), AMS (Amsterdam), MAD (Madrid)
   Asia: NRT/HND (Tokyo), HKG (Hong Kong), SIN (Singapore), PEK (Beijing), ICN (Seoul)
   Other: SYD (Sydney), YYZ (Toronto), GRU (São Paulo), DXB (Dubai)
-        '''
+        """,
     )
-    
-    parser.add_argument('from_code', help='Source airport IATA code')
-    parser.add_argument('to_code', help='Target airport IATA code')
-    parser.add_argument('-s', '--search', help='Search for airport codes by city name')
-    parser.add_argument('-i', '--info', action='store_true', 
-                        help='Show timezone info for the given codes')
-    
+
+    parser.add_argument("from_code", help="Source airport IATA code")
+    parser.add_argument("to_code", help="Target airport IATA code")
+    parser.add_argument("-s", "--search", help="Search for airport codes by city name")
+    parser.add_argument(
+        "-i",
+        "--info",
+        action="store_true",
+        help="Show timezone info for the given codes",
+    )
+
     args = parser.parse_args()
-    
+
     if args.search:
         # Search for airports by city name
         search_term = args.search.lower()
         found = []
         for code, info in AIRPORTS.items():
-            if search_term in info.get('city', '').lower() or \
-               search_term in info.get('name', '').lower():
+            if (
+                search_term in info.get("city", "").lower()
+                or search_term in info.get("name", "").lower()
+            ):
                 found.append((code, info))
-        
+
         if found:
             print(f"Airports matching '{args.search}':")
             for code, info in sorted(found):
-                print(f"  {code}: {info.get('name', 'Unknown')} - {info.get('city', '')}, {info.get('country', '')}")
+                print(
+                    f"  {code}: {info.get('name', 'Unknown')} - {info.get('city', '')}, {info.get('country', '')}"
+                )
         else:
             print(f"No airports found matching '{args.search}'")
         return
-    
+
     # Validate airport codes
     from_airport = AIRPORTS.get(args.from_code.upper())
     if not from_airport:
         print(f"Error: Unknown airport code '{args.from_code}'", file=sys.stderr)
         print(f"Use '{sys.argv[0]} --search CITY' to find codes", file=sys.stderr)
         sys.exit(1)
-    
+
     to_airport = AIRPORTS.get(args.to_code.upper())
     if not to_airport:
         print(f"Error: Unknown airport code '{args.to_code}'", file=sys.stderr)
         print(f"Use '{sys.argv[0]} --search CITY' to find codes", file=sys.stderr)
         sys.exit(1)
-    
+
     if args.info:
         # Show timezone information
         from_tz = get_timezone(args.from_code)
         to_tz = get_timezone(args.to_code)
         now = datetime.now()
-        
+
         from_offset = from_tz.utcoffset(now).total_seconds() / 3600
         to_offset = to_tz.utcoffset(now).total_seconds() / 3600
-        
-        print(f"{args.from_code.upper()}: {from_airport.get('name', 'Unknown')} - {from_airport.get('city', '')}")
+
+        print(
+            f"{args.from_code.upper()}: {from_airport.get('name', 'Unknown')} - {from_airport.get('city', '')}"
+        )
         print(f"  Timezone: {from_tz.zone} (UTC{from_offset:+.0f})")
         print()
-        print(f"{args.to_code.upper()}: {to_airport.get('name', 'Unknown')} - {to_airport.get('city', '')}")
+        print(
+            f"{args.to_code.upper()}: {to_airport.get('name', 'Unknown')} - {to_airport.get('city', '')}"
+        )
         print(f"  Timezone: {to_tz.zone} (UTC{to_offset:+.0f})")
         print()
         print(f"Time difference: {to_offset - from_offset:.0f} hours")
         return
-    
+
     # Read from stdin
     try:
         text = sys.stdin.read()
         converted = process_text(text, args.from_code, args.to_code)
-        print(converted, end='')
+        print(converted, end="")
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

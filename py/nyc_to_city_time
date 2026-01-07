@@ -9,96 +9,93 @@ import argparse
 # Note: These are standard time offsets; DST adjustments are handled separately
 TIMEZONES = {
     # Americas
-    'nyc': ('America/New_York', -5, True),  # EST/EDT
-    'new york': ('America/New_York', -5, True),
-    'newyork': ('America/New_York', -5, True),
-    'boston': ('America/New_York', -5, True),
-    'miami': ('America/New_York', -5, True),
-    'chicago': ('America/Chicago', -6, True),  # CST/CDT
-    'dallas': ('America/Chicago', -6, True),
-    'houston': ('America/Chicago', -6, True),
-    'denver': ('America/Denver', -7, True),  # MST/MDT
-    'phoenix': ('America/Phoenix', -7, False),  # No DST
-    'la': ('America/Los_Angeles', -8, True),  # PST/PDT
-    'los angeles': ('America/Los_Angeles', -8, True),
-    'losangeles': ('America/Los_Angeles', -8, True),
-    'san francisco': ('America/Los_Angeles', -8, True),
-    'sanfrancisco': ('America/Los_Angeles', -8, True),
-    'seattle': ('America/Los_Angeles', -8, True),
-    'vancouver': ('America/Vancouver', -8, True),
-    'toronto': ('America/Toronto', -5, True),
-    'montreal': ('America/Toronto', -5, True),
-    'mexico city': ('America/Mexico_City', -6, True),
-    'mexicocity': ('America/Mexico_City', -6, True),
-    'sao paulo': ('America/Sao_Paulo', -3, True),
-    'saopaulo': ('America/Sao_Paulo', -3, True),
-    'buenos aires': ('America/Argentina/Buenos_Aires', -3, False),
-    'buenosaires': ('America/Argentina/Buenos_Aires', -3, False),
-    
+    "nyc": ("America/New_York", -5, True),  # EST/EDT
+    "new york": ("America/New_York", -5, True),
+    "newyork": ("America/New_York", -5, True),
+    "boston": ("America/New_York", -5, True),
+    "miami": ("America/New_York", -5, True),
+    "chicago": ("America/Chicago", -6, True),  # CST/CDT
+    "dallas": ("America/Chicago", -6, True),
+    "houston": ("America/Chicago", -6, True),
+    "denver": ("America/Denver", -7, True),  # MST/MDT
+    "phoenix": ("America/Phoenix", -7, False),  # No DST
+    "la": ("America/Los_Angeles", -8, True),  # PST/PDT
+    "los angeles": ("America/Los_Angeles", -8, True),
+    "losangeles": ("America/Los_Angeles", -8, True),
+    "san francisco": ("America/Los_Angeles", -8, True),
+    "sanfrancisco": ("America/Los_Angeles", -8, True),
+    "seattle": ("America/Los_Angeles", -8, True),
+    "vancouver": ("America/Vancouver", -8, True),
+    "toronto": ("America/Toronto", -5, True),
+    "montreal": ("America/Toronto", -5, True),
+    "mexico city": ("America/Mexico_City", -6, True),
+    "mexicocity": ("America/Mexico_City", -6, True),
+    "sao paulo": ("America/Sao_Paulo", -3, True),
+    "saopaulo": ("America/Sao_Paulo", -3, True),
+    "buenos aires": ("America/Argentina/Buenos_Aires", -3, False),
+    "buenosaires": ("America/Argentina/Buenos_Aires", -3, False),
     # Europe
-    'london': ('Europe/London', 0, True),  # GMT/BST
-    'dublin': ('Europe/Dublin', 0, True),
-    'lisbon': ('Europe/Lisbon', 0, True),
-    'paris': ('Europe/Paris', 1, True),  # CET/CEST
-    'berlin': ('Europe/Berlin', 1, True),
-    'rome': ('Europe/Rome', 1, True),
-    'madrid': ('Europe/Madrid', 1, True),
-    'barcelona': ('Europe/Madrid', 1, True),
-    'amsterdam': ('Europe/Amsterdam', 1, True),
-    'brussels': ('Europe/Brussels', 1, True),
-    'zurich': ('Europe/Zurich', 1, True),
-    'vienna': ('Europe/Vienna', 1, True),
-    'stockholm': ('Europe/Stockholm', 1, True),
-    'oslo': ('Europe/Oslo', 1, True),
-    'copenhagen': ('Europe/Copenhagen', 1, True),
-    'warsaw': ('Europe/Warsaw', 1, True),
-    'prague': ('Europe/Prague', 1, True),
-    'budapest': ('Europe/Budapest', 1, True),
-    'athens': ('Europe/Athens', 2, True),  # EET/EEST
-    'helsinki': ('Europe/Helsinki', 2, True),
-    'bucharest': ('Europe/Bucharest', 2, True),
-    'istanbul': ('Europe/Istanbul', 3, False),
-    'moscow': ('Europe/Moscow', 3, False),
-    'bilbao': ('Europe/Madrid', 1, True),
-    
+    "london": ("Europe/London", 0, True),  # GMT/BST
+    "dublin": ("Europe/Dublin", 0, True),
+    "lisbon": ("Europe/Lisbon", 0, True),
+    "paris": ("Europe/Paris", 1, True),  # CET/CEST
+    "berlin": ("Europe/Berlin", 1, True),
+    "rome": ("Europe/Rome", 1, True),
+    "madrid": ("Europe/Madrid", 1, True),
+    "barcelona": ("Europe/Madrid", 1, True),
+    "amsterdam": ("Europe/Amsterdam", 1, True),
+    "brussels": ("Europe/Brussels", 1, True),
+    "zurich": ("Europe/Zurich", 1, True),
+    "vienna": ("Europe/Vienna", 1, True),
+    "stockholm": ("Europe/Stockholm", 1, True),
+    "oslo": ("Europe/Oslo", 1, True),
+    "copenhagen": ("Europe/Copenhagen", 1, True),
+    "warsaw": ("Europe/Warsaw", 1, True),
+    "prague": ("Europe/Prague", 1, True),
+    "budapest": ("Europe/Budapest", 1, True),
+    "athens": ("Europe/Athens", 2, True),  # EET/EEST
+    "helsinki": ("Europe/Helsinki", 2, True),
+    "bucharest": ("Europe/Bucharest", 2, True),
+    "istanbul": ("Europe/Istanbul", 3, False),
+    "moscow": ("Europe/Moscow", 3, False),
+    "bilbao": ("Europe/Madrid", 1, True),
     # Asia
-    'dubai': ('Asia/Dubai', 4, False),
-    'karachi': ('Asia/Karachi', 5, False),
-    'mumbai': ('Asia/Kolkata', 5.5, False),
-    'delhi': ('Asia/Kolkata', 5.5, False),
-    'kolkata': ('Asia/Kolkata', 5.5, False),
-    'bangalore': ('Asia/Kolkata', 5.5, False),
-    'dhaka': ('Asia/Dhaka', 6, False),
-    'bangkok': ('Asia/Bangkok', 7, False),
-    'jakarta': ('Asia/Jakarta', 7, False),
-    'singapore': ('Asia/Singapore', 8, False),
-    'kuala lumpur': ('Asia/Kuala_Lumpur', 8, False),
-    'kualalumpur': ('Asia/Kuala_Lumpur', 8, False),
-    'hong kong': ('Asia/Hong_Kong', 8, False),
-    'hongkong': ('Asia/Hong_Kong', 8, False),
-    'beijing': ('Asia/Shanghai', 8, False),
-    'shanghai': ('Asia/Shanghai', 8, False),
-    'taipei': ('Asia/Taipei', 8, False),
-    'seoul': ('Asia/Seoul', 9, False),
-    'tokyo': ('Asia/Tokyo', 9, False),
-    'osaka': ('Asia/Tokyo', 9, False),
-    
+    "dubai": ("Asia/Dubai", 4, False),
+    "karachi": ("Asia/Karachi", 5, False),
+    "mumbai": ("Asia/Kolkata", 5.5, False),
+    "delhi": ("Asia/Kolkata", 5.5, False),
+    "kolkata": ("Asia/Kolkata", 5.5, False),
+    "bangalore": ("Asia/Kolkata", 5.5, False),
+    "dhaka": ("Asia/Dhaka", 6, False),
+    "bangkok": ("Asia/Bangkok", 7, False),
+    "jakarta": ("Asia/Jakarta", 7, False),
+    "singapore": ("Asia/Singapore", 8, False),
+    "kuala lumpur": ("Asia/Kuala_Lumpur", 8, False),
+    "kualalumpur": ("Asia/Kuala_Lumpur", 8, False),
+    "hong kong": ("Asia/Hong_Kong", 8, False),
+    "hongkong": ("Asia/Hong_Kong", 8, False),
+    "beijing": ("Asia/Shanghai", 8, False),
+    "shanghai": ("Asia/Shanghai", 8, False),
+    "taipei": ("Asia/Taipei", 8, False),
+    "seoul": ("Asia/Seoul", 9, False),
+    "tokyo": ("Asia/Tokyo", 9, False),
+    "osaka": ("Asia/Tokyo", 9, False),
     # Oceania
-    'sydney': ('Australia/Sydney', 10, True),  # AEST/AEDT
-    'melbourne': ('Australia/Melbourne', 10, True),
-    'brisbane': ('Australia/Brisbane', 10, False),
-    'perth': ('Australia/Perth', 8, False),
-    'auckland': ('Pacific/Auckland', 12, True),
-    'wellington': ('Pacific/Auckland', 12, True),
-    
+    "sydney": ("Australia/Sydney", 10, True),  # AEST/AEDT
+    "melbourne": ("Australia/Melbourne", 10, True),
+    "brisbane": ("Australia/Brisbane", 10, False),
+    "perth": ("Australia/Perth", 8, False),
+    "auckland": ("Pacific/Auckland", 12, True),
+    "wellington": ("Pacific/Auckland", 12, True),
     # Africa
-    'cairo': ('Africa/Cairo', 2, False),
-    'johannesburg': ('Africa/Johannesburg', 2, False),
-    'cape town': ('Africa/Johannesburg', 2, False),
-    'capetown': ('Africa/Johannesburg', 2, False),
-    'lagos': ('Africa/Lagos', 1, False),
-    'nairobi': ('Africa/Nairobi', 3, False),
+    "cairo": ("Africa/Cairo", 2, False),
+    "johannesburg": ("Africa/Johannesburg", 2, False),
+    "cape town": ("Africa/Johannesburg", 2, False),
+    "capetown": ("Africa/Johannesburg", 2, False),
+    "lagos": ("Africa/Lagos", 1, False),
+    "nairobi": ("Africa/Nairobi", 3, False),
 }
+
 
 def is_dst(date=None):
     """Simplified DST check - assumes Northern Hemisphere DST roughly March-November"""
@@ -108,87 +105,91 @@ def is_dst(date=None):
     month = date.month
     return 3 <= month <= 10
 
+
 def get_timezone_offset(city: str, date=None) -> float:
     """Get the UTC offset for a city, accounting for DST if applicable"""
     city_lower = city.lower().strip()
     if city_lower not in TIMEZONES:
         return None
-    
+
     _, base_offset, has_dst = TIMEZONES[city_lower]
-    
+
     if has_dst and is_dst(date):
         return base_offset + 1
     return base_offset
 
+
 def convert_time(time_str: str, from_city: str, to_city: str, date=None) -> str:
     """Convert time from one city to another"""
     # Parse time
-    time_match = re.match(r'(\d{1,2})[.:h](\d{2})', time_str)
+    time_match = re.match(r"(\d{1,2})[.:h](\d{2})", time_str)
     if not time_match:
         return time_str
-    
+
     hour, minute = int(time_match.group(1)), int(time_match.group(2))
-    
+
     # Validate time
     if hour >= 24 or minute >= 60:
         return time_str
-    
+
     # Get offsets
     from_offset = get_timezone_offset(from_city, date)
     to_offset = get_timezone_offset(to_city, date)
-    
+
     if from_offset is None or to_offset is None:
         return time_str
-    
+
     # Create datetime object
     if date is None:
         date = datetime.now()
     time_obj = datetime(date.year, date.month, date.day, hour, minute)
-    
+
     # Convert via UTC
     utc_time = time_obj - timedelta(hours=from_offset)
     target_time = utc_time + timedelta(hours=to_offset)
-    
+
     # Handle day changes
     day_change = ""
     if target_time.day < time_obj.day:
         day_change = " (-1d)"
     elif target_time.day > time_obj.day:
         day_change = " (+1d)"
-    
+
     # Format output to match input format
-    if '.' in time_str:
+    if "." in time_str:
         return f"{target_time.hour:02d}.{target_time.minute:02d}{day_change}"
-    elif ':' in time_str:
+    elif ":" in time_str:
         return f"{target_time.hour:02d}:{target_time.minute:02d}{day_change}"
-    elif 'h' in time_str:
+    elif "h" in time_str:
         return f"{target_time.hour:02d}h{target_time.minute:02d}{day_change}"
     else:
         return f"{target_time.hour:02d}.{target_time.minute:02d}{day_change}"
 
+
 def process_text(text: str, to_city: str, from_city: str = "nyc") -> str:
     """Process text and convert all found times"""
     # Regex to find times in formats: HH.MM, HH:MM, HHhMM
-    time_pattern = r'\b(\d{1,2})[.:h](\d{2})\b'
-    
+    time_pattern = r"\b(\d{1,2})[.:h](\d{2})\b"
+
     def replace_time(match):
         time_str = match.group(0)
         hour, minute = int(match.group(1)), int(match.group(2))
-        
+
         # Only convert valid 24-hour times
         if hour < 24 and minute < 60:
             converted = convert_time(time_str, from_city, to_city)
             if converted != time_str:
                 return f"{converted}"
         return time_str
-    
+
     return re.sub(time_pattern, replace_time, text)
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Convert times from NYC to another city timezone',
+        description="Convert times from NYC to another city timezone",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
+        epilog="""
 Examples:
   %(prog)s london
     Reads from stdin, converts NYC times to London time
@@ -210,17 +211,19 @@ Available cities:
   Asia: Dubai, Mumbai, Singapore, Hong Kong, Beijing, Tokyo, Seoul
   Oceania: Sydney, Melbourne, Auckland
   Africa: Cairo, Johannesburg, Lagos, Nairobi
-        '''
+        """,
     )
-    
-    parser.add_argument('city', help='Target city for timezone conversion')
-    parser.add_argument('-f', '--from-city', default='nyc', 
-                        help='Source city (default: NYC)')
-    parser.add_argument('-l', '--list', action='store_true',
-                        help='List all available cities')
-    
+
+    parser.add_argument("city", help="Target city for timezone conversion")
+    parser.add_argument(
+        "-f", "--from-city", default="nyc", help="Source city (default: NYC)"
+    )
+    parser.add_argument(
+        "-l", "--list", action="store_true", help="List all available cities"
+    )
+
     args = parser.parse_args()
-    
+
     if args.list:
         print("Available cities:")
         cities = sorted(set(TIMEZONES.keys()))
@@ -228,50 +231,51 @@ Available cities:
         for city in cities:
             # Simple region grouping based on offset
             tz_name, offset, _ = TIMEZONES[city]
-            if 'America' in tz_name:
-                region = 'Americas'
-            elif 'Europe' in tz_name:
-                region = 'Europe'
-            elif 'Asia' in tz_name:
-                region = 'Asia'
-            elif 'Australia' in tz_name or 'Pacific' in tz_name:
-                region = 'Oceania'
-            elif 'Africa' in tz_name:
-                region = 'Africa'
+            if "America" in tz_name:
+                region = "Americas"
+            elif "Europe" in tz_name:
+                region = "Europe"
+            elif "Asia" in tz_name:
+                region = "Asia"
+            elif "Australia" in tz_name or "Pacific" in tz_name:
+                region = "Oceania"
+            elif "Africa" in tz_name:
+                region = "Africa"
             else:
-                region = 'Other'
-            
+                region = "Other"
+
             if region not in by_region:
                 by_region[region] = []
             by_region[region].append(city)
-        
+
         for region in sorted(by_region.keys()):
             print(f"\n{region}:")
             for city in sorted(by_region[region]):
                 print(f"  {city}")
         return
-    
+
     # Validate cities
     if args.city.lower() not in TIMEZONES:
         print(f"Error: Unknown city '{args.city}'", file=sys.stderr)
         print(f"Use '{sys.argv[0]} --list' to see available cities", file=sys.stderr)
         sys.exit(1)
-    
+
     if args.from_city.lower() not in TIMEZONES:
         print(f"Error: Unknown city '{args.from_city}'", file=sys.stderr)
         print(f"Use '{sys.argv[0]} --list' to see available cities", file=sys.stderr)
         sys.exit(1)
-    
+
     # Read from stdin
     try:
         text = sys.stdin.read()
         converted = process_text(text, args.city, args.from_city)
-        print(converted, end='')
+        print(converted, end="")
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

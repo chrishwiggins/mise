@@ -1,7 +1,8 @@
 #!/opt/homebrew/bin/python3
 
 import os
-os.environ['TK_SILENCE_DEPRECATION'] = '1'
+
+os.environ["TK_SILENCE_DEPRECATION"] = "1"
 
 import sys
 import tkinter as tk
@@ -13,75 +14,79 @@ from pathlib import Path
 
 LOG_FILE = Path.home() / ".xtimer_log"
 
+
 def save_timer_log(thing, target_time, time_str):
     """Save timer info to log file"""
     log_data = {
         "thing": thing,
         "target_time": target_time.isoformat(),
         "time_str": time_str,
-        "started_at": datetime.now().isoformat()
+        "started_at": datetime.now().isoformat(),
     }
     try:
-        with open(LOG_FILE, 'w') as f:
+        with open(LOG_FILE, "w") as f:
             json.dump(log_data, f, indent=2)
     except Exception as e:
         print(f"Warning: Could not save log: {e}", file=sys.stderr)
+
 
 def load_timer_log():
     """Load last timer from log file"""
     if not LOG_FILE.exists():
         return None
     try:
-        with open(LOG_FILE, 'r') as f:
+        with open(LOG_FILE, "r") as f:
             return json.load(f)
     except Exception as e:
         print(f"Warning: Could not load log: {e}", file=sys.stderr)
         return None
 
+
 def parse_time(time_str):
     """Parse time string in various formats"""
     # Try HH:MM format
-    if ':' in time_str:
-        parts = time_str.split(':')
+    if ":" in time_str:
+        parts = time_str.split(":")
         if len(parts) == 2:
             hours, minutes = map(int, parts)
             target = datetime.now().replace(hour=hours, minute=minutes, second=0)
             if target < datetime.now():
                 target += timedelta(days=1)
             return target
-    
+
     # Try duration formats (5m, 1h, 30s, etc)
-    duration_match = re.match(r'^(\d+)([hms])$', time_str.lower())
+    duration_match = re.match(r"^(\d+)([hms])$", time_str.lower())
     if duration_match:
         value, unit = duration_match.groups()
         value = int(value)
-        if unit == 'h':
+        if unit == "h":
             return datetime.now() + timedelta(hours=value)
-        elif unit == 'm':
+        elif unit == "m":
             return datetime.now() + timedelta(minutes=value)
-        elif unit == 's':
+        elif unit == "s":
             return datetime.now() + timedelta(seconds=value)
-    
+
     # Try plain number as minutes
     try:
         minutes = int(time_str)
         return datetime.now() + timedelta(minutes=minutes)
     except ValueError:
         pass
-    
+
     raise ValueError(f"Cannot parse time: {time_str}")
+
 
 class RetroTimer:
     def __init__(self, thing, target_time):
         self.thing = thing
         self.target_time = target_time
         self.floating = False
-        
+
         # Create window
         self.root = tk.Tk()
         self.root.title("TIMER")
         self.root.resizable(False, False)
-        
+
         # Retro colors - SunView/OpenLook style
         self.bg_color = "#ffffff"  # White background like SunView
         self.fg_color = "#000000"  # Black text
@@ -89,34 +94,34 @@ class RetroTimer:
         self.border_color = "#000000"  # Black border for crisp look
         self.shadow_color = "#808080"  # Gray shadow
         self.hover_bg = "#f0f0f0"  # Very light gray for hover
-        
+
         # Configure window style
         self.root.configure(bg=self.bg_color)
         self.root.overrideredirect(False)  # Keep window decorations initially
-        
+
         # 3D border effect with highlight and shadow
         self.outer_frame = tk.Frame(self.root, bg=self.bg_color, bd=0)
         self.outer_frame.pack(padx=3, pady=3)
-        
+
         # Top and left highlight
         self.top_border = tk.Frame(self.outer_frame, bg=self.border_color, height=2)
         self.top_border.pack(fill=tk.X)
-        
+
         self.mid_frame = tk.Frame(self.outer_frame, bg=self.bg_color)
         self.mid_frame.pack(fill=tk.BOTH, expand=True)
-        
+
         self.left_border = tk.Frame(self.mid_frame, bg=self.border_color, width=2)
         self.left_border.pack(side=tk.LEFT, fill=tk.Y)
-        
+
         self.main_frame = tk.Frame(self.mid_frame, bg=self.bg_color, bd=0)
         self.main_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
+
         self.right_border = tk.Frame(self.mid_frame, bg=self.shadow_color, width=2)
         self.right_border.pack(side=tk.RIGHT, fill=tk.Y)
-        
+
         self.bottom_border = tk.Frame(self.outer_frame, bg=self.shadow_color, height=2)
         self.bottom_border.pack(fill=tk.X)
-        
+
         # Thing label (what we're counting down to)
         self.thing_label = tk.Label(
             self.main_frame,
@@ -125,10 +130,10 @@ class RetroTimer:
             fg=self.fg_color,
             bg=self.bg_color,
             pady=5,
-            padx=10
+            padx=10,
         )
         self.thing_label.pack()
-        
+
         # 3D separator with groove effect
         self.sep_frame = tk.Frame(self.main_frame, bg=self.bg_color, height=4)
         self.sep_frame.pack(fill=tk.X, padx=10, pady=2)
@@ -136,7 +141,7 @@ class RetroTimer:
         self.sep_top.pack(fill=tk.X)
         self.sep_bottom = tk.Frame(self.sep_frame, height=1, bg=self.border_color)
         self.sep_bottom.pack(fill=tk.X)
-        
+
         # Timer display - RED
         self.timer_label = tk.Label(
             self.main_frame,
@@ -145,10 +150,10 @@ class RetroTimer:
             fg=self.timer_color,
             bg=self.bg_color,
             pady=8,
-            padx=15
+            padx=15,
         )
         self.timer_label.pack()
-        
+
         # Status label
         self.status_label = tk.Label(
             self.main_frame,
@@ -156,34 +161,34 @@ class RetroTimer:
             font=("TkDefaultFont", 8),
             fg=self.fg_color,
             bg=self.bg_color,
-            pady=5
+            pady=5,
         )
         self.status_label.pack()
-        
+
         # Bind mouse events
         self.root.bind("<Enter>", self.on_mouse_enter)
         self.root.bind("<Leave>", self.on_mouse_leave)
         self.root.bind("<Button-1>", self.start_drag)
         self.root.bind("<B1-Motion>", self.on_drag)
         self.root.bind("<ButtonRelease-1>", self.stop_drag)
-        
+
         # Dragging state
         self.drag_x = 0
         self.drag_y = 0
-        
+
         # Start update loop
         self.update_timer()
-        
+
         # Set window to stay on top
-        self.root.attributes('-topmost', True)
-        
+        self.root.attributes("-topmost", True)
+
         # Position window in upper right corner
         self.root.update_idletasks()
         screen_width = self.root.winfo_screenwidth()
         x = screen_width - self.root.winfo_width() - 50
         y = 50
         self.root.geometry(f"+{x}+{y}")
-    
+
     def on_mouse_enter(self, event):
         if not self.floating:
             self.floating = True
@@ -195,28 +200,28 @@ class RetroTimer:
             self.outer_frame.configure(bg=self.hover_bg)
             self.mid_frame.configure(bg=self.hover_bg)
             # Keep it fully opaque - more authentic
-            self.root.attributes('-alpha', 1.0)
-    
+            self.root.attributes("-alpha", 1.0)
+
     def on_mouse_leave(self, event):
         # Keep it floating once activated
         pass
-    
+
     def start_drag(self, event):
         self.drag_x = event.x
         self.drag_y = event.y
-    
+
     def on_drag(self, event):
         x = self.root.winfo_x() + event.x - self.drag_x
         y = self.root.winfo_y() + event.y - self.drag_y
         self.root.geometry(f"+{x}+{y}")
-    
+
     def stop_drag(self, event):
         pass
-    
+
     def update_timer(self):
         now = datetime.now()
         remaining = self.target_time - now
-        
+
         if remaining.total_seconds() <= 0:
             # Timer expired
             self.timer_label.configure(text="00:00:00")
@@ -228,16 +233,16 @@ class RetroTimer:
             hours = total_seconds // 3600
             minutes = (total_seconds % 3600) // 60
             seconds = total_seconds % 60
-            
+
             time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             self.timer_label.configure(text=time_str)
-            
+
             # Keep timer red always - more authentic X11 style
             # No fancy color changes
-            
+
             # Schedule next update
             self.root.after(1000, self.update_timer)
-    
+
     def flash_alert(self):
         # Flash between normal and inverted when timer expires
         current_bg = self.timer_label.cget("bg")
@@ -258,31 +263,34 @@ class RetroTimer:
             self.main_frame.configure(bg=bg)
             self.outer_frame.configure(bg=bg)
             self.mid_frame.configure(bg=bg)
-        
+
         self.root.after(500, self.flash_alert)
-    
+
     def run(self):
         self.root.mainloop()
 
+
 def main():
     # Check for --restart flag
-    if len(sys.argv) == 2 and sys.argv[1] == '--restart':
+    if len(sys.argv) == 2 and sys.argv[1] == "--restart":
         log_data = load_timer_log()
         if log_data:
-            thing = log_data['thing']
+            thing = log_data["thing"]
             # Calculate remaining time from original target
-            original_target = datetime.fromisoformat(log_data['target_time'])
+            original_target = datetime.fromisoformat(log_data["target_time"])
             if original_target > datetime.now():
                 # Timer hasn't expired yet, use original target
                 target_time = original_target
-                print(f"Restarting timer: {thing} at {target_time.strftime('%H:%M:%S')}")
+                print(
+                    f"Restarting timer: {thing} at {target_time.strftime('%H:%M:%S')}"
+                )
             else:
                 # Timer already expired, restart with original duration if possible
-                time_str = log_data.get('time_str', '5m')
+                time_str = log_data.get("time_str", "5m")
                 target_time = parse_time(time_str)
                 print(f"Restarting expired timer: {thing} for {time_str}")
-            
-            save_timer_log(thing, target_time, log_data.get('time_str', 'unknown'))
+
+            save_timer_log(thing, target_time, log_data.get("time_str", "unknown"))
             timer = RetroTimer(thing, target_time)
             timer.run()
         else:
@@ -306,7 +314,7 @@ def main():
     else:
         thing = sys.argv[1]
         time_str = sys.argv[2]
-        
+
         try:
             target_time = parse_time(time_str)
             save_timer_log(thing, target_time, time_str)
@@ -315,6 +323,7 @@ def main():
         except ValueError as e:
             print(f"Error: {e}")
             sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

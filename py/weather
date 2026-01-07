@@ -85,9 +85,9 @@ def print_daily_forecast(weather_forecast, num_days, use_celsius=False):
 
         # Print the forecast for each day
         for date, info in daily_forecasts.items():
-            low_temp = info['low']
-            high_temp = info['high']
-            
+            low_temp = info["low"]
+            high_temp = info["high"]
+
             # Convert to Celsius if requested
             if use_celsius:
                 low_temp = fahrenheit_to_celsius(low_temp)
@@ -95,7 +95,7 @@ def print_daily_forecast(weather_forecast, num_days, use_celsius=False):
                 temp_unit = "°C"
             else:
                 temp_unit = "°F"
-                
+
             print(
                 f"{info['day']} {date}: Lo {format_temperature(low_temp)}{temp_unit} ; Hi {format_temperature(high_temp)}{temp_unit} ; Pr {info['precip']}% ; {info['desc']}"
             )
