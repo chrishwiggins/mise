@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""
+Archive a URL to the Wayback Machine.
+Checks if the URL has been archived, and saves it if not.
+Supports recursive archiving with -down flag.
+"""
+
+import argparse
+import requests
+import sys
+import time
+from datetime import datetime
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
+
+
+def check_archived(url, verbose=True):
+    """Check if a URL has been archived in the Wayback Machine."""
+    api_url = f"https://archive.org/wayback/available?url={url}"
+
+    try:
+        response = requests.get(api_url)
+        response.raise_for_status()
+        data = response.json()
+
+        if data.get("archived_snapshots") and data["archived_snapshots"].get("closest"):
+            snapshot = data["archived_snapshots"]["closest"]
+            timestamp = snapshot.get("timestamp")
+            archive_url = snapshot.get("url")
+
+            # Parse timestamp (format: YYYYMMDDhhmmss)
+            if timestamp:
+                dt = datetime.strptime(timestamp, "%Y%m%d%H%M%S")
+                if verbose:
+                    print(f"✓ Already archived on {dt.strftime('%Y-%m-%d %H:%M:%S')}")
+                    print(f"  Archive URL: {archive_url}")
+                return True
+
+        if verbose:
+            print("✗ Not archived yet")
+        return False
+
+    except Exception as e:
+        if verbose:
+            print(f"Error checking archive status: {e}")
+        return False
+
+
+def save_to_archive(url, verbose=True):
+    """Save a URL to the Wayback Machine."""
+    save_url = f"https://web.archive.org/save/{url}"
+
+    if verbose:
+        print(f"Saving {url} to Wayback Machine...")
+
+    try:
+        response = requests.post(save_url, timeout=120)
+        response.raise_for_status()
+
+        # The response headers contain the job ID and other info
+        job_id = response.headers.get("job_id")
+
+        if response.status_code == 200:
+            if verbose:
+                print(f"✓ Successfully saved to archive!")
+                if job_id:
+                    print(f"  Job ID: {job_id}")
+            return True
+        else:
+            if verbose:
+                print(f"Unexpected response: {response.status_code}")
+            return False
+
+    except Exception as e:
+        if verbose:
+            print(f"Error saving to archive: {e}")
+        return False
+
+
+def get_links_from_url(url):
+    """Fetch a URL and extract all links from it."""
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, "html.parser")
+
+        links = set()
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            # Convert relative URLs to absolute
+            absolute_url = urljoin(url, href)
+            links.add(absolute_url)
+
+        return links
+
+    except Exception as e:
+        print(f"Error fetching links from {url}: {e}")
+        return set()
+
+
+def same_domain(url1, url2):
+    """Check if two URLs are from the same domain."""
+    parsed1 = urlparse(url1)
+    parsed2 = urlparse(url2)
+    return parsed1.netloc == parsed2.netloc
+
+
+def archive_recursive(url, max_depth=2, current_depth=0, visited=None):
+    """
+    Recursively archive a URL and all links on the same domain.
+
+    Args:
+        url: The URL to archive
+        max_depth: Maximum recursion depth
+        current_depth: Current recursion depth
+        visited: Set of already visited URLs
+    """
+    if visited is None:
+        visited = set()
+
+    # Normalize URL (remove fragments)
+    parsed = urlparse(url)
+    normalized_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    if parsed.query:
+        normalized_url += f"?{parsed.query}"
+
+    # Skip if already visited
+    if normalized_url in visited:
+        return visited
+
+    visited.add(normalized_url)
+
+    # Print depth indicator
+    indent = "  " * current_depth
+    print(f"{indent}[Depth {current_depth}] {normalized_url}")
+
+    # Check and archive this URL
+    is_archived = check_archived(normalized_url, verbose=False)
+    if not is_archived:
+        print(f"{indent}  → Archiving...")
+        save_to_archive(normalized_url, verbose=False)
+        # Rate limiting - be nice to archive.org
+        time.sleep(2)
+    else:
+        print(f"{indent}  → Already archived")
+
+    # If we've reached max depth, don't recurse further
+    if current_depth >= max_depth:
+        return visited
+
+    # Get links from this page
+    print(f"{indent}  → Finding links...")
+    links = get_links_from_url(normalized_url)
+
+    # Filter to same domain and not yet visited
+    same_domain_links = [
+        link for link in links if same_domain(url, link) and link not in visited
+    ]
+
+    print(f"{indent}  → Found {len(same_domain_links)} new links on same domain")
+
+    # Recursively archive each link
+    for link in same_domain_links:
+        archive_recursive(link, max_depth, current_depth + 1, visited)
+        # Rate limiting between pages
+        time.sleep(1)
+
+    return visited
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Archive URLs to the Wayback Machine")
+    parser.add_argument("url", help="URL to archive")
+    parser.add_argument(
+        "-down",
+        "--recursive",
+        action="store_true",
+        help="Recursively archive all links on the same domain",
+    )
+    parser.add_argument(
+        "-d",
+        "--depth",
+        type=int,
+        default=2,
+        help="Maximum recursion depth (default: 2)",
+    )
+
+    args = parser.parse_args()
+
+    if args.recursive:
+        print(f"Starting recursive archive of {args.url}")
+        print(f"Max depth: {args.depth}")
+        print(f"This may take a while...\n")
+        visited = archive_recursive(args.url, max_depth=args.depth)
+        print(f"\nComplete! Archived {len(visited)} URLs")
+    else:
+        print(f"Checking archive status for: {args.url}\n")
+        is_archived = check_archived(args.url)
+
+        if not is_archived:
+            print("\nAttempting to save to archive...")
+            save_to_archive(args.url)
+        else:
+            print(
+                "\nPage is already archived. To create a new snapshot, you can manually trigger a save."
+            )
+
+
+if __name__ == "__main__":
+    main()

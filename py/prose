@@ -3,16 +3,17 @@
 import sys
 import re
 
+
 def main():
     # Read input from stdin
     input_text = sys.stdin.read()
 
     # Define a dictionary mapping delimiters to replacement strings
     replacements = {
-        r'(?<=[.?!])\s+(?!\n)': '\n',  # Replace with newline for .?! delimiters
-        r'(?<=[,;—])\s+(?!\n)': '\n\t',  # Replace with newline and tab for ,;— delimiters
-        r'(?<!\n)\(': '\n\t(',  # Replace with newline and tab for open paren
-        r'(?:^|(?<=\n))#': '\n#',  # Replace with newline before "#" at start of line
+        r"(?<=[.?!])\s+(?!\n)": "\n",  # Replace with newline for .?! delimiters
+        r"(?<=[,;—])\s+(?!\n)": "\n\t",  # Replace with newline and tab for ,;— delimiters
+        r"(?<!\n)\(": "\n\t(",  # Replace with newline and tab for open paren
+        r"(?:^|(?<=\n))#": "\n#",  # Replace with newline before "#" at start of line
     }
 
     # Apply each replacement to the input text
@@ -23,5 +24,6 @@ def main():
     # Write the modified text to stdout
     sys.stdout.write(output_text)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

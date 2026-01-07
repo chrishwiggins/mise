@@ -3,6 +3,7 @@ import sys
 import argparse
 from collections import defaultdict
 from datetime import datetime
+
 try:
     import airportsdata
     import pytz
@@ -13,77 +14,146 @@ except ImportError:
     sys.exit(1)
 
 # Load IATA airport codes
-AIRPORTS = airportsdata.load('IATA')
+AIRPORTS = airportsdata.load("IATA")
 
 # Major airport indicators (by passenger traffic or hub status)
 MAJOR_AIRPORTS = {
-    'ATL', 'PEK', 'DXB', 'LAX', 'HND', 'ORD', 'LHR', 'PVG', 'CDG', 'DFW',
-    'AMS', 'FRA', 'IST', 'CAN', 'JFK', 'SIN', 'DEN', 'ICN', 'BKK', 'SFO',
-    'LAS', 'CLT', 'MIA', 'SEA', 'MUC', 'FCO', 'BCN', 'EWR', 'MAD', 'PHX',
-    'IAH', 'SYD', 'MEL', 'YYZ', 'LGA', 'BOS', 'MSP', 'DTW', 'PHL', 'LGW',
-    'NRT', 'ZRH', 'VIE', 'CPH', 'OSL', 'ARN', 'HEL', 'BRU', 'DUB', 'MAN',
-    'GRU', 'GIG', 'MEX', 'EZE', 'BOG', 'LIM', 'SCL', 'PTY', 'BOM', 'DEL',
-    'BLR', 'HKG', 'SHA', 'TPE', 'KUL', 'CGK', 'MNL', 'BNE', 'AKL', 'PER',
-    'JNB', 'CPT', 'CAI', 'LOS', 'NBO', 'ADD', 'DUS', 'TXL', 'STN', 'LCY'
+    "ATL",
+    "PEK",
+    "DXB",
+    "LAX",
+    "HND",
+    "ORD",
+    "LHR",
+    "PVG",
+    "CDG",
+    "DFW",
+    "AMS",
+    "FRA",
+    "IST",
+    "CAN",
+    "JFK",
+    "SIN",
+    "DEN",
+    "ICN",
+    "BKK",
+    "SFO",
+    "LAS",
+    "CLT",
+    "MIA",
+    "SEA",
+    "MUC",
+    "FCO",
+    "BCN",
+    "EWR",
+    "MAD",
+    "PHX",
+    "IAH",
+    "SYD",
+    "MEL",
+    "YYZ",
+    "LGA",
+    "BOS",
+    "MSP",
+    "DTW",
+    "PHL",
+    "LGW",
+    "NRT",
+    "ZRH",
+    "VIE",
+    "CPH",
+    "OSL",
+    "ARN",
+    "HEL",
+    "BRU",
+    "DUB",
+    "MAN",
+    "GRU",
+    "GIG",
+    "MEX",
+    "EZE",
+    "BOG",
+    "LIM",
+    "SCL",
+    "PTY",
+    "BOM",
+    "DEL",
+    "BLR",
+    "HKG",
+    "SHA",
+    "TPE",
+    "KUL",
+    "CGK",
+    "MNL",
+    "BNE",
+    "AKL",
+    "PER",
+    "JNB",
+    "CPT",
+    "CAI",
+    "LOS",
+    "NBO",
+    "ADD",
+    "DUS",
+    "TXL",
+    "STN",
+    "LCY",
 }
+
 
 def search_airports(query: str, limit: int = 10):
     """Search for airports matching the query"""
     query_lower = query.lower().strip()
     results = defaultdict(list)
-    
+
     # Build searchable data
     searchable = []
     for code, info in AIRPORTS.items():
-        city = info.get('city', '').lower()
-        name = info.get('name', '').lower()
-        country = info.get('country', '').lower()
-        
+        city = info.get("city", "").lower()
+        name = info.get("name", "").lower()
+        country = info.get("country", "").lower()
+
         # Create search strings
-        search_strings = [
-            city,
-            name,
-            f"{city} {country}",
-            f"{name} {city}"
-        ]
-        
+        search_strings = [city, name, f"{city} {country}", f"{name} {city}"]
+
         for search_str in search_strings:
             if search_str:
                 searchable.append((search_str, code, info))
-    
+
     # Fuzzy search
     matches = process.extract(
         query_lower,
         [s[0] for s in searchable],
         scorer=fuzz.WRatio,
-        limit=limit * 3  # Get more to group by timezone
+        limit=limit * 3,  # Get more to group by timezone
     )
-    
+
     # Group by timezone
     tz_groups = defaultdict(list)
     seen_codes = set()
-    
+
     for match_str, score, _ in matches:
         if score < 60:  # Minimum score threshold
             continue
-            
+
         # Find all entries with this match string
         for search_str, code, info in searchable:
             if search_str == match_str and code not in seen_codes:
-                tz = info.get('tz', 'Unknown')
+                tz = info.get("tz", "Unknown")
                 tz_groups[tz].append((code, info, score))
                 seen_codes.add(code)
-    
+
     return tz_groups
+
 
 def format_results(tz_groups, show_all=False):
     """Format search results for display"""
     if not tz_groups:
         return "No airports found matching your search."
-    
+
     output = []
     now = datetime.now()
-    
+
     # Sort timezones by offset
     sorted_tzs = []
     for tz_name in tz_groups.keys():
@@ -93,45 +163,46 @@ def format_results(tz_groups, show_all=False):
             sorted_tzs.append((offset, tz_name))
         except:
             sorted_tzs.append((0, tz_name))
-    
+
     sorted_tzs.sort()
-    
+
     for offset, tz_name in sorted_tzs:
         airports = tz_groups[tz_name]
-        
+
         # Sort airports: major airports first, then by score
         airports.sort(key=lambda x: (-int(x[0] in MAJOR_AIRPORTS), -x[2]))
-        
+
         # Format timezone header
         try:
             tz = pytz.timezone(tz_name)
             offset_str = f"UTC{offset:+.0f}" if offset != 0 else "UTC"
         except:
             offset_str = "Unknown"
-        
+
         # Limit airports shown per timezone
         display_airports = airports if show_all else airports[:5]
-        
+
         if display_airports:
             output.append(f"\n{tz_name} ({offset_str}):")
-            
+
             for code, info, score in display_airports:
-                city = info.get('city', 'Unknown')
-                name = info.get('name', 'Unknown')
-                country = info.get('country', '')
-                
+                city = info.get("city", "Unknown")
+                name = info.get("name", "Unknown")
+                country = info.get("country", "")
+
                 # Mark major airports
                 major = " ★" if code in MAJOR_AIRPORTS else ""
-                
+
                 output.append(f"  {code}{major}: {name} - {city}, {country}")
-    
-    return '\n'.join(output)
+
+    return "\n".join(output)
+
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Look up airport IATA codes by city name',
+        description="Look up airport IATA codes by city name",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
+        epilog="""
 Examples:
   %(prog)s "new york"
     Find all airports in New York area
@@ -149,19 +220,28 @@ Notes:
   ★ indicates major international airports
   Results are grouped by timezone
   Fuzzy matching finds approximate matches
-        '''
+        """,
     )
-    
-    parser.add_argument('city', nargs='?', help='City name to search for')
-    parser.add_argument('-a', '--all', action='store_true',
-                        help='Show all matching airports (default: max 5 per timezone)')
-    parser.add_argument('-c', '--codes', action='store_true',
-                        help='Output only IATA codes (for piping)')
-    parser.add_argument('-1', '--first', action='store_true',
-                        help='Output only the first/best matching code')
-    
+
+    parser.add_argument("city", nargs="?", help="City name to search for")
+    parser.add_argument(
+        "-a",
+        "--all",
+        action="store_true",
+        help="Show all matching airports (default: max 5 per timezone)",
+    )
+    parser.add_argument(
+        "-c", "--codes", action="store_true", help="Output only IATA codes (for piping)"
+    )
+    parser.add_argument(
+        "-1",
+        "--first",
+        action="store_true",
+        help="Output only the first/best matching code",
+    )
+
     args = parser.parse_args()
-    
+
     # If no city provided, show examples
     if not args.city:
         print("Find airport IATA codes by city name using fuzzy search\n")
@@ -171,36 +251,38 @@ Notes:
         print("  iata -c tokyo      # Get just the codes")
         print("  iata -1 paris      # Get the best/first code")
         print("  iata -a moscow     # Show all matches (not just top 5)")
-        print("\nTry searching for any city name - fuzzy matching will find close matches!")
+        print(
+            "\nTry searching for any city name - fuzzy matching will find close matches!"
+        )
         print("★ indicates major international airports")
         return
-    
+
     # Search for airports
     tz_groups = search_airports(args.city)
-    
+
     if args.codes or args.first:
         # Output codes only
         codes = []
         for tz_name, airports in tz_groups.items():
             # Sort airports: major first, then by score
             airports.sort(key=lambda x: (-int(x[0] in MAJOR_AIRPORTS), -x[2]))
-            
+
             if args.first and codes:
                 break  # Already have one
-                
+
             for code, _, _ in airports:
                 codes.append(code)
                 if args.first:
                     break
-            
+
             if args.first and codes:
                 break
-        
+
         if codes:
             if args.first:
                 print(codes[0])
             else:
-                print(' '.join(codes))
+                print(" ".join(codes))
         else:
             print(f"No airports found for '{args.city}'", file=sys.stderr)
             sys.exit(1)
@@ -208,6 +290,7 @@ Notes:
         # Full output
         result = format_results(tz_groups, show_all=args.all)
         print(result)
+
 
 if __name__ == "__main__":
     main()

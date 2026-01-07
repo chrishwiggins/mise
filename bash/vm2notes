@@ -79,6 +79,7 @@ Follow these requirements strictly:
 2. Create clean, professional markdown output
 3. Handle transcription artifacts gracefully (repeated phrases, misheard words, etc.)
 4. Infer meaning from context when transcription is unclear
+5. BE THOROUGH - Include all substantive details, context, and nuances from the transcript. Do not over-summarize. The notes should capture the full richness of the discussion.
 
 Create a markdown document with the following sections:
 
@@ -86,7 +87,7 @@ Create a markdown document with the following sections:
 A 2-3 sentence overview of what the meeting/memo was about.
 
 ## Key Points
-Bullet points of the main topics discussed, decisions made, and important information shared.
+Detailed bullet points covering ALL main topics discussed, decisions made, and important information shared. Include sub-bullets for context and specifics. Err on the side of including more detail rather than less.
 
 ## Action Items
 A list of specific action items mentioned, formatted as:
@@ -101,7 +102,7 @@ List any people mentioned by name, if identifiable from the transcript.
 Any unresolved questions or topics that need follow-up.
 
 ## Raw Notes
-Any additional context, quotes, or details worth preserving that don't fit the above categories.
+Preserve important quotes, specific examples, anecdotes, and contextual details verbatim or near-verbatim. This section should be substantial.
 
 ---
 
