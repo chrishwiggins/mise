@@ -105,7 +105,31 @@ def same_domain(url1, url2):
     return parsed1.netloc == parsed2.netloc
 
 
-def archive_recursive(url, max_depth=2, current_depth=0, visited=None):
+def get_parent_url(url):
+    """Get the parent directory URL."""
+    parsed = urlparse(url)
+    path = parsed.path
+
+    # Remove trailing slash if present
+    if path.endswith("/"):
+        path = path[:-1]
+
+    # Go up one directory
+    if "/" in path:
+        parent_path = path.rsplit("/", 1)[0]
+        if not parent_path:
+            parent_path = "/"
+    else:
+        parent_path = "/"
+
+    # Ensure trailing slash for directory URLs
+    if parent_path != "/" and not parent_path.endswith("/"):
+        parent_path += "/"
+
+    return f"{parsed.scheme}://{parsed.netloc}{parent_path}"
+
+
+def archive_recursive(url, max_depth=2, current_depth=0, visited=None, force=False):
     """
     Recursively archive a URL and all links on the same domain.
 
@@ -114,6 +138,7 @@ def archive_recursive(url, max_depth=2, current_depth=0, visited=None):
         max_depth: Maximum recursion depth
         current_depth: Current recursion depth
         visited: Set of already visited URLs
+        force: Force archiving even if already archived
     """
     if visited is None:
         visited = set()
@@ -136,8 +161,11 @@ def archive_recursive(url, max_depth=2, current_depth=0, visited=None):
 
     # Check and archive this URL
     is_archived = check_archived(normalized_url, verbose=False)
-    if not is_archived:
-        print(f"{indent}  → Archiving...")
+    if force or not is_archived:
+        if force and is_archived:
+            print(f"{indent}  → Already archived, but forcing new snapshot...")
+        else:
+            print(f"{indent}  → Archiving...")
         save_to_archive(normalized_url, verbose=False)
         # Rate limiting - be nice to archive.org
         time.sleep(2)
@@ -161,7 +189,7 @@ def archive_recursive(url, max_depth=2, current_depth=0, visited=None):
 
     # Recursively archive each link
     for link in same_domain_links:
-        archive_recursive(link, max_depth, current_depth + 1, visited)
+        archive_recursive(link, max_depth, current_depth + 1, visited, force)
         # Rate limiting between pages
         time.sleep(1)
 
@@ -178,31 +206,64 @@ def main():
         help="Recursively archive all links on the same domain",
     )
     parser.add_argument(
+        "-up",
+        "--parent",
+        action="store_true",
+        help="Do -down first, then go up one level and do -down there",
+    )
+    parser.add_argument(
         "-d",
         "--depth",
         type=int,
         default=2,
         help="Maximum recursion depth (default: 2)",
     )
+    parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Force archiving even if already archived (create new snapshot)",
+    )
 
     args = parser.parse_args()
 
-    if args.recursive:
+    if args.parent:
+        print(f"Starting parent-recursive archive of {args.url}")
+        print(f"Max depth: {args.depth}")
+        if args.force:
+            print(f"Force mode: Creating new snapshots for all URLs")
+        print(f"\nStep 1: Archiving current URL and children...")
+        visited = archive_recursive(args.url, max_depth=args.depth, force=args.force)
+
+        parent_url = get_parent_url(args.url)
+        print(f"\nStep 2: Going up to parent: {parent_url}")
+        print(f"Archiving parent and children...")
+        visited_parent = archive_recursive(
+            parent_url, max_depth=args.depth, force=args.force, visited=visited
+        )
+
+        print(f"\nComplete! Archived {len(visited_parent)} URLs total")
+    elif args.recursive:
         print(f"Starting recursive archive of {args.url}")
         print(f"Max depth: {args.depth}")
+        if args.force:
+            print(f"Force mode: Creating new snapshots for all URLs")
         print(f"This may take a while...\n")
-        visited = archive_recursive(args.url, max_depth=args.depth)
+        visited = archive_recursive(args.url, max_depth=args.depth, force=args.force)
         print(f"\nComplete! Archived {len(visited)} URLs")
     else:
         print(f"Checking archive status for: {args.url}\n")
         is_archived = check_archived(args.url)
 
-        if not is_archived:
-            print("\nAttempting to save to archive...")
+        if args.force or not is_archived:
+            if args.force and is_archived:
+                print("\nAlready archived, but forcing new snapshot...")
+            else:
+                print("\nAttempting to save to archive...")
             save_to_archive(args.url)
         else:
             print(
-                "\nPage is already archived. To create a new snapshot, you can manually trigger a save."
+                "\nPage is already archived. To create a new snapshot, use the -f flag."
             )
 
 
