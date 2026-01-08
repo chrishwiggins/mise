@@ -1,8 +1,26 @@
 #!/usr/bin/env python3
 """
-Archive a URL to the Wayback Machine.
-Checks if the URL has been archived, and saves it if not.
-Supports recursive archiving with -down flag.
+Archive URLs to the Internet Archive's Wayback Machine
+
+This script saves web pages to the Wayback Machine for permanent archival. It can
+check if a URL is already archived, save new snapshots, and recursively archive
+entire website sections by following links on the same domain.
+
+Features:
+- Single URL archiving: Save one page to the Wayback Machine
+- Recursive (-down): Archive a page and all linked pages on the same domain
+- Parent mode (-up): Archive current page + children, then go up one level and repeat
+- Force mode (-f): Create new snapshots even if already archived
+- Smart rate limiting to be respectful to archive.org
+
+Usage:
+    archive-mirror https://example.com                    # Archive single page
+    archive-mirror -down https://example.com              # Recursive archiving
+    archive-mirror -up https://example.com/blog/post      # Archive post, then whole blog
+    archive-mirror -f https://example.com                 # Force new snapshot
+    archive-mirror -down -d 3 https://example.com         # Recurse 3 levels deep
+
+Requires: requests, beautifulsoup4 (pip install requests beautifulsoup4)
 """
 
 import argparse
