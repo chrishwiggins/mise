@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""
+Track File Size Evolution in Git Repository Over Time
+
+This script analyzes git history to track how the size (line count) of a specific
+file (aliases-public.sh) has evolved year by year. It clones the repository with
+sparse checkout for efficiency, analyzes all commits, and generates a visualization
+showing average, min, and max file sizes over time.
+
+The script creates a plot saved as 'lines_vs_year.png' showing the file's growth.
+"""
 
 import matplotlib.pyplot as plt
 import numpy as np
