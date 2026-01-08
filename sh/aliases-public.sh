@@ -546,3 +546,7 @@ alias gitpush "echo 'push to github with a human-readable commit message of suff
 alias pbclaude 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile'¶
 alias liar 'date >> ~/youreabsolutelyright.txt; pbpaste >> ~/youreabsolutelyright.txt; echo "====" >> ~/youreabsolutelyright.txt'
 alias nolie "echo 'no fraud, no placeholder code, no mock code, no random simulated code, only real code that works perfectly for the specified task' | pbcopy"
+alias hideme-start 'scutil --nc start "hide.me VPN (Wireguard)"'
+alias hideme-stop 'scutil --nc stop "hide.me VPN (Wireguard)"'
+alias hideme-status 'scutil --nc status "hide.me VPN (Wireguard)"'
+alias hideme-check 'scutil --nc status "hide.me VPN (Wireguard)" | head -1'
