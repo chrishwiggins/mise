@@ -1,3 +1,19 @@
+#!/usr/bin/env python3
+"""
+Bluesky Social Network Search Tool
+
+This script searches for posts on Bluesky (a decentralized social network) using
+the AT Protocol API. It requires a configuration file with your Bluesky credentials
+(handle and app password) and allows you to search for specific terms across posts.
+
+Usage: python3 bsearch.py -c config.yaml search terms here
+
+The config.yaml should contain:
+  credentials:
+    handle: your-handle.bsky.social
+    app_password: your-app-password
+"""
+
 import argparse
 import yaml
 import os

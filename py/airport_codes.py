@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""
+Convert Airport Codes to Full Airport Names
+
+This script translates three-letter airport codes (like SFO, JFK) into their full
+airport names. It includes a dictionary of common international airports and a
+function to expand multi-leg route strings (e.g., "sfo -> ewr -> ist -> lax")
+into readable airport names.
+
+Useful for quickly understanding travel itineraries.
+"""
 
 # Dictionary of common airport codes
 airport_codes = {

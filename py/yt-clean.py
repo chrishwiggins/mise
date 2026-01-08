@@ -1,5 +1,17 @@
 #!/usr/bin/python3
-# Combined script for downloading and cleaning YouTube transcripts
+"""
+Download and Clean YouTube Video Transcripts
+
+This script downloads auto-generated English transcripts from YouTube videos using
+yt-dlp, then cleans them by removing timestamps, HTML tags, and duplicate lines.
+The cleaned transcript is printed to stdout.
+
+Usage: python3 yt-clean.py <YouTube_Video_ID>
+
+Example: python3 yt-clean.py dQw4w9WgXcQ
+
+Requires: yt-dlp installed (pip install yt-dlp)
+"""
 
 import os
 import sys
