@@ -97,10 +97,10 @@ alias palias 'echo "alias \!*" >> $paliases ; learn '
 # alias learn "source $cwpaliases"
 alias pteach "vi + $cwpaliases"
 #deprecated/older public repos
-alias gugc "git pull origin master;git commit -a ;git push origin master"
+alias gugc "echo try gugm;git pull origin master;git commit -a ;git push origin master"
 alias gugm "git pull origin main;git commit -a ;git push origin main"
 alias gbgb "git pull ;git commit -a ;git push "
-alias miseup "cd-mise;gugc;cd -"
+alias miseup "cd-mise;gugm;cd -"
 #alias remise "cd-mise;git pull origin master;cd -"
 alias remise "cd-mise;git pull origin main;cd -"
 
