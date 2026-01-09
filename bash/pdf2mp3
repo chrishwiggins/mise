@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+#
+# pdf2mp3 - Convert sheet music PDF to MP3 using optical music recognition
+#
+# Usage: pdf2mp3 [--homr-dir <path>] <input.pdf> [output.mp3]
+#
+# Environment Variables:
+#   HOMR_DIR    Path to homr installation directory (required)
+#
+
+set -euo pipefail
+
+# Parse arguments
+HOMR_DIR_ARG=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --homr-dir)
+            HOMR_DIR_ARG="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: pdf2mp3 [--homr-dir <path>] <input.pdf> [output.mp3]"
+            echo ""
+            echo "Converts sheet music PDF to MP3 using deep learning OMR."
+            echo ""
+            echo "Options:"
+            echo "  --homr-dir <path>  Path to homr installation (or set HOMR_DIR env var)"
+            echo "  -h, --help         Show this help message"
+            echo ""
+            echo "Environment Variables:"
+            echo "  HOMR_DIR           Path to homr installation directory (required)"
+            echo ""
+            echo "Example:"
+            echo "  export HOMR_DIR=/path/to/homr"
+            echo "  pdf2mp3 input.pdf output.mp3"
+            echo ""
+            echo "  OR"
+            echo ""
+            echo "  pdf2mp3 --homr-dir /path/to/homr input.pdf output.mp3"
+            exit 0
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Check arguments
+if [ $# -lt 1 ]; then
+    echo "Usage: pdf2mp3 [--homr-dir <path>] <input.pdf> [output.mp3]"
+    echo ""
+    echo "Converts sheet music PDF to MP3 using deep learning OMR."
+    echo "Run 'pdf2mp3 --help' for more information."
+    exit 1
+fi
+
+INPUT_PDF="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+if [ $# -lt 2 ]; then
+    OUTPUT_MP3="${INPUT_PDF%.pdf}.mp3"
+else
+    OUTPUT_MP3="$(cd "$(dirname "$2")" 2>/dev/null && pwd || pwd)/$(basename "$2")"
+fi
+
+# Check input file exists
+if [ ! -f "$INPUT_PDF" ]; then
+    echo "Error: Input file not found: $INPUT_PDF"
+    exit 1
+fi
+
+# Configuration - check for HOMR_DIR
+if [ -n "$HOMR_DIR_ARG" ]; then
+    HOMR_DIR="$HOMR_DIR_ARG"
+elif [ -z "${HOMR_DIR:-}" ]; then
+    echo "Error: HOMR_DIR not set!"
+    echo ""
+    echo "Please set the HOMR_DIR environment variable:"
+    echo "  export HOMR_DIR=/path/to/homr"
+    echo ""
+    echo "Or use the --homr-dir flag:"
+    echo "  pdf2mp3 --homr-dir /path/to/homr input.pdf"
+    echo ""
+    echo "The homr directory should contain the Poetry-based OMR installation."
+    exit 1
+fi
+
+# Verify HOMR_DIR exists
+if [ ! -d "$HOMR_DIR" ]; then
+    echo "Error: HOMR_DIR directory not found: $HOMR_DIR"
+    exit 1
+fi
+
+SOUNDFONT="/Applications/MuseScore 4.app/Contents/Resources/sound/MS Basic.sf3"
+TEMP_DIR=$(mktemp -d)
+
+trap 'rm -rf "$TEMP_DIR"' EXIT
+
+echo "pdf2mp3: Converting $INPUT_PDF → $OUTPUT_MP3"
+echo ""
+
+# Step 1: PDF → PNG
+echo "[1/5] Converting PDF to PNG..."
+PNG_FILE="$TEMP_DIR/sheet.png"
+pdftoppm -png -r 300 "$INPUT_PDF" "$TEMP_DIR/sheet" >/dev/null 2>&1
+mv "$TEMP_DIR/sheet-1.png" "$PNG_FILE" 2>/dev/null || true
+
+if [ ! -f "$PNG_FILE" ]; then
+    echo "Error: Failed to convert PDF to PNG"
+    exit 1
+fi
+
+# Step 2: PNG → MusicXML (using homr OMR)
+echo "[2/5] Running optical music recognition (deep learning)..."
+MUSICXML_FILE="$TEMP_DIR/sheet.musicxml"
+cd "$HOMR_DIR"
+/opt/homebrew/bin/poetry run homr "$PNG_FILE" >/dev/null 2>&1
+mv "$PNG_FILE.musicxml" "$MUSICXML_FILE" 2>/dev/null || mv "${PNG_FILE%.png}.musicxml" "$MUSICXML_FILE" 2>/dev/null || true
+
+if [ ! -f "$MUSICXML_FILE" ]; then
+    echo "Error: OMR failed to generate MusicXML"
+    exit 1
+fi
+
+# Step 3: MusicXML → MIDI
+echo "[3/5] Converting MusicXML to MIDI..."
+MIDI_FILE="$TEMP_DIR/sheet.mid"
+python3 -c "
+from music21 import converter
+score = converter.parse('$MUSICXML_FILE')
+score.write('midi', fp='$MIDI_FILE')
+" 2>/dev/null
+
+if [ ! -f "$MIDI_FILE" ]; then
+    echo "Error: Failed to convert MusicXML to MIDI"
+    exit 1
+fi
+
+# Step 4: MIDI → WAV
+echo "[4/5] Synthesizing audio..."
+WAV_FILE="$TEMP_DIR/sheet.wav"
+fluidsynth -F "$WAV_FILE" -r 44100 -ni "$SOUNDFONT" "$MIDI_FILE" >/dev/null 2>&1
+
+if [ ! -f "$WAV_FILE" ]; then
+    echo "Error: Failed to synthesize audio"
+    exit 1
+fi
+
+# Step 5: WAV → MP3
+echo "[5/5] Compressing to MP3..."
+ffmpeg -i "$WAV_FILE" -codec:a libmp3lame -qscale:a 2 -y "$OUTPUT_MP3" >/dev/null 2>&1
+
+if [ ! -f "$OUTPUT_MP3" ]; then
+    echo "Error: Failed to create MP3"
+    exit 1
+fi
+
+echo ""
+echo "✓ Success! Created: $OUTPUT_MP3"
+echo ""
+echo "Play with: afplay \"$OUTPUT_MP3\""
