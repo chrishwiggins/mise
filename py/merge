@@ -116,14 +116,24 @@ else:
         f"sed -e 's/[ ,]*$//' < {data} | grep -v '^#' | tr ',;' '\\t' > mdata.tsv"
     )
 
-# Generating a date string for renaming the directory
-date_str = datetime.datetime.now().strftime("%Y_%m_%dT%Hh%Mm%Ss")
+# Preserve sent/ directory if it exists
+sent_backup = None
+if file_exists("mergedir/sent"):
+    # Move sent/ to temporary location
+    sent_backup = "mergedir_sent_backup"
+    if file_exists(sent_backup):
+        shutil.rmtree(sent_backup)
+    shutil.move("mergedir/sent", sent_backup)
 
-# Check if 'mergedir' exists and rename it if it does
+# Remove old mergedir (outbox gets regenerated each time)
 if file_exists("mergedir"):
-    rename_dir("mergedir", f"mergedir_old_{date_str}")
+    shutil.rmtree("mergedir")
 
 create_dir("mergedir")
+
+# Restore sent/ directory
+if sent_backup and file_exists(sent_backup):
+    shutil.move(sent_backup, "mergedir/sent")
 
 # Main merging operation
 print("merging...")
