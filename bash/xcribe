@@ -38,9 +38,13 @@ fi
 
 # Parse command line arguments
 REVERSE_ORDER=false
-if [[ "$1" == "-r" ]]; then
-    REVERSE_ORDER=true
-fi
+USE_LARGE_MODEL=false
+for arg in "$@"; do
+    case "$arg" in
+        -r) REVERSE_ORDER=true ;;
+        -l) USE_LARGE_MODEL=true ;;
+    esac
+done
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
@@ -171,9 +175,17 @@ echo "$file_list" | while read -r voice_file; do
 
     log_message "[$file_counter/$total_files] Checking file: $file_basename (${file_size})"
 
-    # Check if already processed
-    if grep -q "$file_hash" "$PROCESSED_LIST"; then
-        log_message "  -> Skipping: already processed"
+    # Determine which model to use
+    if [ "$USE_LARGE_MODEL" = true ]; then
+        whisper_model="large-v3"
+    else
+        whisper_model="base"
+    fi
+
+    # Check if already processed with this model (format: hash:model)
+    processed_key="${file_hash}:${whisper_model}"
+    if grep -q "^${processed_key}$" "$PROCESSED_LIST"; then
+        log_message "  -> Skipping: already processed with ${whisper_model} model"
         continue
     fi
 
@@ -186,9 +198,9 @@ echo "$file_list" | while read -r voice_file; do
     # Create temporary file for transcript
     temp_transcript="/tmp/voicememo_${timestamp}.txt"
 
-    log_message "  -> Running Whisper transcription (this may take a moment)..."
+    log_message "  -> Running Whisper transcription with $whisper_model model (this may take a moment)..."
     # Run Whisper to transcribe (use venv whisper to avoid system numpy conflicts)
-    if /Users/wiggins/.local/venvs/whisper/bin/whisper "$voice_file" --model base --output_format txt --output_dir /tmp --language en >/dev/null 2>&1; then
+    if /Users/wiggins/.local/venvs/whisper/bin/whisper "$voice_file" --model "$whisper_model" --output_format txt --output_dir /tmp --language en >/dev/null 2>&1; then
         log_message "  -> Whisper transcription completed successfully"
     else
         log_message "  -> ERROR: Whisper transcription failed"
@@ -209,8 +221,8 @@ echo "$file_list" | while read -r voice_file; do
         topic=$(get_topic_from_claude "$transcript")
         log_message "  -> Topic identified: $topic"
 
-        # Create output filename with topic
-        output_file="${OUTPUT_DIR}/${topic}_${timestamp}.md"
+        # Create output filename with topic and model
+        output_file="${OUTPUT_DIR}/${topic}_${timestamp}_${whisper_model}.md"
 
         # Write to markdown file with metadata
         {
@@ -224,8 +236,8 @@ echo "$file_list" | while read -r voice_file; do
             echo "${transcript}"
         } > "$output_file"
 
-        # Add to processed list
-        echo "$file_hash" >> "$PROCESSED_LIST"
+        # Add to processed list with model (format: hash:model)
+        echo "$processed_key" >> "$PROCESSED_LIST"
 
         output_size=$(ls -lh "$output_file" | awk '{print $5}')
         word_count=$(wc -w < "$output_file" | tr -d ' ')
