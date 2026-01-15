@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""
+Claude Code Token Jail Monitor
+Tracks usage against 5-hour and 1-week limits
+"""
+
+import json
+from datetime import datetime, timedelta
+from pathlib import Path
+from dataclasses import dataclass, asdict
+import os
+
+@dataclass
+class TokenUsage:
+    timestamp: str
+    tokens_used: int
+    model: str
+    session_id: str = "default"
+
+class TokenMonitor:
+    def __init__(self, log_dir: str = None):
+        if log_dir is None:
+            log_dir = str(Path.home() / ".claude_code" / "token_logs")
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file = self.log_dir / "usage.json"
+        self.load_history()
+
+    def load_history(self):
+        """Load usage history from disk"""
+        if self.log_file.exists():
+            with open(self.log_file) as f:
+                self.history = json.load(f)
+        else:
+            self.history = []
+
+    def save_history(self):
+        """Persist usage history"""
+        with open(self.log_file, 'w') as f:
+            json.dump(self.history, f, indent=2)
+
+    def log_usage(self, tokens_used: int, model: str, session_id: str = "default"):
+        """Log a token usage event"""
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "tokens_used": tokens_used,
+            "model": model,
+            "session_id": session_id
+        }
+        self.history.append(entry)
+        self.save_history()
+
+    def get_5hour_usage(self) -> dict:
+        """Get token usage in last 5 hours"""
+        cutoff = datetime.now() - timedelta(hours=5)
+        recent = [
+            e for e in self.history
+            if datetime.fromisoformat(e["timestamp"]) > cutoff
+        ]
+        total = sum(e["tokens_used"] for e in recent)
+        return {
+            "tokens_used": total,
+            "events": len(recent),
+            "window_hours": 5,
+            "cutoff": cutoff.isoformat()
+        }
+
+    def get_weekly_usage(self) -> dict:
+        """Get token usage in last 7 days"""
+        cutoff = datetime.now() - timedelta(days=7)
+        recent = [
+            e for e in self.history
+            if datetime.fromisoformat(e["timestamp"]) > cutoff
+        ]
+        total = sum(e["tokens_used"] for e in recent)
+        return {
+            "tokens_used": total,
+            "events": len(recent),
+            "window_days": 7,
+            "cutoff": cutoff.isoformat()
+        }
+
+    def get_status(self, limit_5h: int, limit_weekly: int) -> dict:
+        """
+        Get current status against limits
+
+        Args:
+            limit_5h: Token limit for 5-hour window
+            limit_weekly: Token limit for 1-week window
+        """
+        usage_5h = self.get_5hour_usage()
+        usage_weekly = self.get_weekly_usage()
+
+        return {
+            "5_hour_window": {
+                "tokens_used": usage_5h["tokens_used"],
+                "limit": limit_5h,
+                "remaining": limit_5h - usage_5h["tokens_used"],
+                "percent_used": (usage_5h["tokens_used"] / limit_5h * 100) if limit_5h > 0 else 0,
+                "is_exceeded": usage_5h["tokens_used"] > limit_5h
+            },
+            "weekly_window": {
+                "tokens_used": usage_weekly["tokens_used"],
+                "limit": limit_weekly,
+                "remaining": limit_weekly - usage_weekly["tokens_used"],
+                "percent_used": (usage_weekly["tokens_used"] / limit_weekly * 100) if limit_weekly > 0 else 0,
+                "is_exceeded": usage_weekly["tokens_used"] > limit_weekly
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+
+    def print_status(self, limit_5h: int, limit_weekly: int, short: bool = False):
+        """Pretty print token status
+
+        Args:
+            limit_5h: Token limit for 5-hour window
+            limit_weekly: Token limit for 1-week window
+            short: If True, output only percentages (e.g., '3.0%/5h; 4.3%/1w')
+        """
+        status = self.get_status(limit_5h, limit_weekly)
+
+        if short:
+            s5h = status["5_hour_window"]
+            sw = status["weekly_window"]
+            print(f"{s5h['percent_used']:.1f}%/5h; {sw['percent_used']:.1f}%/1w")
+            return
+
+        print("\n" + "="*60)
+        print("TOKEN JAIL MONITOR - Claude Code")
+        print("="*60)
+
+        # 5-hour window
+        s5h = status["5_hour_window"]
+        bar5h = self._make_bar(s5h["percent_used"])
+        print(f"\n5-HOUR WINDOW:")
+        print(f"  {s5h['tokens_used']:,} / {s5h['limit']:,} tokens")
+        print(f"  {s5h['percent_used']:.1f}% used  {bar5h}")
+        print(f"  Remaining: {max(0, s5h['remaining']):,} tokens")
+        if s5h['is_exceeded']:
+            print(f"  ⚠️  EXCEEDED by {s5h['tokens_used'] - s5h['limit']:,} tokens")
+
+        # Weekly window
+        sw = status["weekly_window"]
+        barw = self._make_bar(sw["percent_used"])
+        print(f"\n1-WEEK WINDOW:")
+        print(f"  {sw['tokens_used']:,} / {sw['limit']:,} tokens")
+        print(f"  {sw['percent_used']:.1f}% used  {barw}")
+        print(f"  Remaining: {max(0, sw['remaining']):,} tokens")
+        if sw['is_exceeded']:
+            print(f"  ⚠️  EXCEEDED by {sw['tokens_used'] - sw['limit']:,} tokens")
+
+        print("\n" + "="*60)
+        print(f"Last updated: {status['timestamp']}")
+        print("="*60 + "\n")
+
+    def _make_bar(self, percent: float, width: int = 30) -> str:
+        """Create a simple progress bar"""
+        filled = int(width * min(percent / 100, 1.0))
+        bar = "█" * filled + "░" * (width - filled)
+        return f"[{bar}]"
+
+
+if __name__ == "__main__":
+    import sys
+
+    # Default limits - CHANGE THESE to match your plan
+    LIMIT_5H = 2_000_000  # 2M tokens per 5 hours (adjust for your tier)
+    LIMIT_WEEKLY = 10_000_000  # 10M tokens per week (adjust for your tier)
+
+    monitor = TokenMonitor()
+
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "log":
+            tokens = int(sys.argv[2]) if len(sys.argv) > 2 else 50000
+            model = sys.argv[3] if len(sys.argv) > 3 else "haiku"
+            monitor.log_usage(tokens, model)
+            print(f"Logged {tokens:,} tokens ({model})")
+        elif sys.argv[1] == "status":
+            short = "-s" in sys.argv
+            monitor.print_status(LIMIT_5H, LIMIT_WEEKLY, short=short)
+        elif sys.argv[1] == "-s":
+            monitor.print_status(LIMIT_5H, LIMIT_WEEKLY, short=True)
+        elif sys.argv[1] == "json":
+            status = monitor.get_status(LIMIT_5H, LIMIT_WEEKLY)
+            print(json.dumps(status, indent=2))
+        else:
+            print("Usage:")
+            print(f"  {sys.argv[0]}               - Show current status")
+            print(f"  {sys.argv[0]} status        - Show current status")
+            print(f"  {sys.argv[0]} status -s     - Show only percentages (e.g., '3.0%/5h; 4.3%/1w')")
+            print(f"  {sys.argv[0]} -s            - Show only percentages")
+            print(f"  {sys.argv[0]} json          - Output status as JSON")
+            print(f"  {sys.argv[0]} log TOKENS [MODEL] - Log token usage")
+    else:
+        monitor.print_status(LIMIT_5H, LIMIT_WEEKLY)
