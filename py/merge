@@ -149,8 +149,9 @@ move_file("mdata.tsv", "/tmp/mdata.tsv", overwrite=True)
 # Process each file in the 'mergedir'
 os.chdir("mergedir")
 for thing in os.listdir("."):
-    execute_command(f"grep -v 'User-Agent:' {thing} > {thing}.eml")
-    os.remove(thing)  # Remove the original file
+    if os.path.isfile(thing):  # Only process files, skip directories
+        execute_command(f"grep -v 'User-Agent:' {thing} > {thing}.eml")
+        os.remove(thing)  # Remove the original file
 
 # Clean-up: Delete the mdata.tsv from /tmp if everything worked fine
 try:

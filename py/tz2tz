@@ -24,14 +24,23 @@ def get_timezone(code: str):
     return pytz.timezone(airport["tz"])
 
 
-def convert_time(time_str: str, from_code: str, to_code: str, date=None) -> str:
+def convert_time(time_str: str, from_code: str, to_code: str, date=None, fix=False) -> str:
     """Convert time from one airport timezone to another"""
-    # Parse time
-    time_match = re.match(r"(\d{1,2})[.:h](\d{2})", time_str)
+    # Parse time - supports formats like HH:MM, HH.MM, HHhMM, and 12-hour formats like 6:30pm, 11:00am
+    time_match = re.match(r"(\d{1,2})[.:h](\d{2})\s*(am|pm|AM|PM)?", time_str)
     if not time_match:
         return time_str
 
     hour, minute = int(time_match.group(1)), int(time_match.group(2))
+    am_pm = time_match.group(3)
+
+    # Convert 12-hour format to 24-hour format
+    if am_pm:
+        am_pm_lower = am_pm.lower()
+        if am_pm_lower == "pm" and hour != 12:
+            hour += 12
+        elif am_pm_lower == "am" and hour == 12:
+            hour = 0
 
     # Validate time
     if hour >= 24 or minute >= 60:
@@ -62,21 +71,51 @@ def convert_time(time_str: str, from_code: str, to_code: str, date=None) -> str:
     elif to_dt.day > naive_dt.day:
         day_change = " (+1d)"
 
-    # Format output to match input format
+    # Format output
+    out_hour = to_dt.hour
+    am_pm_suffix = ""
+
+    # Convert to 12-hour format if input had am/pm or if --fix is enabled
+    if am_pm or fix:
+        if out_hour == 0:
+            out_hour = 12
+            am_pm_suffix = " AM"
+        elif out_hour < 12:
+            am_pm_suffix = " AM"
+        elif out_hour == 12:
+            am_pm_suffix = " PM"
+        else:
+            out_hour -= 12
+            am_pm_suffix = " PM"
+
+        # If --fix is enabled, always use standardized format
+        if fix:
+            return f"{out_hour:02d}:{to_dt.minute:02d}{am_pm_suffix}{day_change}"
+
+        # Otherwise, preserve original case of am/pm
+        am_pm_lower = am_pm.lower()
+        am_pm_case = am_pm_lower if am_pm == am_pm.lower() else "AM" if am_pm_suffix.strip() == "AM" else "PM"
+        am_pm_suffix = am_pm_case if am_pm_case in ("am", "pm") else am_pm_case.upper()
+
+    if fix:
+        # With --fix, standardize to HH:MM (24-hour format if no am/pm)
+        return f"{out_hour:02d}:{to_dt.minute:02d}{day_change}"
+
+    # Original behavior: preserve input format
     if "." in time_str:
-        return f"{to_dt.hour:02d}.{to_dt.minute:02d}{day_change}"
+        return f"{out_hour:02d}.{to_dt.minute:02d}{am_pm_suffix}{day_change}"
     elif ":" in time_str:
-        return f"{to_dt.hour:02d}:{to_dt.minute:02d}{day_change}"
+        return f"{out_hour:02d}:{to_dt.minute:02d}{am_pm_suffix}{day_change}"
     elif "h" in time_str:
-        return f"{to_dt.hour:02d}h{to_dt.minute:02d}{day_change}"
+        return f"{out_hour:02d}h{to_dt.minute:02d}{am_pm_suffix}{day_change}"
     else:
-        return f"{to_dt.hour:02d}.{to_dt.minute:02d}{day_change}"
+        return f"{out_hour:02d}.{to_dt.minute:02d}{am_pm_suffix}{day_change}"
 
 
-def process_text(text: str, from_code: str, to_code: str) -> str:
+def process_text(text: str, from_code: str, to_code: str, fix=False) -> str:
     """Process text and convert all found times and airport codes"""
-    # Regex to find times in formats: HH.MM, HH:MM, HHhMM
-    time_pattern = r"\b(\d{1,2})[.:h](\d{2})\b"
+    # Regex to find times in formats: HH.MM, HH:MM, HHhMM, and 12-hour formats like 6:30pm, 11:00am
+    time_pattern = r"\b(\d{1,2})[.:h](\d{2})\s*(am|pm|AM|PM)?\b"
 
     def replace_time(match):
         time_str = match.group(0)
@@ -84,7 +123,7 @@ def process_text(text: str, from_code: str, to_code: str) -> str:
 
         # Only convert valid 24-hour times
         if hour < 24 and minute < 60:
-            converted = convert_time(time_str, from_code, to_code)
+            converted = convert_time(time_str, from_code, to_code, fix=fix)
             if converted != time_str:
                 return f"{converted}"
         return time_str
@@ -133,6 +172,7 @@ Supported time formats:
   HH:MM (14:30)
   HH.MM (14.30)
   HHhMM (14h30)
+  H:MM am/pm (6:30pm, 11:00am)
   
 Common IATA codes:
   USA: JFK/LGA/EWR (NYC), LAX (LA), ORD (Chicago), DEN (Denver), SFO (San Francisco)
@@ -150,6 +190,11 @@ Common IATA codes:
         "--info",
         action="store_true",
         help="Show timezone info for the given codes",
+    )
+    parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="Standardize time format (e.g., 11:00pm -> 11:00 PM)",
     )
 
     args = parser.parse_args()
@@ -213,7 +258,7 @@ Common IATA codes:
     # Read from stdin
     try:
         text = sys.stdin.read()
-        converted = process_text(text, args.from_code, args.to_code)
+        converted = process_text(text, args.from_code, args.to_code, fix=args.fix)
         print(converted, end="")
     except KeyboardInterrupt:
         sys.exit(0)
