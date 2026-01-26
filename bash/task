@@ -1,0 +1,3 @@
+#!/bin/bash
+variant=$(cowsay -l | tail -n +1 | tr ' ' '\n' | grep -v '^$' | shuf -n1)
+cowsay -f "$variant" "$*"

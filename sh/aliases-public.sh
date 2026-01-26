@@ -74,6 +74,7 @@ alias mma "open 'https://mail.google.com/mail/u/0/x/?&s=a'"
 #alias gcal chrome http://www.google.com/calendar/render
 # alias gcal fox https://www.google.com/calendar/b/0/render
 alias gcal pers-gmail-browser https://www.google.com/calendar/b/0/render
+alias gcals "pers-gmail-browser 'https://calendar.google.com/calendar/u/0/r/search?q=\!:*'"
 alias ccal chrome https://www.google.com/calendar/b/0/render
 # NB: 'gc' intended for use with google <- /usr/local/bin/google
 alias gc google calendar add
@@ -235,7 +236,7 @@ alias urls "asciify| fix | tr '{};<>[]()\ ' '\n' | grep -i 'http'"
 alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
 alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
 alias deck onion
-alias otb fox http://www.onetimebox.org/
+#alias otb fox http://www.onetimebox.org/
 alias sql "mysql.server start;mysql -uroot;mysql.server stop"
 #alias sheet "open https://docs.google.com/spreadsheet/"
 alias sheet "open http://sheet.new"
@@ -303,7 +304,7 @@ alias acal "open 'https://www.registrar.columbia.edu/event/academic-calendar?acf
 #big sur killed this, now an osascript: alias lock "/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend"
 #alias zip4 open http://zip4.usps.com/zip4/welcome.jsp
 #alias zip4 "open 'https://tools.usps.com/go/ZipLookupAction'!'input.action?mode=0&refresh=true'"
-alias zip4 "open 'https://tools.usps.com/zip-code-lookup.htm?byaddress'"
+#alias zip4 "open 'https://tools.usps.com/zip-code-lookup.htm?byaddress'"
 # alias rest sudo shutdown -s now
 alias rest pmset sleepnow
 #alias oed "fox 'http://www.columbia.edu/cgi-bin/cul/resolve?AKV9469'"
