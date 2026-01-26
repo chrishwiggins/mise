@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""
+Upload any file to Google Drive and share it.
+
+Usage:
+    gfile-share FILE EMAIL [NAME]
+
+Examples:
+    gfile-share ./report.pdf alice@gmail.com
+    gfile-share ~/docs/data.xlsx bob@example.com "Quarterly Data"
+"""
+
+import sys
+import mimetypes
+from pathlib import Path
+import pickle
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+SCOPES = [
+    "https://www.googleapis.com/auth/drive.file",
+]
+
+CREDENTIAL_PATHS = [
+    "~/.config/gsheets/credentials.json",
+    "~/.gsheet/credentials.json",
+]
+
+TOKEN_PATH = "~/.gfile_share_token/token.pickle"
+
+
+def find_credentials():
+    """Find credentials file in standard locations."""
+    for path_str in CREDENTIAL_PATHS:
+        path = Path(path_str).expanduser()
+        if path.exists():
+            return str(path)
+    if Path("credentials.json").exists():
+        return "credentials.json"
+    return None
+
+
+def get_credentials():
+    """Get OAuth2 credentials with automatic token refresh."""
+    creds_path = find_credentials()
+
+    if not creds_path:
+        print("No credentials.json found!", file=sys.stderr)
+        print("Expected locations:", file=sys.stderr)
+        for path in CREDENTIAL_PATHS:
+            print(f"  - {path}", file=sys.stderr)
+        sys.exit(1)
+
+    token_path = Path(TOKEN_PATH).expanduser()
+    token_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    creds = None
+
+    if token_path.exists():
+        try:
+            with open(token_path, "rb") as token:
+                creds = pickle.load(token)
+        except Exception as e:
+            print(f"Could not load cached token: {e}", file=sys.stderr)
+            token_path.unlink()
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                print(f"Token refresh failed: {e}", file=sys.stderr)
+                creds = None
+                token_path.unlink(missing_ok=True)
+
+        if not creds:
+            flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
+            creds = flow.run_local_server(port=0)
+
+        with open(token_path, "wb") as token:
+            pickle.dump(creds, token)
+        token_path.chmod(0o600)
+
+    return creds
+
+
+def upload_file(service, local_path, name=None):
+    """
+    Upload a file to Google Drive.
+    Returns the ID of the created file.
+    """
+    local_path = Path(local_path)
+    file_name = name or local_path.name
+
+    mimetype, _ = mimetypes.guess_type(str(local_path))
+    if mimetype is None:
+        mimetype = "application/octet-stream"
+
+    file_metadata = {
+        "name": file_name,
+    }
+
+    media = MediaFileUpload(
+        str(local_path),
+        mimetype=mimetype,
+        resumable=True
+    )
+
+    file = service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id"
+    ).execute()
+
+    file_id = file.get("id")
+    print(f"Uploaded: {file_name}", file=sys.stderr)
+    return file_id
+
+
+def share_file(service, file_id, email):
+    """Share a file with an email address (writer permission)."""
+    permission = {
+        "type": "user",
+        "role": "writer",
+        "emailAddress": email,
+    }
+
+    service.permissions().create(
+        fileId=file_id,
+        body=permission,
+        sendNotificationEmail=True,
+    ).execute()
+
+
+def get_file_url(file_id):
+    """Return the web URL for a Drive file."""
+    return f"https://drive.google.com/file/d/{file_id}/view"
+
+
+def main():
+    if len(sys.argv) < 3:
+        print(__doc__, file=sys.stderr)
+        sys.exit(1)
+
+    local_file = Path(sys.argv[1]).expanduser().resolve()
+    email = sys.argv[2]
+    name = sys.argv[3] if len(sys.argv) > 3 else None
+
+    if not local_file.exists():
+        print(f"Error: {local_file} does not exist", file=sys.stderr)
+        sys.exit(1)
+    if not local_file.is_file():
+        print(f"Error: {local_file} is not a file", file=sys.stderr)
+        sys.exit(1)
+
+    if "@" not in email or "." not in email:
+        print(f"Error: {email} does not look like a valid email", file=sys.stderr)
+        sys.exit(1)
+
+    creds = get_credentials()
+    service = build("drive", "v3", credentials=creds)
+
+    print(f"Uploading {local_file}...", file=sys.stderr)
+    file_id = upload_file(service, local_file, name=name)
+
+    print(f"Sharing with {email}...", file=sys.stderr)
+    share_file(service, file_id, email)
+
+    url = get_file_url(file_id)
+    print(f"Done! File shared with {email}", file=sys.stderr)
+    print(url)
+
+
+if __name__ == "__main__":
+    main()
