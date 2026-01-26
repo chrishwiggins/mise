@@ -1,0 +1,461 @@
+#!/Users/wiggins/mise/py/.venv/bin/python3
+"""
+Import ICS calendar files to Google Calendar.
+Parses .ics files and creates events via the Calendar API.
+"""
+
+import sys
+import os
+import pickle
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+# Get credential paths from environment variables
+TOKEN_FILE = os.environ.get("GCAL_TOKEN_PATH")
+
+# Windows/Microsoft timezone names to IANA timezone mapping
+# Microsoft Exchange uses these names; Google Calendar API requires IANA names
+WINDOWS_TO_IANA_TZ = {
+    "Eastern Standard Time": "America/New_York",
+    "Central Standard Time": "America/Chicago",
+    "Mountain Standard Time": "America/Denver",
+    "Pacific Standard Time": "America/Los_Angeles",
+    "Alaska Standard Time": "America/Anchorage",
+    "Hawaii-Aleutian Standard Time": "Pacific/Honolulu",
+    "Atlantic Standard Time": "America/Halifax",
+    "Newfoundland Standard Time": "America/St_Johns",
+    "GMT Standard Time": "Europe/London",
+    "Greenwich Standard Time": "Atlantic/Reykjavik",
+    "W. Europe Standard Time": "Europe/Berlin",
+    "Central European Standard Time": "Europe/Warsaw",
+    "Romance Standard Time": "Europe/Paris",
+    "Central Europe Standard Time": "Europe/Budapest",
+    "E. Europe Standard Time": "Europe/Chisinau",
+    "FLE Standard Time": "Europe/Kiev",
+    "GTB Standard Time": "Europe/Bucharest",
+    "Russian Standard Time": "Europe/Moscow",
+    "India Standard Time": "Asia/Kolkata",
+    "China Standard Time": "Asia/Shanghai",
+    "Tokyo Standard Time": "Asia/Tokyo",
+    "Korea Standard Time": "Asia/Seoul",
+    "AUS Eastern Standard Time": "Australia/Sydney",
+    "E. Australia Standard Time": "Australia/Brisbane",
+    "Cen. Australia Standard Time": "Australia/Adelaide",
+    "W. Australia Standard Time": "Australia/Perth",
+    "New Zealand Standard Time": "Pacific/Auckland",
+    "UTC": "UTC",
+}
+
+
+def normalize_timezone(tzid):
+    """
+    Convert Windows/Microsoft timezone names to IANA timezone identifiers.
+    Returns the original tzid if it's already IANA format or unknown.
+    """
+    if not tzid:
+        return tzid
+    # Check if it's a Windows timezone name
+    if tzid in WINDOWS_TO_IANA_TZ:
+        return WINDOWS_TO_IANA_TZ[tzid]
+    # Already IANA format (contains /) or unknown - return as-is
+    return tzid
+
+
+def get_authenticated_service():
+    """Get authenticated Google Calendar service"""
+    if not TOKEN_FILE:
+        print("Error: GCAL_TOKEN_PATH environment variable not set")
+        print("Run: setenv GCAL_TOKEN_PATH '/path/to/token.pickle'")
+        return None
+
+    if not os.path.exists(TOKEN_FILE):
+        print("Error: Not authenticated. Run: gcal-auth-setup")
+        return None
+
+    with open(TOKEN_FILE, "rb") as token:
+        creds = pickle.load(token)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(TOKEN_FILE, "wb") as token:
+                pickle.dump(creds, token)
+        else:
+            print("Error: Invalid credentials. Run: gcal-auth-setup")
+            return None
+
+    return build("calendar", "v3", credentials=creds)
+
+
+def parse_ics_datetime(dt_str, tzid=None):
+    """
+    Parse ICS datetime string to Python datetime.
+
+    Formats:
+    - 20260324T172000Z (UTC)
+    - 20260324T172000 (local/floating)
+    - 20260324 (all-day date)
+    """
+    dt_str = dt_str.strip()
+
+    # All-day event (date only)
+    if len(dt_str) == 8 and dt_str.isdigit():
+        return datetime.strptime(dt_str, "%Y%m%d"), True  # is_all_day=True
+
+    # Remove trailing Z and parse
+    is_utc = dt_str.endswith("Z")
+    dt_str = dt_str.rstrip("Z")
+
+    # Parse datetime
+    if "T" in dt_str:
+        dt = datetime.strptime(dt_str, "%Y%m%dT%H%M%S")
+    else:
+        dt = datetime.strptime(dt_str, "%Y%m%d")
+        return dt, True  # all-day
+
+    return dt, False  # is_all_day=False
+
+
+def unescape_ics_text(text):
+    """Unescape ICS text fields (backslash escapes)."""
+    if not text:
+        return text
+    # ICS escapes: \n -> newline, \, -> comma, \; -> semicolon, \\ -> backslash
+    text = text.replace("\\n", "\n")
+    text = text.replace("\\,", ",")
+    text = text.replace("\\;", ";")
+    text = text.replace("\\\\", "\\")
+    return text
+
+
+def parse_ics_file(filepath):
+    """
+    Parse an ICS file and extract events.
+    Returns list of event dicts.
+    """
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    events = []
+
+    # Find all VEVENT blocks
+    vevent_pattern = re.compile(r"BEGIN:VEVENT\s*(.*?)\s*END:VEVENT", re.DOTALL)
+
+    for match in vevent_pattern.finditer(content):
+        event_block = match.group(1)
+        event = {}
+
+        # Parse properties - handle line folding (lines starting with space are continuations)
+        lines = event_block.split("\n")
+        unfolded_lines = []
+        for line in lines:
+            line = line.rstrip("\r")
+            if line.startswith(" ") or line.startswith("\t"):
+                # Continuation of previous line
+                if unfolded_lines:
+                    unfolded_lines[-1] += line[1:]
+            else:
+                unfolded_lines.append(line)
+
+        for line in unfolded_lines:
+            if not line.strip():
+                continue
+
+            # Split property name from value
+            # Handle properties with parameters like DTSTART;TZID=America/New_York:20260324T120000
+            if ":" not in line:
+                continue
+
+            prop_part, value = line.split(":", 1)
+
+            # Extract property name and parameters
+            if ";" in prop_part:
+                prop_name = prop_part.split(";")[0].upper()
+                params = prop_part.split(";")[1:]
+            else:
+                prop_name = prop_part.upper()
+                params = []
+
+            # Extract TZID if present
+            tzid = None
+            for param in params:
+                if param.upper().startswith("TZID="):
+                    tzid = param[5:]
+
+            # Store relevant properties
+            if prop_name == "SUMMARY":
+                event["summary"] = unescape_ics_text(value)
+            elif prop_name == "DESCRIPTION":
+                event["description"] = unescape_ics_text(value)
+            elif prop_name == "LOCATION":
+                event["location"] = unescape_ics_text(value)
+            elif prop_name == "DTSTART":
+                dt, is_all_day = parse_ics_datetime(value, tzid)
+                event["start"] = dt
+                event["start_tzid"] = tzid
+                event["all_day"] = is_all_day
+                event["start_is_utc"] = value.endswith("Z")
+            elif prop_name == "DTEND":
+                dt, is_all_day = parse_ics_datetime(value, tzid)
+                event["end"] = dt
+                event["end_tzid"] = tzid
+                event["end_is_utc"] = value.endswith("Z")
+            elif prop_name == "UID":
+                event["uid"] = value
+            elif prop_name == "ORGANIZER":
+                event["organizer"] = value
+
+        if "start" in event:
+            events.append(event)
+
+    return events
+
+
+def format_event_preview(event):
+    """Format event for preview display."""
+    lines = []
+    lines.append(f"  Title: {event.get('summary', '(No title)')}")
+
+    start = event.get("start")
+    end = event.get("end")
+
+    if event.get("all_day"):
+        if end:
+            lines.append(f"  When:  {start.strftime('%Y-%m-%d')} (all day)")
+        else:
+            lines.append(f"  When:  {start.strftime('%Y-%m-%d')} (all day)")
+    else:
+        # Show time with timezone info
+        if event.get("start_is_utc"):
+            # Convert UTC to local for display
+            local_tz = os.environ.get("GCAL_TIMEZONE", "America/New_York")
+            lines.append(f"  When:  {start.strftime('%Y-%m-%d %I:%M %p')} UTC")
+            if end:
+                lines.append(f"         to {end.strftime('%I:%M %p')} UTC")
+        else:
+            tz = event.get("start_tzid", "local")
+            lines.append(f"  When:  {start.strftime('%Y-%m-%d %I:%M %p')} ({tz})")
+            if end:
+                lines.append(f"         to {end.strftime('%I:%M %p')}")
+
+    if event.get("location"):
+        loc = event["location"]
+        if len(loc) > 60:
+            loc = loc[:57] + "..."
+        lines.append(f"  Where: {loc}")
+
+    if event.get("description"):
+        desc = event["description"].replace("\n", " ")
+        if len(desc) > 60:
+            desc = desc[:57] + "..."
+        lines.append(f"  Notes: {desc}")
+
+    return "\n".join(lines)
+
+
+def import_event_to_gcal(service, event, calendar_id="primary"):
+    """
+    Import a parsed event to Google Calendar.
+    Returns the created event or None on error.
+    """
+    # Build the event body
+    gcal_event = {}
+
+    if event.get("summary"):
+        gcal_event["summary"] = event["summary"]
+
+    if event.get("description"):
+        gcal_event["description"] = event["description"]
+
+    if event.get("location"):
+        gcal_event["location"] = event["location"]
+
+    # Handle start/end times
+    default_tz = os.environ.get("GCAL_TIMEZONE", "America/New_York")
+
+    if event.get("all_day"):
+        # All-day event uses date (not dateTime)
+        gcal_event["start"] = {"date": event["start"].strftime("%Y-%m-%d")}
+        if event.get("end"):
+            gcal_event["end"] = {"date": event["end"].strftime("%Y-%m-%d")}
+        else:
+            # Single day event
+            gcal_event["end"] = {"date": event["start"].strftime("%Y-%m-%d")}
+    else:
+        # Timed event
+        if event.get("start_is_utc"):
+            # UTC time - use Z suffix format
+            gcal_event["start"] = {
+                "dateTime": event["start"].strftime("%Y-%m-%dT%H:%M:%S") + "Z",
+            }
+        else:
+            # Local time with timezone
+            tz = normalize_timezone(event.get("start_tzid")) or default_tz
+            gcal_event["start"] = {
+                "dateTime": event["start"].isoformat(),
+                "timeZone": tz,
+            }
+
+        if event.get("end"):
+            if event.get("end_is_utc"):
+                gcal_event["end"] = {
+                    "dateTime": event["end"].strftime("%Y-%m-%dT%H:%M:%S") + "Z",
+                }
+            else:
+                tz = normalize_timezone(event.get("end_tzid")) or normalize_timezone(event.get("start_tzid")) or default_tz
+                gcal_event["end"] = {
+                    "dateTime": event["end"].isoformat(),
+                    "timeZone": tz,
+                }
+        else:
+            # Default 1 hour duration
+            end_time = event["start"] + timedelta(hours=1)
+            if event.get("start_is_utc"):
+                gcal_event["end"] = {
+                    "dateTime": end_time.strftime("%Y-%m-%dT%H:%M:%S") + "Z",
+                }
+            else:
+                tz = normalize_timezone(event.get("start_tzid")) or default_tz
+                gcal_event["end"] = {
+                    "dateTime": end_time.isoformat(),
+                    "timeZone": tz,
+                }
+
+    # Create the event
+    try:
+        result = service.events().insert(
+            calendarId=calendar_id,
+            body=gcal_event,
+        ).execute()
+        return result
+    except HttpError as e:
+        print(f"Error creating event: {e}")
+        return None
+
+
+def show_usage():
+    print("""
+Usage: gcal-import <ics-file> [options]
+
+Import events from an ICS calendar file to Google Calendar.
+
+Options:
+  --dry-run, -n     Preview events without importing
+  --calendar <id>   Target calendar ID (default: primary)
+  --yes, -y         Skip confirmation prompt
+
+Examples:
+  gcal-import ~/Downloads/appointment.ics
+  gcal-import ~/Downloads/Physical.ics --dry-run
+  gcal-import event.ics --calendar work@group.calendar.google.com
+  gcal-import meeting.ics -y
+
+Supported ICS features:
+  - Single events and multiple events per file
+  - Timed events (with timezone support)
+  - All-day events
+  - Location and description fields
+  - UTC timestamps (Z suffix)
+
+Environment:
+  GCAL_TOKEN_PATH     Path to token.pickle (required)
+  GCAL_TIMEZONE       Default timezone (default: America/New_York)
+""")
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ["-h", "--help"]:
+        show_usage()
+        sys.exit(0 if len(sys.argv) > 1 else 1)
+
+    # Parse arguments
+    ics_file = None
+    dry_run = False
+    calendar_id = "primary"
+    auto_confirm = False
+
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg in ["--dry-run", "-n"]:
+            dry_run = True
+        elif arg in ["--yes", "-y"]:
+            auto_confirm = True
+        elif arg == "--calendar" and i + 1 < len(sys.argv):
+            calendar_id = sys.argv[i + 1]
+            i += 1
+        elif not arg.startswith("-"):
+            ics_file = arg
+        else:
+            print(f"Unknown option: {arg}")
+            sys.exit(1)
+        i += 1
+
+    if not ics_file:
+        print("Error: No ICS file specified")
+        show_usage()
+        sys.exit(1)
+
+    # Expand path
+    ics_file = os.path.expanduser(ics_file)
+
+    if not os.path.exists(ics_file):
+        print(f"Error: File not found: {ics_file}")
+        sys.exit(1)
+
+    # Parse ICS file
+    print(f"Parsing: {ics_file}")
+    events = parse_ics_file(ics_file)
+
+    if not events:
+        print("No events found in file.")
+        sys.exit(0)
+
+    print(f"Found {len(events)} event(s):\n")
+
+    for i, event in enumerate(events, 1):
+        print(f"Event {i}:")
+        print(format_event_preview(event))
+        print()
+
+    if dry_run:
+        print("[Dry run - no events imported]")
+        sys.exit(0)
+
+    # Confirm import
+    if not auto_confirm:
+        try:
+            response = input("Import these events? [y/N] ").strip().lower()
+            if response not in ["y", "yes"]:
+                print("Cancelled.")
+                sys.exit(0)
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            sys.exit(0)
+
+    # Get authenticated service
+    service = get_authenticated_service()
+    if not service:
+        sys.exit(1)
+
+    # Import events
+    success_count = 0
+    for i, event in enumerate(events, 1):
+        print(f"Importing event {i}/{len(events)}: {event.get('summary', '(No title)')}...", end=" ")
+        result = import_event_to_gcal(service, event, calendar_id)
+        if result:
+            print("Done")
+            print(f"  Link: {result.get('htmlLink')}")
+            success_count += 1
+        else:
+            print("FAILED")
+
+    print(f"\nImported {success_count}/{len(events)} event(s).")
+
+
+if __name__ == "__main__":
+    main()
