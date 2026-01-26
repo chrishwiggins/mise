@@ -6,6 +6,29 @@ OUTPUT_DIR="$HOME/Documents/VoiceMemos"
 PROCESSED_LIST="$HOME/.voicememo_processed"
 LOG_FILE="$HOME/.voicememo_processing.log"
 
+# Handle -help flag
+if [[ "$1" == "-help" ]] || [[ "$1" == "-h" ]]; then
+    echo "Usage: xcribe [options]"
+    echo ""
+    echo "Options:"
+    echo "  -f <file>   Process a single audio file instead of the Voice Memos directory"
+    echo "  -d <dir>    Process all audio files in a different directory"
+    echo "  -l          Use Whisper large-v3 model (default: base)"
+    echo "  -r          Process files in reverse order (oldest first)"
+    echo "  -dry        Dry run: show what would be processed without transcribing"
+    echo "  -log        Show processing log"
+    echo "  -old        Show archived pre-v2 log"
+    echo "  -help, -h   Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  xcribe                    # Process all new Voice Memos"
+    echo "  xcribe -l                 # Process with large model"
+    echo "  xcribe -f recording.m4a   # Process a single file"
+    echo "  xcribe -f recording.m4a -l  # Single file with large model"
+    echo "  xcribe -d ~/AudioImports  # Process files from a different directory"
+    exit 0
+fi
+
 # Handle -log flag: show directories and log, then exit
 if [[ "$1" == "-log" ]]; then
     echo "Voicememos dir: $VOICEMEMO_DIR"
@@ -39,12 +62,42 @@ fi
 # Parse command line arguments
 REVERSE_ORDER=false
 USE_LARGE_MODEL=false
-for arg in "$@"; do
-    case "$arg" in
-        -r) REVERSE_ORDER=true ;;
-        -l) USE_LARGE_MODEL=true ;;
+DRY_RUN=false
+SINGLE_FILE=""
+CUSTOM_DIR=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -r) REVERSE_ORDER=true; shift ;;
+        -l) USE_LARGE_MODEL=true; shift ;;
+        -dry) DRY_RUN=true; shift ;;
+        -f)
+            if [[ -z "$2" ]] || [[ "$2" == -* ]]; then
+                echo "Error: -f requires a filename argument"
+                exit 1
+            fi
+            SINGLE_FILE="$2"
+            shift 2
+            ;;
+        -d)
+            if [[ -z "$2" ]] || [[ "$2" == -* ]]; then
+                echo "Error: -d requires a directory argument"
+                exit 1
+            fi
+            CUSTOM_DIR="$2"
+            shift 2
+            ;;
+        *) shift ;;  # Skip unknown args (like -log, -old handled above)
     esac
 done
+
+# Override default directory if -d was specified
+if [ -n "$CUSTOM_DIR" ]; then
+    if [ ! -d "$CUSTOM_DIR" ]; then
+        echo "Error: Directory not found: $CUSTOM_DIR"
+        exit 1
+    fi
+    VOICEMEMO_DIR="$CUSTOM_DIR"
+fi
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
@@ -148,34 +201,21 @@ PROMPT
     echo "$topic"
 }
 
-# Process voice memos
-log_message "Starting voice memo processing"
-log_message "Voice memos directory: $VOICEMEMO_DIR"
-log_message "Output directory: $OUTPUT_DIR"
+# Function to process a single audio file
+process_file() {
+    local voice_file="$1"
+    local file_num="$2"
+    local total_num="$3"
 
-# Count total files to process
-total_files=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f | wc -l | tr -d ' ')
-log_message "Found $total_files voice memo files to check"
-
-# Find all m4a files in voice memos directory, sorted by modification time
-# Default: newest first (-t), with -r flag: oldest first (-tr)
-file_counter=0
-if [ "$REVERSE_ORDER" = true ]; then
-    file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -tr)
-else
-    file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t)
-fi
-
-echo "$file_list" | while read -r voice_file; do
-    file_counter=$((file_counter + 1))
     # Get file basename and full path hash for tracking
-    file_basename=$(basename "$voice_file")
-    file_hash=$(echo "$voice_file" | md5)
-    file_size=$(ls -lh "$voice_file" | awk '{print $5}')
+    local file_basename=$(basename "$voice_file")
+    local file_hash=$(echo "$voice_file" | md5)
+    local file_size=$(ls -lh "$voice_file" | awk '{print $5}')
 
-    log_message "[$file_counter/$total_files] Checking file: $file_basename (${file_size})"
+    log_message "[$file_num/$total_num] Checking file: $file_basename (${file_size})"
 
     # Determine which model to use
+    local whisper_model
     if [ "$USE_LARGE_MODEL" = true ]; then
         whisper_model="large-v3"
     else
@@ -183,20 +223,23 @@ echo "$file_list" | while read -r voice_file; do
     fi
 
     # Check if already processed with this model (format: hash:model)
-    processed_key="${file_hash}:${whisper_model}"
+    local processed_key="${file_hash}:${whisper_model}"
     if grep -q "^${processed_key}$" "$PROCESSED_LIST"; then
         log_message "  -> Skipping: already processed with ${whisper_model} model"
-        continue
+        return 0
+    fi
+
+    # Dry run mode: show what would be processed and stop
+    if [ "$DRY_RUN" = true ]; then
+        log_message "  -> [DRY RUN] Would process with ${whisper_model} model"
+        return 0
     fi
 
     log_message "  -> Processing new file..."
 
     # Generate timestamp from file modification time
-    file_mod_time=$(stat -f "%m" "$voice_file")
-    timestamp=$(date -r "$file_mod_time" +%Y_%m_%dT%Hh%Mm%Ss)
-
-    # Create temporary file for transcript
-    temp_transcript="/tmp/voicememo_${timestamp}.txt"
+    local file_mod_time=$(stat -f "%m" "$voice_file")
+    local timestamp=$(date -r "$file_mod_time" +%Y_%m_%dT%Hh%Mm%Ss)
 
     log_message "  -> Running Whisper transcription with $whisper_model model (this may take a moment)..."
     # Run Whisper to transcribe (use venv whisper to avoid system numpy conflicts)
@@ -204,25 +247,26 @@ echo "$file_list" | while read -r voice_file; do
         log_message "  -> Whisper transcription completed successfully"
     else
         log_message "  -> ERROR: Whisper transcription failed"
-        continue
+        return 1
     fi
 
-    # Find the generated transcript file (Whisper creates it with the original filename)
-    whisper_output="/tmp/${file_basename%.m4a}.txt"
+    # Find the generated transcript file (Whisper creates it with the original filename, minus extension)
+    local file_noext="${file_basename%.*}"
+    local whisper_output="/tmp/${file_noext}.txt"
 
     if [ -f "$whisper_output" ]; then
         # Read the transcript
-        transcript=$(cat "$whisper_output")
-        transcript_length=$(echo "$transcript" | wc -c | tr -d ' ')
+        local transcript=$(cat "$whisper_output")
+        local transcript_length=$(echo "$transcript" | wc -c | tr -d ' ')
         log_message "  -> Transcript generated: ${transcript_length} characters"
 
         # Get topic from transcript
         log_message "  -> Analyzing transcript for topic..."
-        topic=$(get_topic_from_claude "$transcript")
+        local topic=$(get_topic_from_claude "$transcript")
         log_message "  -> Topic identified: $topic"
 
         # Create output filename with topic and model
-        output_file="${OUTPUT_DIR}/${topic}_${timestamp}_${whisper_model}.md"
+        local output_file="${OUTPUT_DIR}/${topic}_${timestamp}_${whisper_model}.md"
 
         # Write to markdown file with metadata
         {
@@ -239,17 +283,65 @@ echo "$file_list" | while read -r voice_file; do
         # Add to processed list with model (format: hash:model)
         echo "$processed_key" >> "$PROCESSED_LIST"
 
-        output_size=$(ls -lh "$output_file" | awk '{print $5}')
-        word_count=$(wc -w < "$output_file" | tr -d ' ')
+        local output_size=$(ls -lh "$output_file" | awk '{print $5}')
+        local word_count=$(wc -w < "$output_file" | tr -d ' ')
         log_message "$(basename "$output_file")\tsz:${output_size}\twc:${word_count}"
 
         # Clean up temporary transcript
         rm -f "$whisper_output"
     else
         log_message "  -> ERROR: Transcript file not found after Whisper processing"
+        return 1
     fi
-done
+}
+
+# Process voice memos
+log_message "Starting voice memo processing"
+if [ "$DRY_RUN" = true ]; then
+    log_message "*** DRY RUN MODE - no files will be transcribed ***"
+fi
+log_message "Output directory: $OUTPUT_DIR"
+
+if [ -n "$SINGLE_FILE" ]; then
+    # Single file mode: process just the specified file
+    if [ ! -f "$SINGLE_FILE" ]; then
+        log_message "ERROR: File not found: $SINGLE_FILE"
+        exit 1
+    fi
+    log_message "Single file mode: $SINGLE_FILE"
+    process_file "$SINGLE_FILE" 1 1
+else
+    # Directory mode: process all voice memos
+    log_message "Scanning directory: $VOICEMEMO_DIR"
+
+    # Define supported audio file types
+    AUDIO_EXTENSIONS="m4a"
+    log_message "Looking for file types: $AUDIO_EXTENSIONS"
+
+    # Census: count files by type
+    m4a_count=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f 2>/dev/null | wc -l | tr -d ' ')
+    log_message "Census: .m4a=$m4a_count"
+
+    total_files=$m4a_count
+    if [ "$total_files" -eq 0 ]; then
+        log_message "No audio files found in $VOICEMEMO_DIR"
+        exit 0
+    fi
+    log_message "Total files to check: $total_files"
+
+    # Find all audio files in directory, sorted by modification time
+    # Default: newest first (-t), with -r flag: oldest first (-tr)
+    file_counter=0
+    if [ "$REVERSE_ORDER" = true ]; then
+        file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -tr 2>/dev/null)
+    else
+        file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t 2>/dev/null)
+    fi
+
+    echo "$file_list" | while read -r voice_file; do
+        file_counter=$((file_counter + 1))
+        process_file "$voice_file" "$file_counter" "$total_files"
+    done
+fi
 
 log_message "Voice memo processing completed"
-
-log_message "All voice memos processed with topic-based filenames"
