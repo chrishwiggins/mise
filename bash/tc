@@ -1,0 +1,148 @@
+#!/bin/bash
+# tc - iTerm2 titlebar color and window control
+# Usage: tc <color>              - color current window
+#        tc -t /dev/ttysXXX <color> - color specific tty
+#        tc list                 - show windows + ttys
+#        tc title <text>         - set window title
+#        tc focus <win.tab>      - bring window to front
+
+# Build the escape sequence for RGB (0-255)
+make_seq() {
+  printf '\033]6;1;bg;red;brightness;%d\a\033]6;1;bg;green;brightness;%d\a\033]6;1;bg;blue;brightness;%d\a' "$1" "$2" "$3"
+}
+
+# Parse -t option for target tty
+TARGET=""
+if [[ "$1" == "-t" ]]; then
+  TARGET="$2"
+  shift 2
+fi
+
+# Output to target (stdout or specific tty)
+output_seq() {
+  if [[ -n "$TARGET" ]]; then
+    if [[ -w "$TARGET" ]]; then
+      printf '%s' "$1" > "$TARGET"
+    else
+      echo "Error: Cannot write to $TARGET" >&2
+      exit 1
+    fi
+  else
+    printf '%s' "$1"
+  fi
+}
+
+case "$1" in
+  # Basic colors
+  green|g)    output_seq "$(make_seq 0 180 0)" ;;
+  red|r)      output_seq "$(make_seq 200 0 0)" ;;
+  blue|b)     output_seq "$(make_seq 0 0 200)" ;;
+  orange|o)   output_seq "$(make_seq 255 128 0)" ;;
+  purple|p)   output_seq "$(make_seq 150 0 200)" ;;
+  yellow|y)   output_seq "$(make_seq 200 200 0)" ;;
+  cyan|c)     output_seq "$(make_seq 0 180 180)" ;;
+  pink)       output_seq "$(make_seq 255 100 150)" ;;
+
+  # Softer/muted colors (from termcolor)
+  amber)      output_seq "$(make_seq 255 204 127)" ;;
+  peach)      output_seq "$(make_seq 255 204 178)" ;;
+  lavender)   output_seq "$(make_seq 204 178 230)" ;;
+  sage)       output_seq "$(make_seq 204 230 191)" ;;
+  cream)      output_seq "$(make_seq 255 245 215)" ;;
+  slate)      output_seq "$(make_seq 102 115 128)" ;;
+  charcoal)   output_seq "$(make_seq 51 60 68)" ;;
+  teal)       output_seq "$(make_seq 153 215 230)" ;;
+
+  reset|x|0)  output_seq "$(printf '\033]6;1;bg;*;default\a')" ;;
+
+  random|rand)
+    output_seq "$(make_seq $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)))"
+    ;;
+
+  rgb)
+    # tc rgb 255 128 0
+    if [[ -n "$2" && -n "$3" && -n "$4" ]]; then
+      output_seq "$(make_seq "$2" "$3" "$4")"
+    else
+      echo "Usage: tc rgb <r> <g> <b>  (0-255)" >&2
+    fi
+    ;;
+
+  list|ls)
+    echo "iTerm2 windows:"
+    echo "---------------"
+    osascript -e '
+    tell application "iTerm2"
+      set output to ""
+      set winIdx to 1
+      repeat with w in windows
+        set tabIdx to 1
+        repeat with t in tabs of w
+          set s to current session of t
+          set ttyPath to tty of s
+          set sessName to name of s
+          set output to output & "  " & winIdx & "." & tabIdx & "  " & ttyPath & "  " & sessName & linefeed
+          set tabIdx to tabIdx + 1
+        end repeat
+        set winIdx to winIdx + 1
+      end repeat
+      return output
+    end tell
+    ' 2>/dev/null
+    echo ""
+    echo "Usage: tc -t /dev/ttysXXX <color>"
+    ;;
+
+  title)
+    shift
+    if [[ -z "$*" ]]; then
+      echo "Usage: tc title <text>" >&2
+      exit 1
+    fi
+    # Set title using escape sequence
+    printf '\033]0;%s\007' "$*"
+    ;;
+
+  focus)
+    # tc focus 2.1 - bring window 2 tab 1 to front
+    if [[ -z "$2" ]]; then
+      echo "Usage: tc focus <win.tab>  (e.g., tc focus 2.1)" >&2
+      exit 1
+    fi
+    win="${2%%.*}"
+    osascript -e "tell application \"iTerm2\"" \
+              -e "activate" \
+              -e "set index of window $win to 1" \
+              -e "end tell" 2>/dev/null
+    ;;
+
+  help|-h|--help|"")
+    cat <<'EOF'
+tc - iTerm2 titlebar color and window control
+
+Usage: tc <color>                 # current window
+       tc -t /dev/ttysXXX <color> # specific window by tty
+       tc list                    # show windows + ttys
+       tc title <text>            # set window title
+       tc focus <win.tab>         # bring window to front
+       tc rgb <r> <g> <b>         # custom RGB (0-255)
+
+Colors:
+  Basic:  green/g red/r blue/b orange/o purple/p yellow/y cyan/c pink
+  Soft:   amber peach lavender sage cream slate charcoal teal
+  Other:  random reset/x
+
+Examples:
+  tc green              # color this window green
+  tc list               # see all windows
+  tc -t /dev/ttys003 blue  # color another window
+  tc title myproject    # set title
+  tc sage               # nice muted green
+EOF
+    ;;
+
+  *)
+    echo "Unknown: $1 (try 'tc help')" >&2
+    exit 1
+    ;;
+esac
