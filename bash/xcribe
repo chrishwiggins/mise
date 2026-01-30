@@ -13,7 +13,11 @@ if [[ "$1" == "-help" ]] || [[ "$1" == "-h" ]]; then
     echo "Options:"
     echo "  -f <file>   Process a single audio file instead of the Voice Memos directory"
     echo "  -d <dir>    Process all audio files in a different directory"
-    echo "  -l          Use Whisper large-v3 model (default: base)"
+    echo "  -l          Use Whisper large-v3 model"
+    echo "  -small      Use Whisper small model (faster than base, good accuracy)"
+    echo "  -tiny       Use Whisper tiny model (fastest, lower accuracy)"
+    echo "              (default: base model)"
+    echo "  -parallel N Limit to N parallel jobs (default: unlimited)"
     echo "  -r          Process files in reverse order (oldest first)"
     echo "  -dry        Dry run: show what would be processed without transcribing"
     echo "  -log        Show processing log"
@@ -23,9 +27,14 @@ if [[ "$1" == "-help" ]] || [[ "$1" == "-h" ]]; then
     echo "Examples:"
     echo "  xcribe                    # Process all new Voice Memos"
     echo "  xcribe -l                 # Process with large model"
+    echo "  xcribe -tiny              # Process with tiny model (fastest)"
+    echo "  xcribe -small -parallel 2 # Small model, 2 jobs at a time"
     echo "  xcribe -f recording.m4a   # Process a single file"
     echo "  xcribe -f recording.m4a -l  # Single file with large model"
     echo "  xcribe -d ~/AudioImports  # Process files from a different directory"
+    echo ""
+    echo "Watch progress:"
+    echo "  tail -f /tmp/*.txt        # See partial transcripts as they're written"
     exit 0
 fi
 
@@ -61,15 +70,26 @@ fi
 
 # Parse command line arguments
 REVERSE_ORDER=false
-USE_LARGE_MODEL=false
+WHISPER_MODEL="base"
 DRY_RUN=false
 SINGLE_FILE=""
 CUSTOM_DIR=""
+PARALLEL_JOBS=0  # 0 = unlimited
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -r) REVERSE_ORDER=true; shift ;;
-        -l) USE_LARGE_MODEL=true; shift ;;
+        -l) WHISPER_MODEL="large-v3"; shift ;;
+        -small) WHISPER_MODEL="small"; shift ;;
+        -tiny) WHISPER_MODEL="tiny"; shift ;;
         -dry) DRY_RUN=true; shift ;;
+        -parallel)
+            if [[ -z "$2" ]] || [[ "$2" == -* ]]; then
+                echo "Error: -parallel requires a number argument"
+                exit 1
+            fi
+            PARALLEL_JOBS="$2"
+            shift 2
+            ;;
         -f)
             if [[ -z "$2" ]] || [[ "$2" == -* ]]; then
                 echo "Error: -f requires a filename argument"
@@ -105,11 +125,28 @@ mkdir -p "$OUTPUT_DIR"
 # Create processed list file if it doesn't exist
 touch "$PROCESSED_LIST"
 
+# Lock directory for thread-safe operations (mkdir is atomic on macOS)
+LOCK_DIR="/tmp/xcribe_lock_$$"
+
+# Function to acquire lock (macOS-compatible using mkdir)
+acquire_lock() {
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        sleep 0.05
+    done
+}
+
+# Function to release lock
+release_lock() {
+    rmdir "$LOCK_DIR" 2>/dev/null
+}
+
 # Function to log messages (ISO 8601 format: YYYY-MM-DD-HH-MM-SS)
 log_message() {
     local message="$(date '+%Y-%m-%d-%H-%M-%S')\t$1"
+    acquire_lock
     echo -e "$message" >> "$LOG_FILE"
     echo -e "$message"
+    release_lock
 }
 
 # Function to get simple topic from keywords
@@ -146,7 +183,7 @@ get_simple_topic() {
 get_topic_from_claude() {
     local transcript="$1"
     local topic
-    local temp_file="/tmp/transcript_for_analysis_$$"
+    local temp_file="/tmp/transcript_for_analysis_$$_$RANDOM"
 
     # Debug: log transcript length and first few words
     local transcript_length=$(echo "$transcript" | wc -c | tr -d ' ')
@@ -206,6 +243,7 @@ process_file() {
     local voice_file="$1"
     local file_num="$2"
     local total_num="$3"
+    local whisper_model="$4"
 
     # Get file basename and full path hash for tracking
     local file_basename=$(basename "$voice_file")
@@ -213,14 +251,6 @@ process_file() {
     local file_size=$(ls -lh "$voice_file" | awk '{print $5}')
 
     log_message "[$file_num/$total_num] Checking file: $file_basename (${file_size})"
-
-    # Determine which model to use
-    local whisper_model
-    if [ "$USE_LARGE_MODEL" = true ]; then
-        whisper_model="large-v3"
-    else
-        whisper_model="base"
-    fi
 
     # Check if already processed with this model (format: hash:model)
     local processed_key="${file_hash}:${whisper_model}"
@@ -235,24 +265,68 @@ process_file() {
         return 0
     fi
 
-    log_message "  -> Processing new file..."
+    log_message "  -> Processing new file with ${whisper_model} model..."
 
     # Generate timestamp from file modification time
     local file_mod_time=$(stat -f "%m" "$voice_file")
     local timestamp=$(date -r "$file_mod_time" +%Y_%m_%dT%Hh%Mm%Ss)
 
-    log_message "  -> Running Whisper transcription with $whisper_model model (this may take a moment)..."
-    # Run Whisper to transcribe (use venv whisper to avoid system numpy conflicts)
-    if /Users/wiggins/.local/venvs/whisper/bin/whisper "$voice_file" --model "$whisper_model" --output_format txt --output_dir /tmp --language en >/dev/null 2>&1; then
+    log_message "  -> Running Whisper transcription (progress below)..."
+
+    # Run Whisper to transcribe - NO output suppression so progress bar shows
+    # Using faster-whisper if available, falls back to regular whisper
+    local whisper_output="/tmp/${file_basename%.*}.txt"
+
+    if /Users/wiggins/.local/venvs/whisper/bin/python3 -c "import faster_whisper" 2>/dev/null; then
+        # Use faster-whisper (significantly faster with CTranslate2)
+        /Users/wiggins/.local/venvs/whisper/bin/python3 - "$whisper_model" "$voice_file" "$whisper_output" <<'PYTHON_SCRIPT'
+import sys
+from faster_whisper import WhisperModel
+
+model_name = sys.argv[1]
+input_file = sys.argv[2]
+output_file = sys.argv[3]
+
+model = WhisperModel(model_name, device='auto', compute_type='auto')
+segments, info = model.transcribe(input_file, language='en')
+
+print(f'Detected language: {info.language} (probability {info.language_probability:.2f})', file=sys.stderr)
+
+with open(output_file, 'w') as f:
+    for segment in segments:
+        line = f'[{segment.start:.2f}s -> {segment.end:.2f}s] {segment.text.strip()}'
+        print(line, file=sys.stderr)
+        f.write(line + '\n')
+PYTHON_SCRIPT
+        local whisper_exit=$?
+    else
+        # Fallback to regular whisper (using Python API for timestamped output)
+        /Users/wiggins/.local/venvs/whisper/bin/python3 - "$whisper_model" "$voice_file" "$whisper_output" <<'PYTHON_FALLBACK'
+import sys
+import whisper
+
+model_name = sys.argv[1]
+input_file = sys.argv[2]
+output_file = sys.argv[3]
+
+model = whisper.load_model(model_name)
+result = model.transcribe(input_file, language='en')
+
+with open(output_file, 'w') as f:
+    for segment in result['segments']:
+        line = f'[{segment["start"]:.2f}s -> {segment["end"]:.2f}s] {segment["text"].strip()}'
+        print(line, file=sys.stderr)
+        f.write(line + '\n')
+PYTHON_FALLBACK
+        local whisper_exit=$?
+    fi
+
+    if [ $whisper_exit -eq 0 ]; then
         log_message "  -> Whisper transcription completed successfully"
     else
         log_message "  -> ERROR: Whisper transcription failed"
         return 1
     fi
-
-    # Find the generated transcript file (Whisper creates it with the original filename, minus extension)
-    local file_noext="${file_basename%.*}"
-    local whisper_output="/tmp/${file_noext}.txt"
 
     if [ -f "$whisper_output" ]; then
         # Read the transcript
@@ -274,14 +348,21 @@ process_file() {
             echo ""
             echo "**Date:** $(date -r "$file_mod_time" '+%Y-%m-%d %H:%M:%S')"
             echo "**Original File:** ${file_basename}"
+            echo "**Model:** ${whisper_model}"
             echo ""
             echo "---"
             echo ""
+            echo "## Transcript"
+            echo ""
+            echo '```'
             echo "${transcript}"
+            echo '```'
         } > "$output_file"
 
-        # Add to processed list with model (format: hash:model)
+        # Add to processed list with model (format: hash:model) - thread-safe
+        acquire_lock
         echo "$processed_key" >> "$PROCESSED_LIST"
+        release_lock
 
         local output_size=$(ls -lh "$output_file" | awk '{print $5}')
         local word_count=$(wc -w < "$output_file" | tr -d ' ')
@@ -295,12 +376,22 @@ process_file() {
     fi
 }
 
+# Export functions and variables for parallel subshells
+export -f process_file log_message get_topic_from_claude get_simple_topic acquire_lock release_lock
+export WHISPER_MODEL DRY_RUN OUTPUT_DIR PROCESSED_LIST LOG_FILE LOCK_DIR
+
 # Process voice memos
 log_message "Starting voice memo processing"
 if [ "$DRY_RUN" = true ]; then
     log_message "*** DRY RUN MODE - no files will be transcribed ***"
 fi
 log_message "Output directory: $OUTPUT_DIR"
+log_message "Model: $WHISPER_MODEL"
+if [ "$PARALLEL_JOBS" -eq 0 ]; then
+    log_message "Parallelism: unlimited"
+else
+    log_message "Parallelism: $PARALLEL_JOBS jobs"
+fi
 
 if [ -n "$SINGLE_FILE" ]; then
     # Single file mode: process just the specified file
@@ -309,7 +400,7 @@ if [ -n "$SINGLE_FILE" ]; then
         exit 1
     fi
     log_message "Single file mode: $SINGLE_FILE"
-    process_file "$SINGLE_FILE" 1 1
+    process_file "$SINGLE_FILE" 1 1 "$WHISPER_MODEL"
 else
     # Directory mode: process all voice memos
     log_message "Scanning directory: $VOICEMEMO_DIR"
@@ -331,17 +422,36 @@ else
 
     # Find all audio files in directory, sorted by modification time
     # Default: newest first (-t), with -r flag: oldest first (-tr)
-    file_counter=0
     if [ "$REVERSE_ORDER" = true ]; then
         file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -tr 2>/dev/null)
     else
         file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t 2>/dev/null)
     fi
 
-    echo "$file_list" | while read -r voice_file; do
+    # Process files in parallel
+    file_counter=0
+    job_count=0
+
+    while IFS= read -r voice_file; do
+        [ -z "$voice_file" ] && continue
         file_counter=$((file_counter + 1))
-        process_file "$voice_file" "$file_counter" "$total_files"
-    done
+
+        # Launch job in background
+        process_file "$voice_file" "$file_counter" "$total_files" "$WHISPER_MODEL" &
+        job_count=$((job_count + 1))
+
+        # If parallel limit set, wait when we hit the limit
+        if [ "$PARALLEL_JOBS" -gt 0 ] && [ "$job_count" -ge "$PARALLEL_JOBS" ]; then
+            wait -n 2>/dev/null || wait  # wait -n waits for any one job (bash 4.3+)
+            job_count=$((job_count - 1))
+        fi
+    done <<< "$file_list"
+
+    # Wait for all remaining background jobs
+    wait
 fi
+
+# Cleanup lock dir
+rmdir "$LOCK_DIR" 2>/dev/null
 
 log_message "Voice memo processing completed"
