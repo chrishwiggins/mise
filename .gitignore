@@ -1,0 +1,39 @@
+# Credentials and sensitive files
+credentials.json
+credentials.json.*
+**/credentials.json
+**/credentials.json.*
+token.json
+token.pickle
+token.*.pickle
+token_*.pickle
+**/token.pickle
+**/token.json
+*.pickle
+
+# OS files
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Temporary files
+tmp.*
+temp_*
+*.tmp
+*.bak
+
+# Output artifacts
+output.*
+data.tsv
+*.png
+mergedir_old_*
