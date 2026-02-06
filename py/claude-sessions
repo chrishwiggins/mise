@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+"""
+claude-sessions - Global Claude Code session picker.
+
+Aggregates session metadata from all projects stored by Claude Code
+in ~/.claude/projects/, presents them in fzf for interactive selection,
+and resumes the chosen session with `claude --resume`.
+
+Claude Code stores sessions per-project in:
+    ~/.claude/projects/<mangled-path>/sessions-index.json
+
+where <mangled-path> is the absolute project path with / replaced by -.
+Each sessions-index.json contains an "entries" array of session metadata
+(sessionId, summary, modified date, message count, git branch, etc.).
+
+This tool merges ALL sessions across ALL projects into one searchable
+list, solving the problem that `claude --resume` only shows sessions
+for the current working directory.
+
+Path aliases:
+    Long project paths are shortened for display using aliases loaded
+    from ~/.config/claude-sessions/config.json. If the config file
+    doesn't exist, a default one is created with a single universal
+    alias (/private/tmp/ -> /tmp/, which is a macOS symlink artifact).
+
+    Example config:
+    {
+        "path_aliases": {
+            "/private/tmp/": "/tmp/"
+        }
+    }
+
+    Add your own aliases to shorten paths you see often, e.g.:
+    {
+        "path_aliases": {
+            "/private/tmp/": "/tmp/",
+            "~/Projects/work/": "~/W/",
+            "~/Documents/research/": "~/R/"
+        }
+    }
+
+Usage:
+    claude-sessions            # interactive fzf picker (all sessions)
+    claude-sessions -n 50      # show only 50 most recent
+    claude-sessions -q "regex" # pre-filter by project or summary
+    claude-sessions --list     # just print, no fzf
+    claude-sessions --json     # output JSON for the selected session
+
+Dependencies:
+    - fzf (brew install fzf) for interactive mode
+    - Python 3.7+ (for datetime.fromisoformat)
+"""
+
+import json
+import glob
+import os
+import subprocess
+import sys
+import argparse
+from datetime import datetime, timezone
+from pathlib import Path
+
+# XDG-conventional config location
+CONFIG_DIR = os.path.expanduser("~/.config/claude-sessions")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+# Where Claude Code stores session indexes (one per project)
+SESSIONS_GLOB = os.path.expanduser("~/.claude/projects/*/sessions-index.json")
+
+# Default config: only includes universal, non-PII aliases.
+# /private/tmp/ -> /tmp/ is a macOS thing: /tmp is a symlink to /private/tmp,
+# but Claude Code stores the resolved path.
+DEFAULT_CONFIG = {
+    "path_aliases": {
+        "/private/tmp/": "/tmp/"
+    }
+}
+
+
+def load_config():
+    """Load path aliases from config file, creating a default if absent.
+
+    Returns a dict with a "path_aliases" key mapping long prefixes to
+    short replacements. Aliases are applied in order, so put longer
+    (more specific) prefixes first if they overlap.
+    """
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: bad config at {CONFIG_FILE}: {e}", file=sys.stderr)
+            return DEFAULT_CONFIG
+
+    # First run: create default config
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(DEFAULT_CONFIG, f, indent=2)
+        f.write("\n")
+    return DEFAULT_CONFIG
+
+
+def load_all_sessions():
+    """Load and merge session entries from all projects.
+
+    Walks every sessions-index.json under ~/.claude/projects/ and
+    collects all entries into a single flat list. Each entry is a dict
+    with keys like sessionId, summary, modified, messageCount, etc.
+    Silently skips files that are corrupt or unreadable.
+    """
+    sessions = []
+    for idx_path in glob.glob(SESSIONS_GLOB):
+        try:
+            with open(idx_path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            continue
+        for entry in data.get("entries", []):
+            sessions.append(entry)
+    return sessions
+
+
+def format_date(iso_str):
+    """Format an ISO 8601 timestamp to compact local time.
+
+    Handles both "2024-01-15T10:30:00Z" and "2024-01-15T10:30:00+00:00"
+    formats. Falls back gracefully if parsing fails.
+    """
+    if not iso_str:
+        return "unknown"
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        local = dt.astimezone()
+        return local.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return iso_str[:16]
+
+
+def short_project(path, aliases):
+    """Shorten a project path for display using configured aliases.
+
+    First replaces $HOME with ~, then applies each alias from config.
+    Aliases are simple string prefix replacements applied in order.
+    """
+    if not path:
+        return "?"
+    # Collapse home directory to ~
+    home = os.path.expanduser("~")
+    if path.startswith(home):
+        path = "~" + path[len(home):]
+    # Apply configured aliases (order matters for overlapping prefixes)
+    for long_prefix, short_prefix in aliases.items():
+        path = path.replace(long_prefix, short_prefix)
+    return path
+
+
+def build_display_lines(sessions, aliases):
+    """Build tab-separated display lines for fzf or --list output.
+
+    Each line: sessionId <tab> date <tab> msgcount <tab> project <tab> summary
+
+    Tab separation lets fzf treat each as a column with --delimiter.
+    The summary is truncated to 60 chars to keep lines readable.
+    """
+    lines = []
+    for s in sessions:
+        sid = s.get("sessionId", "?")
+        date = format_date(s.get("modified"))
+        msgs = str(s.get("messageCount", 0)).rjust(3)
+        proj = short_project(s.get("projectPath", ""), aliases)
+        summary = s.get("summary", s.get("firstPrompt", ""))[:60]
+        # Append git branch to project path if available
+        branch = s.get("gitBranch", "")
+        if branch:
+            proj = f"{proj} ({branch})"
+        line = f"{sid}\t{date}\t{msgs}m\t{proj}\t{summary}"
+        lines.append(line)
+    return lines
+
+
+def print_list(lines, count):
+    """Print sessions in a formatted table (--list mode)."""
+    print(f"{'ID':36s}  {'Modified':16s}  {'Msgs':>4s}  {'Project':40s}  Summary")
+    print("-" * 120)
+    for line in lines:
+        parts = line.split("\t")
+        print(f"{parts[0]:36s}  {parts[1]:16s}  {parts[2]:>4s}  {parts[3]:40s}  {parts[4]}")
+    print(f"\n{count} sessions")
+
+
+def pick_with_fzf(lines):
+    """Launch fzf with session lines and return the chosen line.
+
+    Returns the raw tab-separated line chosen by the user, or None
+    if the user cancelled (Esc / Ctrl-C).
+    """
+    header = ("ID                                    Modified"
+              "          Msgs  Project"
+              "                                   Summary")
+    fzf_input = "\n".join(lines)
+    try:
+        result = subprocess.run(
+            [
+                "fzf",
+                "--header", header,
+                "--delimiter", "\t",
+                "--with-nth", "1,2,3,4,5",
+                "--tabstop", "2",
+                "--preview-window", "down:3:wrap",
+                "--preview",
+                "echo 'Session: {1}' && echo 'Project: {4}' && echo 'Summary: {5}'",
+                "--ansi",
+                "--no-mouse",
+                "--height", "80%",
+                "--layout", "reverse",
+                "--prompt", "resume> ",
+            ],
+            input=fzf_input,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        print("fzf not found. Install with: brew install fzf", file=sys.stderr)
+        sys.exit(1)
+
+    if result.returncode != 0:
+        return None  # user cancelled
+
+    chosen = result.stdout.strip()
+    return chosen if chosen else None
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Global Claude Code session picker",
+        epilog="Config: %(config)s" % {"config": CONFIG_FILE},
+    )
+    parser.add_argument(
+        "-n", type=int, default=0,
+        help="show only N most recent sessions",
+    )
+    parser.add_argument(
+        "-q", type=str, default="",
+        help="pre-filter: regex match on project path, summary, or first prompt",
+    )
+    parser.add_argument(
+        "--list", action="store_true",
+        help="print sessions as a table without launching fzf",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="output raw JSON for the selected session (implies fzf)",
+    )
+    args = parser.parse_args()
+
+    # Load config (creates default on first run)
+    config = load_config()
+    aliases = config.get("path_aliases", {})
+
+    # Aggregate sessions from all projects
+    sessions = load_all_sessions()
+
+    # Most recently modified first
+    sessions.sort(key=lambda s: s.get("modified", ""), reverse=True)
+
+    # Optional regex pre-filter across project path, summary, and first prompt
+    if args.q:
+        import re
+        pat = re.compile(args.q, re.IGNORECASE)
+        sessions = [
+            s for s in sessions
+            if pat.search(s.get("projectPath", ""))
+            or pat.search(s.get("summary", ""))
+            or pat.search(s.get("firstPrompt", ""))
+        ]
+
+    # Optional limit
+    if args.n > 0:
+        sessions = sessions[:args.n]
+
+    if not sessions:
+        print("No sessions found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Build display lines
+    lines = build_display_lines(sessions, aliases)
+
+    # --list mode: just print and exit
+    if args.list:
+        print_list(lines, len(lines))
+        sys.exit(0)
+
+    # Interactive mode: pick with fzf
+    chosen_line = pick_with_fzf(lines)
+    if not chosen_line:
+        sys.exit(0)
+
+    # Extract session ID (first tab-separated field)
+    chosen_id = chosen_line.split("\t")[0].strip()
+
+    # Look up the full session entry to get projectPath
+    chosen_session = next(
+        (s for s in sessions if s.get("sessionId") == chosen_id),
+        None,
+    )
+    if not chosen_session:
+        print(f"Session {chosen_id} not found.", file=sys.stderr)
+        sys.exit(1)
+
+    # --json mode: dump and exit
+    if args.json:
+        print(json.dumps(chosen_session, indent=2))
+        sys.exit(0)
+
+    # Resume the session via claude CLI
+    project_path = chosen_session.get("projectPath", "")
+    print(f"\nResuming: {chosen_session.get('summary', chosen_id)}")
+    print(f"Project:  {project_path}")
+    print(f"Command:  claude -p {project_path} --resume {chosen_id}\n")
+
+    # execvp replaces this process with claude
+    os.execvp("claude", ["claude", "-p", project_path, "--resume", chosen_id])
+
+
+if __name__ == "__main__":
+    main()
