@@ -1,8 +1,12 @@
 #!/bin/bash
 # tc - iTerm2 titlebar color and window control
 # Usage: tc <color>              - color current window
-#        tc -t /dev/ttysXXX <color> - color specific tty
 #        tc list                 - show windows + ttys
+#        tc list <target> <color> - color specific window
+#        tc -t <target> <color>  - same as above
+#          target: 1.2           - win.tab number
+#                  012           - tty number (short)
+#                  /dev/ttys012  - full tty path
 #        tc title <text>         - set window title
 #        tc focus <win.tab>      - bring window to front
 
@@ -12,10 +16,34 @@ make_seq() {
 }
 
 # Parse -t option for target tty
+# Accepts: win.tab (1.2), tty number (012), or full path (/dev/ttys012)
 TARGET=""
 if [[ "$1" == "-t" ]]; then
-  TARGET="$2"
+  spec="$2"
   shift 2
+
+  if [[ "$spec" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    # win.tab format - look up tty via AppleScript
+    win="${spec%%.*}"
+    tab="${spec##*.}"
+    TARGET=$(osascript -e "
+      tell application \"iTerm2\"
+        set t to tab $tab of window $win
+        set s to current session of t
+        return tty of s
+      end tell
+    " 2>/dev/null)
+    if [[ -z "$TARGET" ]]; then
+      echo "Error: Cannot find window $spec" >&2
+      exit 1
+    fi
+  elif [[ "$spec" =~ ^[0-9]+$ ]]; then
+    # tty number - prepend /dev/ttys
+    TARGET="/dev/ttys$spec"
+  else
+    # full path - use as-is
+    TARGET="$spec"
+  fi
 fi
 
 # Output to target (stdout or specific tty)
@@ -51,7 +79,31 @@ case "$1" in
   cream)      output_seq "$(make_seq 255 245 215)" ;;
   slate)      output_seq "$(make_seq 102 115 128)" ;;
   charcoal)   output_seq "$(make_seq 51 60 68)" ;;
+  coal)       output_seq "$(make_seq 30 30 35)" ;;
+  black|noir) output_seq "$(make_seq 0 0 0)" ;;
+  poo)        output_seq "$(make_seq 139 90 43)" ;;
   teal)       output_seq "$(make_seq 153 215 230)" ;;
+
+  # School colors
+  princeton)  output_seq "$(make_seq 255 103 31)" ;;
+  forrest)    output_seq "$(make_seq 34 139 34)" ;;
+  columbia)   output_seq "$(make_seq 185 217 235)" ;;
+  nyu)        output_seq "$(make_seq 87 6 140)" ;;
+  texas|ut|utexas)  output_seq "$(make_seq 191 87 0)" ;;  # Burnt Orange
+  caltech|cit)  output_seq "$(make_seq 198 146 20)" ;;  # mustard gold
+  mit)  output_seq "$(make_seq 163 31 52)" ;;  # MIT Cardinal Red
+  stanford)  output_seq "$(make_seq 140 21 21)" ;;  # Stanford Cardinal
+  harvard)  output_seq "$(make_seq 165 28 48)" ;;  # Harvard Crimson
+  berkeley|cal)  output_seq "$(make_seq 253 181 21)" ;;  # California Gold
+  yale)  output_seq "$(make_seq 0 53 107)" ;;  # Yale Blue
+  penn)  output_seq "$(make_seq 1 31 91)" ;;  # Penn Blue
+  cornell)  output_seq "$(make_seq 179 27 27)" ;;  # Carnelian
+  brown)  output_seq "$(make_seq 78 54 41)" ;;  # Brown University
+  dartmouth)  output_seq "$(make_seq 0 105 62)" ;;  # Dartmouth Green
+  duke)  output_seq "$(make_seq 0 48 135)" ;;  # Duke Blue
+
+  # Other
+  brat)  output_seq "$(make_seq 138 206 0)" ;;  # brat green
 
   reset|x|0)  output_seq "$(printf '\033]6;1;bg;*;default\a')" ;;
 
@@ -69,6 +121,34 @@ case "$1" in
     ;;
 
   list|ls)
+    # If given target + color args, act like -t (e.g., tc list 1.1 harvard)
+    if [[ -n "$2" && -n "$3" ]]; then
+      spec="$2"
+      color="$3"
+      if [[ "$spec" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        win="${spec%%.*}"
+        tab="${spec##*.}"
+        TARGET=$(osascript -e "
+          tell application \"iTerm2\"
+            set t to tab $tab of window $win
+            set s to current session of t
+            return tty of s
+          end tell
+        " 2>/dev/null)
+        if [[ -z "$TARGET" ]]; then
+          echo "Error: Cannot find window $spec" >&2
+          exit 1
+        fi
+      elif [[ "$spec" =~ ^[0-9]+$ ]]; then
+        TARGET="/dev/ttys$spec"
+      else
+        TARGET="$spec"
+      fi
+      # Re-invoke with the color (shift to make $color become $1 for case)
+      shift 2
+      exec "$0" ${TARGET:+-t "$TARGET"} "$@"
+    fi
+    # No args - show window list
     echo "iTerm2 windows:"
     echo "---------------"
     osascript -e '
@@ -90,7 +170,7 @@ case "$1" in
     end tell
     ' 2>/dev/null
     echo ""
-    echo "Usage: tc -t /dev/ttysXXX <color>"
+    echo "Usage: tc list <win.tab> <color>  or  tc -t <target> <color>"
     ;;
 
   title)
@@ -121,21 +201,26 @@ case "$1" in
 tc - iTerm2 titlebar color and window control
 
 Usage: tc <color>                 # current window
-       tc -t /dev/ttysXXX <color> # specific window by tty
        tc list                    # show windows + ttys
+       tc list 1.1 <color>        # color by win.tab number
+       tc -t 1.1 <color>          # same as above
+       tc -t 012 <color>          # by tty number
+       tc -t /dev/ttys012 <color> # by full path
        tc title <text>            # set window title
        tc focus <win.tab>         # bring window to front
        tc rgb <r> <g> <b>         # custom RGB (0-255)
 
 Colors:
   Basic:  green/g red/r blue/b orange/o purple/p yellow/y cyan/c pink
-  Soft:   amber peach lavender sage cream slate charcoal teal
-  Other:  random reset/x
+  Soft:   amber peach lavender sage cream slate charcoal coal black/noir poo teal
+  School: princeton forrest columbia nyu texas/ut caltech/cit mit stanford harvard berkeley/cal yale penn cornell brown dartmouth duke
+  Other:  random reset/x brat
 
 Examples:
   tc green              # color this window green
   tc list               # see all windows
-  tc -t /dev/ttys003 blue  # color another window
+  tc list 1.2 blue      # color window 1 tab 2
+  tc list 003 orange    # color tty 003
   tc title myproject    # set title
   tc sage               # nice muted green
 EOF
