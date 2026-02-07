@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""
+Google Sheets to TSV downloader - outputs to stdout.
+
+Usage:
+    gsheet-tsv SHEET_ID [GID] | pbcopy
+    gsheet-tsv FULL_URL | pbcopy
+"""
+
+import sys
+from pathlib import Path
+
+# Shared auth module
+sys.path.insert(0, str(Path(__file__).parent))
+from google_auth import get_credentials, extract_google_id, extract_gid
+
+import gspread
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(__doc__, file=sys.stderr)
+        sys.exit(1)
+
+    sheet_id = extract_google_id(sys.argv[1])
+    gid = None
+
+    # Check for GID in URL or as second argument
+    if "gid=" in sys.argv[1]:
+        gid = extract_gid(sys.argv[1])
+    elif len(sys.argv) > 2:
+        gid = int(sys.argv[2])
+
+    sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+
+    creds = get_credentials(scopes="sheets-readonly")
+    gc = gspread.authorize(creds)
+    spreadsheet = gc.open_by_url(sheet_url)
+
+    # Select worksheet by GID or use first one
+    if gid:
+        worksheet = None
+        for ws in spreadsheet.worksheets():
+            if ws.id == gid:
+                worksheet = ws
+                break
+        if not worksheet:
+            print(f"GID {gid} not found", file=sys.stderr)
+            sys.exit(1)
+    else:
+        worksheet = spreadsheet.get_worksheet(0)
+
+    # Output TSV to stdout
+    for row in worksheet.get_all_values():
+        print("\t".join(str(cell) for cell in row))

@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""
+Upload a TSV (or CSV) file to a new Google Sheet.
+
+Usage:
+    gsheet-upload data.tsv
+    gsheet-upload data.tsv --title "My Report"
+    gsheet-upload data.tsv --share user@example.com
+    gsheet-upload data.tsv --share user@example.com --role reader
+    gsheet-upload data.csv --csv
+    cat data.tsv | gsheet-upload -
+"""
+
+import argparse
+import csv
+import os
+import sys
+from pathlib import Path
+
+import gspread
+from googleapiclient.discovery import build
+
+# Shared auth module
+sys.path.insert(0, str(Path(__file__).parent))
+from google_auth import get_credentials
+
+
+def share_sheet(creds, sheet_id, email, role="writer"):
+    """Share a sheet using the Drive API directly."""
+    drive = build("drive", "v3", credentials=creds)
+    permission = {
+        "type": "user",
+        "role": role,
+        "emailAddress": email,
+    }
+    drive.permissions().create(
+        fileId=sheet_id,
+        body=permission,
+        sendNotificationEmail=True,
+    ).execute()
+
+
+def read_tsv(filepath, delimiter="\t"):
+    """Read a TSV/CSV file and return rows as list of lists."""
+    if filepath == "-":
+        reader = csv.reader(sys.stdin, delimiter=delimiter)
+        return list(reader)
+
+    with open(filepath, newline="", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter=delimiter)
+        return list(reader)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Upload a TSV file to a new Google Sheet",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s data.tsv
+  %(prog)s data.tsv --title "Q1 Report"
+  %(prog)s data.tsv --share colleague@example.com
+  %(prog)s data.tsv --share colleague@example.com --role reader
+  %(prog)s data.csv --csv
+  cat data.tsv | %(prog)s -
+        """,
+    )
+
+    parser.add_argument(
+        "file",
+        help='TSV file to upload (use "-" for stdin)',
+    )
+
+    parser.add_argument(
+        "--title", "-t",
+        help="Title for the new Google Sheet (default: filename without extension)",
+    )
+
+    parser.add_argument(
+        "--share", "-s",
+        metavar="EMAIL",
+        help="Email address to share the sheet with after creation",
+    )
+
+    parser.add_argument(
+        "--role", "-r",
+        choices=["reader", "writer", "owner"],
+        default="writer",
+        help="Permission level when sharing (default: writer)",
+    )
+
+    parser.add_argument(
+        "--csv",
+        action="store_true",
+        help="Read as CSV (comma-separated) instead of TSV",
+    )
+
+    parser.add_argument(
+        "--creds", "-c",
+        help="Path to credentials.json file (optional, will auto-detect)",
+    )
+
+    parser.add_argument(
+        "--sheet-name",
+        help="Name for the worksheet tab (default: Sheet1)",
+    )
+
+    args = parser.parse_args()
+
+    # Determine delimiter
+    delimiter = "," if args.csv else "\t"
+
+    # Auto-detect CSV from extension if not explicitly set
+    if not args.csv and args.file != "-" and args.file.lower().endswith(".csv"):
+        delimiter = ","
+
+    # Read data
+    if args.file != "-" and not os.path.exists(args.file):
+        print(f"Error: File not found: {args.file}", file=sys.stderr)
+        return 1
+
+    rows = read_tsv(args.file, delimiter=delimiter)
+    if not rows:
+        print("Error: No data found in file", file=sys.stderr)
+        return 1
+
+    # Determine title
+    if args.title:
+        title = args.title
+    elif args.file == "-":
+        title = "Uploaded Sheet"
+    else:
+        title = Path(args.file).stem
+
+    # Authenticate
+    print("Authenticating...", file=sys.stderr)
+    creds = get_credentials(scopes="drive-and-sheets", creds_path=args.creds)
+    gc = gspread.authorize(creds)
+
+    # Create sheet
+    print(f"Creating sheet: {title}", file=sys.stderr)
+    spreadsheet = gc.create(title)
+
+    worksheet = spreadsheet.sheet1
+    if args.sheet_name:
+        worksheet.update_title(args.sheet_name)
+
+    # Resize worksheet to fit data
+    num_rows = len(rows)
+    num_cols = max(len(row) for row in rows) if rows else 1
+    worksheet.resize(rows=num_rows, cols=num_cols)
+
+    # Upload all data in one batch
+    print(f"Uploading {num_rows} rows x {num_cols} cols...", file=sys.stderr)
+    worksheet.update(rows, value_input_option="RAW")
+
+    sheet_url = spreadsheet.url
+    sheet_id = spreadsheet.id
+
+    print(f"Created: {sheet_url}", file=sys.stderr)
+
+    # Share if requested
+    if args.share:
+        print(f"Sharing with {args.share} ({args.role})...", file=sys.stderr)
+        try:
+            share_sheet(creds, sheet_id, args.share, args.role)
+            print(f"Shared with {args.share} as {args.role}", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: sharing failed: {e}", file=sys.stderr)
+
+    # Print URL to stdout (pipeable)
+    print(sheet_url)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
