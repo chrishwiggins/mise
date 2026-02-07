@@ -26,6 +26,9 @@ venv/
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Retired scripts
+.retired/
+
 # Temporary files
 tmp.*
 temp_*
