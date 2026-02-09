@@ -1,0 +1,111 @@
+#!/Users/wiggins/mise/py/.venv/bin/python3
+
+import sys
+import argparse
+import webbrowser
+from google_auth import get_credentials
+from googleapiclient.discovery import build
+
+
+def get_authenticated_service():
+    """Get authenticated Google Calendar service"""
+    creds = get_credentials(service="calendar", scopes="calendar")
+    return build("calendar", "v3", credentials=creds)
+
+
+def quick_add(text):
+    """Create calendar event using Google Quick Add syntax"""
+    service = get_authenticated_service()
+    if not service:
+        return False, None
+
+    try:
+        event = service.events().quickAdd(calendarId="primary", text=text).execute()
+
+        print("✅ Event created successfully!")
+        print(f"📅 {event.get('summary', 'No title')}")
+
+        # Format time
+        start = event.get("start", {})
+        end = event.get("end", {})
+
+        if start.get("dateTime"):
+            from datetime import datetime
+
+            start_dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end["dateTime"].replace("Z", "+00:00"))
+            print(
+                f"🕐 {start_dt.strftime('%Y-%m-%d %I:%M %p')} - {end_dt.strftime('%I:%M %p')}"
+            )
+        elif start.get("date"):
+            print(f"📅 {start.get('date')} (all day)")
+
+        event_url = event.get("htmlLink")
+        print(f"🔗 {event_url}")
+        return True, event_url
+
+    except Exception as e:
+        print(f"❌ Error creating event: {e}")
+        return False, None
+
+
+def show_usage():
+    print(
+        """
+Usage: gcal-quick [--open] "<natural language text>"
+
+Create calendar events using Google's Quick Add natural language syntax.
+
+Options:
+  --open    Open the event URL in the default browser after creation
+
+Examples:
+  gcal-quick "Lunch with Bob tomorrow at noon"
+  gcal-quick --open "Team meeting Friday 2pm"
+  gcal-quick "Doctor appointment next Monday at 3:30pm"
+  gcal-quick "Conference call 10am to 11am"
+  gcal-quick "Vacation Dec 23-30"
+
+Google Quick Add supports:
+  - Natural dates: today, tomorrow, next Friday, Dec 25
+  - Times: 2pm, 3:30pm, 10am-11am
+  - All-day events: "Vacation Dec 25-30"
+  - Duration: "Meeting 2pm for 2 hours"
+
+Note: Quick Add doesn't support attendees. For invites, use gcal-simple or gcal-invite-advanced.
+"""
+    )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Create calendar events using Google Quick Add syntax",
+        add_help=False,
+    )
+    parser.add_argument(
+        "--open",
+        action="store_true",
+        help="Open the event URL in the default browser after creation",
+    )
+    parser.add_argument(
+        "-h", "--help", action="store_true", help="Show this help message and exit"
+    )
+    parser.add_argument("text", nargs="*", help="Event text in natural language")
+
+    args = parser.parse_args()
+
+    if args.help or not args.text:
+        show_usage()
+        sys.exit(0)
+
+    # Join all text arguments as the event text
+    event_text = " ".join(args.text)
+
+    success, event_url = quick_add(event_text)
+
+    if success:
+        if args.open and event_url:
+            webbrowser.open(event_url)
+        sys.exit(0)
+    else:
+        sys.exit(1)
