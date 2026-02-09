@@ -6,16 +6,12 @@ Parses .ics files and creates events via the Calendar API.
 
 import sys
 import os
-import pickle
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from google.auth.transport.requests import Request
+from google_auth import get_credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-
-# Get credential paths from environment variables
-TOKEN_FILE = os.environ.get("GCAL_TOKEN_PATH")
 
 # Windows/Microsoft timezone names to IANA timezone mapping
 # Microsoft Exchange uses these names; Google Calendar API requires IANA names
@@ -67,27 +63,7 @@ def normalize_timezone(tzid):
 
 def get_authenticated_service():
     """Get authenticated Google Calendar service"""
-    if not TOKEN_FILE:
-        print("Error: GCAL_TOKEN_PATH environment variable not set")
-        print("Run: setenv GCAL_TOKEN_PATH '/path/to/token.pickle'")
-        return None
-
-    if not os.path.exists(TOKEN_FILE):
-        print("Error: Not authenticated. Run: gcal-auth-setup")
-        return None
-
-    with open(TOKEN_FILE, "rb") as token:
-        creds = pickle.load(token)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            with open(TOKEN_FILE, "wb") as token:
-                pickle.dump(creds, token)
-        else:
-            print("Error: Invalid credentials. Run: gcal-auth-setup")
-            return None
-
+    creds = get_credentials(service="calendar", scopes="calendar")
     return build("calendar", "v3", credentials=creds)
 
 
@@ -362,8 +338,11 @@ Supported ICS features:
   - UTC timestamps (Z suffix)
 
 Environment:
-  GCAL_TOKEN_PATH     Path to token.pickle (required)
   GCAL_TIMEZONE       Default timezone (default: America/New_York)
+
+Credentials:
+  Uses ~/.config/gcal/credentials.json via google_auth.py
+  Tokens cached in ~/.config/google-tokens/
 """)
 
 
