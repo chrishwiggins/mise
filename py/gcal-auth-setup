@@ -1,142 +1,52 @@
 #!/usr/bin/env python3
+"""
+Setup and test Google Calendar API credentials.
+Uses google_auth.py for credential resolution and token caching.
 
-import os
-import json
-import pickle
-from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow
+Credentials: ~/.config/gcal/credentials.json
+Tokens:      ~/.config/google-tokens/calendar.pickle
+"""
+
+import sys
+from google_auth import get_credentials
 from googleapiclient.discovery import build
 
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
-# Get credential paths from environment variables
-CREDS_FILE = os.environ.get("GCAL_CREDENTIALS_PATH")
-TOKEN_FILE = os.environ.get("GCAL_TOKEN_PATH")
-
-if not CREDS_FILE or not TOKEN_FILE:
-    print("❌ Environment variables not set. Please configure:")
-    print("setenv GCAL_TOKEN_PATH '/path/to/token.pickle'")
-    print("setenv GCAL_CREDENTIALS_PATH '/path/to/credentials.json'")
-    sys.exit(1)
-
-
-def setup_credentials():
-    """One-time setup for Google Calendar API credentials"""
-
+def setup_and_test():
+    """Authenticate (if needed) and test the Calendar API."""
     print("Google Calendar API Setup")
     print("=" * 40)
+    print()
+    print("Credentials: ~/.config/gcal/credentials.json")
+    print("Tokens:      ~/.config/google-tokens/calendar.pickle")
+    print()
 
-    # Check if credentials file exists
-    if not os.path.exists(CREDS_FILE):
-        print(f"\nCredentials file not found at: {CREDS_FILE}")
-        print("Looking for existing credentials...")
-
-        # Check some common locations
-        possible_creds = [
-            os.path.expanduser("~/.config/gcloud-keys/ppf-oauth-web.json"),
-            os.path.expanduser("~/.config/gcloud-keys/fnord-oauth-desktop.json"),
-        ]
-
-        found_creds = None
-        for cred_path in possible_creds:
-            if os.path.exists(cred_path):
-                found_creds = cred_path
-                break
-
-        if found_creds:
-            print(f"Found credentials at: {found_creds}")
-            import shutil
-
-            os.makedirs(os.path.dirname(CREDS_FILE), exist_ok=True)
-            shutil.copy(found_creds, CREDS_FILE)
-            print(f"Copied to: {CREDS_FILE}")
-        else:
-            print("\nStep 1: Get OAuth2 credentials")
-            print("1. Go to: https://console.cloud.google.com/apis/credentials")
-            print("2. Create new project or select existing one")
-            print("3. Enable Google Calendar API")
-            print("4. Create OAuth2 Client ID for 'Desktop Application'")
-            print("5. Download the JSON file")
-            print(f"6. Save it as: {CREDS_FILE}")
-            print("\nOr place credentials.json in /Users/wiggins/mise/py/ and re-run")
-            return False
-
-    # Now do OAuth flow
-    print("\nStep 2: OAuth Authentication")
-    print("A browser window will open for you to authorize the app...")
-
-    flow = InstalledAppFlow.from_client_secrets_file(CREDS_FILE, SCOPES)
-    # Try different auth methods
     try:
-        # Use port 8080 which matches the configured redirect URI
-        print("Using port 8080 (configured in Google Cloud project)...")
-        creds = flow.run_local_server(port=8080, open_browser=True)
-    except Exception as e:
-        print(f"\nPort 8080 failed: {e}")
-        print("Trying manual flow...")
-        # Manual flow as fallback
-        auth_url, _ = flow.authorization_url(prompt="consent")
-        print(f"\nOpen this URL in your browser:\n{auth_url}")
-        code = input("\nEnter the authorization code: ")
-        flow.fetch_token(code=code)
-        creds = flow.credentials
-
-    # Save the credentials for future use
-    os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
-    with open(TOKEN_FILE, "wb") as token:
-        pickle.dump(creds, token)
-
-    print(f"✅ Authentication successful! Token saved to {TOKEN_FILE}")
-    print("\nYou can now use gcal-api to create calendar events via CLI")
-    return True
-
-
-def get_authenticated_service():
-    """Get authenticated Google Calendar service"""
-    creds = None
-
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE, "rb") as token:
-            creds = pickle.load(token)
-
-    # If there are no (valid) credentials available, need to authenticate
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            # Save refreshed token
-            with open(TOKEN_FILE, "wb") as token:
-                pickle.dump(creds, token)
-        else:
-            print("No valid credentials found. Run setup first.")
-            return None
-
-    return build("calendar", "v3", credentials=creds)
-
-
-def test_api():
-    """Test that the API is working"""
-    service = get_authenticated_service()
-    if not service:
+        creds = get_credentials(service="calendar", scopes="calendar")
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        print()
+        print("To fix:")
+        print("1. Go to console.cloud.google.com > Google Auth Platform > Clients")
+        print("2. Download OAuth credentials JSON")
+        print("3. Save as ~/.config/gcal/credentials.json")
+        print()
+        print("See ~/.config/gdrive/GOTCHA.md for detailed steps.")
         return False
 
+    service = build("calendar", "v3", credentials=creds)
+
     try:
-        # List calendars to test
         result = service.calendarList().list().execute()
         calendars = result.get("items", [])
-        print(f"✅ API working! Found {len(calendars)} calendars:")
-        for cal in calendars[:3]:  # Show first 3
+        print(f"API working. Found {len(calendars)} calendars:")
+        for cal in calendars[:5]:
             print(f"  - {cal['summary']}")
         return True
     except Exception as e:
-        print(f"❌ API test failed: {e}")
+        print(f"API test failed: {e}")
         return False
 
 
 if __name__ == "__main__":
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        test_api()
-    else:
-        if setup_credentials():
-            test_api()
+    sys.exit(0 if setup_and_test() else 1)

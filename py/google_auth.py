@@ -98,14 +98,6 @@ def _find_credentials(service=None, creds_path=None):
             return p
         raise FileNotFoundError(f"Specified credentials not found: {creds_path}")
 
-    # Check env vars for calendar
-    if service == "calendar":
-        env_path = os.environ.get("GCAL_CREDENTIALS_PATH")
-        if env_path:
-            p = Path(env_path).expanduser()
-            if p.exists():
-                return p
-
     # Search service-specific paths
     search_paths = SERVICE_CREDENTIALS.get(service, DEFAULT_CREDENTIALS)
     for path_str in search_paths:
@@ -158,15 +150,7 @@ def get_credentials(service=None, scopes=None, creds_path=None, token_name=None)
     except (json.JSONDecodeError, KeyError):
         pass
 
-    # Token path: check env var for calendar, otherwise use standard dir
-    if service == "calendar":
-        env_token = os.environ.get("GCAL_TOKEN_PATH")
-        if env_token:
-            token_path = Path(env_token).expanduser()
-        else:
-            token_path = TOKEN_DIR / f"{token_name or _scope_key(scopes_list)}.pickle"
-    else:
-        token_path = TOKEN_DIR / f"{token_name or _scope_key(scopes_list)}.pickle"
+    token_path = TOKEN_DIR / f"{token_name or _scope_key(scopes_list)}.pickle"
 
     TOKEN_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
 
