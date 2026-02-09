@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+
+import sys
+from datetime import datetime, timedelta
+from google_auth import get_credentials
+from googleapiclient.discovery import build
+
+
+def get_authenticated_service():
+    """Get authenticated Google Calendar service"""
+    creds = get_credentials(service="calendar", scopes="calendar")
+    return build("calendar", "v3", credentials=creds)
+
+
+def parse_time(when_str):
+    """Parse time string like 'today 4pm', '2025-12-25 2:30pm', etc."""
+    when_str = when_str.lower().strip()
+
+    if "today" in when_str:
+        base_date = datetime.now()
+        time_part = when_str.replace("today", "").strip()
+    elif "tomorrow" in when_str:
+        base_date = datetime.now() + timedelta(days=1)
+        time_part = when_str.replace("tomorrow", "").strip()
+    else:
+        # Try to parse full date
+        try:
+            if " " in when_str:
+                date_part, time_part = when_str.rsplit(" ", 1)
+                base_date = datetime.strptime(date_part, "%Y-%m-%d")
+            else:
+                # Just time, assume today
+                base_date = datetime.now()
+                time_part = when_str
+        except:
+            base_date = datetime.now()
+            time_part = when_str
+
+    # Parse time
+    time_part = time_part.replace("pm", "").replace("am", "").strip()
+    is_pm = "pm" in when_str.lower()
+    is_am = "am" in when_str.lower()
+
+    if ":" in time_part:
+        hour, minute = map(int, time_part.split(":"))
+    else:
+        hour = int(time_part)
+        minute = 0
+
+    # Handle AM/PM
+    if is_pm and hour < 12:
+        hour += 12
+    elif is_am and hour == 12:
+        hour = 0
+    elif not is_am and not is_pm and hour < 8:  # Assume PM for afternoon hours
+        hour += 12
+
+    return base_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def create_event(title, when, duration, attendees, description="", location=""):
+    """Create calendar event"""
+    service = get_authenticated_service()
+    if not service:
+        return False
+
+    try:
+        start_time = parse_time(when)
+        end_time = start_time + timedelta(minutes=int(duration))
+
+        # Split attendees by comma
+        attendee_list = [
+            {"email": email.strip()} for email in attendees.split(",") if email.strip()
+        ]
+
+        event = {
+            "summary": title,
+            "start": {
+                "dateTime": start_time.isoformat(),
+                "timeZone": "America/New_York",
+            },
+            "end": {
+                "dateTime": end_time.isoformat(),
+                "timeZone": "America/New_York",
+            },
+            "attendees": attendee_list,
+            "reminders": {
+                "useDefault": False,
+                "overrides": [
+                    {"method": "email", "minutes": 24 * 60},
+                    {"method": "popup", "minutes": 10},
+                ],
+            },
+        }
+
+        if description:
+            event["description"] = description
+        if location:
+            event["location"] = location
+
+        # Add Google Meet if description mentions video/meet/zoom
+        if any(
+            word in description.lower() for word in ["video", "meet", "zoom", "call"]
+        ):
+            event["conferenceData"] = {
+                "createRequest": {
+                    "requestId": f"meet-{int(datetime.now().timestamp())}",
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            }
+
+        # Create the event
+        result = (
+            service.events()
+            .insert(
+                calendarId="primary",
+                body=event,
+                conferenceDataVersion=1,
+                sendUpdates="all",
+            )
+            .execute()
+        )
+
+        print("✅ Event created successfully!")
+        print(f"📅 {title}")
+        print(
+            f"🕐 {start_time.strftime('%Y-%m-%d %I:%M %p')} - {end_time.strftime('%I:%M %p')} ({duration} min)"
+        )
+        print(f"👥 {len(attendee_list)} attendees")
+        print(f"🔗 {result.get('htmlLink')}")
+
+        # Show Meet link if available
+        conf_data = result.get("conferenceData", {})
+        if conf_data:
+            meet_url = conf_data.get("entryPoints", [{}])[0].get("uri")
+            if meet_url:
+                print(f"📹 {meet_url}")
+
+        return True
+
+    except Exception as e:
+        print(f"❌ Error creating event: {e}")
+        return False
+
+
+def list_upcoming_events(count=10):
+    """List upcoming events"""
+    service = get_authenticated_service()
+    if not service:
+        return
+
+    try:
+        now = datetime.utcnow().isoformat() + "Z"
+        result = (
+            service.events()
+            .list(
+                calendarId="primary",
+                timeMin=now,
+                maxResults=count,
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+        )
+
+        events = result.get("items", [])
+
+        if not events:
+            print("No upcoming events found.")
+            return
+
+        print(f"📅 Next {len(events)} events:")
+        print("-" * 50)
+
+        for event in events:
+            start = event["start"].get("dateTime", event["start"].get("date"))
+            if "T" in start:
+                dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                time_str = dt.strftime("%m/%d %I:%M %p")
+            else:
+                time_str = f"{start} (all day)"
+
+            attendees = event.get("attendees", [])
+            attendee_count = len(
+                [a for a in attendees if a.get("responseStatus") != "declined"]
+            )
+
+            print(f"🕐 {time_str}")
+            print(f"📝 {event['summary']}")
+            if attendee_count > 0:
+                print(f"👥 {attendee_count} attendees")
+            print()
+
+    except Exception as e:
+        print(f"❌ Error listing events: {e}")
+
+
+def show_usage():
+    print(
+        """
+Usage: gcal-api <command> [args...]
+
+Commands:
+  add <title> <when> <duration_min> <attendees> [description] [location]
+      Create a new calendar event
+      
+  list [count]
+      List upcoming events (default: 10)
+      
+  setup
+      Run initial authentication setup
+
+Examples:
+  gcal-api add "Team Meeting" "today 2pm" 60 "alice@co.com,bob@co.com" "Weekly standup"
+  gcal-api add "Lunch" "2025-12-25 12:30pm" 90 "friend@gmail.com" 
+  gcal-api add "Call" "tomorrow 3pm" 30 "client@company.com" "video call meeting"
+  gcal-api list 5
+  gcal-api setup
+
+Time formats:
+  - "today 4pm", "tomorrow 2:30pm" 
+  - "2025-12-25 3pm"
+  - Times without AM/PM assume PM if < 8, AM if >= 8
+
+Notes:
+  - Attendees: comma-separated email addresses
+  - Auto-adds Google Meet if description contains: video, meet, zoom, call
+  - Sends email invites to all attendees
+  - Uses America/New_York timezone
+"""
+    )
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        show_usage()
+        sys.exit(1)
+
+    command = sys.argv[1].lower()
+
+    if command == "setup":
+        os.system("gcal-api-setup")
+    elif command == "add":
+        if len(sys.argv) < 6:
+            print(
+                "❌ Usage: gcal-api add <title> <when> <duration> <attendees> [description] [location]"
+            )
+            sys.exit(1)
+
+        title = sys.argv[2]
+        when = sys.argv[3]
+        duration = sys.argv[4]
+        attendees = sys.argv[5]
+        description = sys.argv[6] if len(sys.argv) > 6 else ""
+        location = sys.argv[7] if len(sys.argv) > 7 else ""
+
+        create_event(title, when, duration, attendees, description, location)
+
+    elif command == "list":
+        count = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+        list_upcoming_events(count)
+
+    else:
+        print(f"❌ Unknown command: {command}")
+        show_usage()
+        sys.exit(1)
+
+
+# ⏺ Use gcal-simple when:
+#  - You have simple, predictable scheduling needs
+#  - Your credentials are already set up in standard env vars
+#  - You want basic attendee invites with minimal configuration
+#  - You need the list command to see upcoming events
+#
+#  Use gcal-invite-advanced when:
+#  - You need flexible credential management (multiple possible locations)
+#  - You want better time parsing (ISO dates like "2025-12-25 3pm")
+#  - You need more robust error handling and authentication
+#  - You want both quick add AND structured invites in one tool
+#  - You're sharing the tool or using it across different environments
+#
+#  TL;DR: Use #2 for simple personal use, #3 for more complex/shared usage
+#  scenarios.
