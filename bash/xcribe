@@ -277,7 +277,52 @@ process_file() {
     # Using faster-whisper if available, falls back to regular whisper
     local whisper_output="/tmp/${file_basename%.*}.txt"
 
-    if /Users/wiggins/.local/venvs/whisper/bin/python3 -c "import faster_whisper" 2>/dev/null; then
+    # Map model names for whisper-cpp (uses ggml model files)
+    local cpp_model_dir="$HOME/.local/share/whisper-cpp/models"
+    local cpp_model_file=""
+    case "$whisper_model" in
+        large-v3|large) cpp_model_file="$cpp_model_dir/ggml-large-v3.bin" ;;
+        medium)         cpp_model_file="$cpp_model_dir/ggml-medium.bin" ;;
+        small)          cpp_model_file="$cpp_model_dir/ggml-small.bin" ;;
+        base)           cpp_model_file="$cpp_model_dir/ggml-base.bin" ;;
+        tiny)           cpp_model_file="$cpp_model_dir/ggml-tiny.bin" ;;
+    esac
+
+    if command -v whisper-cli &>/dev/null && [ -n "$cpp_model_file" ] && [ -f "$cpp_model_file" ]; then
+        # Use whisper.cpp (most memory-efficient, fast on Apple Silicon)
+        local srt_output="/tmp/${file_basename%.*}"
+        whisper-cli -m "$cpp_model_file" -l en -osrt -of "$srt_output" "$voice_file" 2>&1 | grep -v "^$"
+        local whisper_exit=$?
+        # Convert SRT to timestamped text format matching Python output
+        if [ -f "${srt_output}.srt" ]; then
+            /Users/wiggins/.local/venvs/whisper/bin/python3 - "${srt_output}.srt" "$whisper_output" <<'SRT_CONVERT'
+import sys, re
+
+srt_file = sys.argv[1]
+out_file = sys.argv[2]
+
+with open(srt_file) as f:
+    content = f.read()
+
+# Parse SRT blocks: index, timestamp, text
+blocks = re.split(r'\n\n+', content.strip())
+with open(out_file, 'w') as f:
+    for block in blocks:
+        lines = block.strip().split('\n')
+        if len(lines) >= 3:
+            # Parse "00:00:00,000 --> 00:00:05,000"
+            m = re.match(r'(\d+):(\d+):(\d+),(\d+)\s*-->\s*(\d+):(\d+):(\d+),(\d+)', lines[1])
+            if m:
+                start = int(m[1])*3600 + int(m[2])*60 + int(m[3]) + int(m[4])/1000
+                end = int(m[5])*3600 + int(m[6])*60 + int(m[7]) + int(m[8])/1000
+                text = ' '.join(lines[2:]).strip()
+                line = f'[{start:.2f}s -> {end:.2f}s] {text}'
+                print(line, file=sys.stderr)
+                f.write(line + '\n')
+SRT_CONVERT
+            rm -f "${srt_output}.srt"
+        fi
+    elif /Users/wiggins/.local/venvs/whisper/bin/python3 -c "import faster_whisper" 2>/dev/null; then
         # Use faster-whisper (significantly faster with CTranslate2)
         /Users/wiggins/.local/venvs/whisper/bin/python3 - "$whisper_model" "$voice_file" "$whisper_output" <<'PYTHON_SCRIPT'
 import sys
