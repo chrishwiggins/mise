@@ -27,7 +27,7 @@ def get_timezone(code: str):
 def convert_time(time_str: str, from_code: str, to_code: str, date=None, fix=False) -> str:
     """Convert time from one airport timezone to another"""
     # Parse time - supports formats like HH:MM, HH.MM, HHhMM, and 12-hour formats like 6:30pm, 11:00am
-    time_match = re.match(r"(\d{1,2})[.:h](\d{2})\s*(am|pm|AM|PM)?", time_str)
+    time_match = re.match(r"(\d{1,2})[.:h](\d{2})[ \t]*(am|pm|AM|PM)?", time_str)
     if not time_match:
         return time_str
 
@@ -115,7 +115,7 @@ def convert_time(time_str: str, from_code: str, to_code: str, date=None, fix=Fal
 def process_text(text: str, from_code: str, to_code: str, fix=False) -> str:
     """Process text and convert all found times and airport codes"""
     # Regex to find times in formats: HH.MM, HH:MM, HHhMM, and 12-hour formats like 6:30pm, 11:00am
-    time_pattern = r"\b(\d{1,2})[.:h](\d{2})\s*(am|pm|AM|PM)?\b"
+    time_pattern = r"\b(\d{1,2})[.:h](\d{2})[ \t]*(am|pm|AM|PM)?\b"
 
     def replace_time(match):
         time_str = match.group(0)
@@ -259,7 +259,9 @@ Common IATA codes:
     try:
         text = sys.stdin.read()
         converted = process_text(text, args.from_code, args.to_code, fix=args.fix)
-        print(converted, end="")
+        sys.stdout.write(converted)
+        if not converted.endswith("\n"):
+            sys.stdout.write("\n")
     except KeyboardInterrupt:
         sys.exit(0)
     except Exception as e:
