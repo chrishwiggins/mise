@@ -7,11 +7,18 @@ in ~/.claude/projects/, presents them in fzf for interactive selection,
 and resumes the chosen session with `claude --resume`.
 
 Claude Code stores sessions per-project in:
-    ~/.claude/projects/<mangled-path>/sessions-index.json
+    ~/.claude/projects/<mangled-path>/
 
 where <mangled-path> is the absolute project path with / replaced by -.
-Each sessions-index.json contains an "entries" array of session metadata
-(sessionId, summary, modified date, message count, git branch, etc.).
+Each project directory may contain:
+  - sessions-index.json: a manifest with session metadata (sessionId,
+    summary, modified date, message count, git branch, etc.)
+  - {session-id}.jsonl: raw session transcript files
+
+Older versions of Claude Code maintained sessions-index.json reliably,
+but newer versions (circa late Jan 2026+) may not update it. This tool
+handles both cases: it reads sessions-index.json when available, then
+scans .jsonl files to discover any sessions not listed in an index.
 
 This tool merges ALL sessions across ALL projects into one searchable
 list, solving the problem that `claude --resume` only shows sessions
@@ -64,8 +71,11 @@ from pathlib import Path
 CONFIG_DIR = os.path.expanduser("~/.config/claude-sessions")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
+# Base directory for Claude Code project data
+PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+
 # Where Claude Code stores session indexes (one per project)
-SESSIONS_GLOB = os.path.expanduser("~/.claude/projects/*/sessions-index.json")
+SESSIONS_GLOB = os.path.join(PROJECTS_DIR, "*/sessions-index.json")
 
 # Default config: only includes universal, non-PII aliases.
 # /private/tmp/ -> /tmp/ is a macOS thing: /tmp is a symlink to /private/tmp,
@@ -103,12 +113,18 @@ def load_config():
 def load_all_sessions():
     """Load and merge session entries from all projects.
 
-    Walks every sessions-index.json under ~/.claude/projects/ and
-    collects all entries into a single flat list. Each entry is a dict
-    with keys like sessionId, summary, modified, messageCount, etc.
-    Silently skips files that are corrupt or unreadable.
+    Two-pass approach:
+    1. Read sessions-index.json files (fast, has clean summaries).
+    2. Scan .jsonl files for sessions not listed in any index
+       (handles newer Claude Code versions that stopped updating
+       the index, or projects that never had one).
+
+    Returns a flat list of session dicts.
     """
     sessions = []
+    known_ids = set()
+
+    # Pass 1: sessions-index.json (authoritative when present)
     for idx_path in glob.glob(SESSIONS_GLOB):
         try:
             with open(idx_path) as f:
@@ -117,6 +133,131 @@ def load_all_sessions():
             continue
         for entry in data.get("entries", []):
             sessions.append(entry)
+            sid = entry.get("sessionId", "")
+            if sid:
+                known_ids.add(sid)
+
+    # Pass 2: .jsonl files not already in an index
+    jsonl_sessions = _load_sessions_from_jsonl(known_ids)
+    sessions.extend(jsonl_sessions)
+
+    return sessions
+
+
+def _extract_user_text(msg):
+    """Pull plain text from a jsonl user message object."""
+    if not isinstance(msg, dict):
+        return ""
+    content = msg.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for c in content:
+            if isinstance(c, dict) and c.get("type") == "text":
+                parts.append(c.get("text", ""))
+        return " ".join(parts)
+    return ""
+
+
+def _extract_jsonl_metadata(jsonl_path, session_id):
+    """Read first lines of a .jsonl to extract session metadata.
+
+    Only reads the first ~50 lines to stay fast on large files.
+    Uses file mtime for the modified timestamp.
+    """
+    try:
+        stat = os.stat(jsonl_path)
+    except OSError:
+        return None
+
+    cwd = None
+    git_branch = ""
+    first_ts = None
+    first_prompt = None
+    msg_count = 0
+
+    try:
+        with open(jsonl_path) as f:
+            for i, line in enumerate(f):
+                if i > 50:
+                    break
+                try:
+                    obj = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                t = obj.get("type", "")
+
+                if not cwd and "cwd" in obj:
+                    cwd = obj["cwd"]
+                if not git_branch and obj.get("gitBranch"):
+                    git_branch = obj["gitBranch"]
+                if not first_ts and "timestamp" in obj:
+                    first_ts = obj["timestamp"]
+
+                if t == "user":
+                    msg_count += 1
+                    if not first_prompt:
+                        text = _extract_user_text(obj.get("message", {}))
+                        # Skip /init command messages
+                        if "command-message" not in text and text.strip():
+                            first_prompt = text.strip()
+    except (IOError, OSError):
+        return None
+
+    if not cwd:
+        return None
+
+    # File mtime as ISO timestamp for the modified field
+    modified = datetime.fromtimestamp(
+        stat.st_mtime, tz=timezone.utc
+    ).isoformat()
+
+    return {
+        "sessionId": session_id,
+        "projectPath": cwd,
+        "modified": modified,
+        "created": first_ts or modified,
+        "messageCount": msg_count,
+        "firstPrompt": (first_prompt or "")[:200],
+        "summary": "",
+        "gitBranch": git_branch,
+    }
+
+
+def _load_sessions_from_jsonl(known_ids):
+    """Scan .jsonl files for sessions missing from sessions-index.json.
+
+    Walks every project directory under ~/.claude/projects/ and checks
+    for .jsonl files whose session ID (the filename stem) is not already
+    in known_ids. Extracts lightweight metadata from the first ~50 lines.
+    """
+    sessions = []
+    if not os.path.isdir(PROJECTS_DIR):
+        return sessions
+
+    for project_dir in os.listdir(PROJECTS_DIR):
+        full_dir = os.path.join(PROJECTS_DIR, project_dir)
+        if not os.path.isdir(full_dir):
+            continue
+        try:
+            entries = os.listdir(full_dir)
+        except OSError:
+            continue
+        for fname in entries:
+            if not fname.endswith(".jsonl"):
+                continue
+            session_id = fname[:-6]  # strip .jsonl
+            if session_id in known_ids:
+                continue
+
+            jsonl_path = os.path.join(full_dir, fname)
+            meta = _extract_jsonl_metadata(jsonl_path, session_id)
+            if meta:
+                sessions.append(meta)
+                known_ids.add(session_id)
+
     return sessions
 
 
@@ -168,7 +309,7 @@ def build_display_lines(sessions, aliases):
         date = format_date(s.get("modified"))
         msgs = str(s.get("messageCount", 0)).rjust(3)
         proj = short_project(s.get("projectPath", ""), aliases)
-        summary = s.get("summary", s.get("firstPrompt", ""))[:60]
+        summary = (s.get("summary") or s.get("firstPrompt") or "")[:60]
         # Append git branch to project path if available
         branch = s.get("gitBranch", "")
         if branch:
@@ -316,10 +457,19 @@ def main():
     project_path = chosen_session.get("projectPath", "")
     print(f"\nResuming: {chosen_session.get('summary', chosen_id)}")
     print(f"Project:  {project_path}")
-    print(f"Command:  claude -p {project_path} --resume {chosen_id}\n")
+    print(f"Command:  claude --resume {chosen_id}\n")
+
+    # cd to project directory first - claude --resume resolves sessions
+    # based on cwd, not the -p flag
+    if project_path and os.path.isdir(project_path):
+        os.chdir(project_path)
+    else:
+        print(f"Warning: project directory not found: {project_path}", file=sys.stderr)
+        print("The session's project may have been deleted.", file=sys.stderr)
+        sys.exit(1)
 
     # execvp replaces this process with claude
-    os.execvp("claude", ["claude", "-p", project_path, "--resume", chosen_id])
+    os.execvp("claude", ["claude", "--resume", chosen_id])
 
 
 if __name__ == "__main__":

@@ -83,6 +83,8 @@ case "$1" in
   black|noir) output_seq "$(make_seq 0 0 0)" ;;
   poo)        output_seq "$(make_seq 139 90 43)" ;;
   teal)       output_seq "$(make_seq 153 215 230)" ;;
+  mustard)    output_seq "$(make_seq 227 184 10)" ;;
+  gold)       output_seq "$(make_seq 255 215 0)" ;;
 
   # School colors
   princeton)  output_seq "$(make_seq 255 103 31)" ;;
@@ -101,14 +103,35 @@ case "$1" in
   brown)  output_seq "$(make_seq 78 54 41)" ;;  # Brown University
   dartmouth)  output_seq "$(make_seq 0 105 62)" ;;  # Dartmouth Green
   duke)  output_seq "$(make_seq 0 48 135)" ;;  # Duke Blue
+  edi)  output_seq "$(make_seq 185 14 47  )" ;;  # Edinburgh Blue #B90E2F ( make_seq 185 14 47 )
 
   # Other
+  money)      output_seq "$(make_seq 85 130 50)" ;;  # dollar bill green
   brat)  output_seq "$(make_seq 138 206 0)" ;;  # brat green
 
   reset|x|0)  output_seq "$(printf '\033]6;1;bg;*;default\a')" ;;
 
+  set)
+    # tc set puke 142 58 203
+    if [[ -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
+      echo "Usage: tc set <name> <r> <g> <b>" >&2
+      exit 1
+    fi
+    name="$2" r="$3" g="$4" b="$5"
+    cf=~/.tc-colors
+    # Remove existing entry for this name, then append
+    if [[ -f "$cf" ]]; then
+      grep -v "^${name} " "$cf" > "$cf.tmp" && mv "$cf.tmp" "$cf"
+    fi
+    echo "$name $r $g $b" >> "$cf"
+    output_seq "$(make_seq "$r" "$g" "$b")"
+    echo "Saved: tc $name -> rgb $r $g $b" >&2
+    ;;
+
   random|rand)
-    output_seq "$(make_seq $((RANDOM % 256)) $((RANDOM % 256)) $((RANDOM % 256)))"
+    _r=$((RANDOM % 256)) _g=$((RANDOM % 256)) _b=$((RANDOM % 256))
+    output_seq "$(make_seq $_r $_g $_b)"
+    echo "rgb $_r $_g $_b" >&2
     ;;
 
   rgb)
@@ -209,12 +232,14 @@ Usage: tc <color>                 # current window
        tc title <text>            # set window title
        tc focus <win.tab>         # bring window to front
        tc rgb <r> <g> <b>         # custom RGB (0-255)
+       tc set <name> <r> <g> <b>     # save a custom color
 
 Colors:
   Basic:  green/g red/r blue/b orange/o purple/p yellow/y cyan/c pink
-  Soft:   amber peach lavender sage cream slate charcoal coal black/noir poo teal
+  Soft:   amber peach lavender sage cream slate charcoal coal black/noir poo teal mustard gold
   School: princeton forrest columbia nyu texas/ut caltech/cit mit stanford harvard berkeley/cal yale penn cornell brown dartmouth duke
-  Other:  random reset/x brat
+  Other:  random reset/x brat money
+  Custom: saved via 'tc set' (~/.tc-colors)
 
 Examples:
   tc green              # color this window green
@@ -227,6 +252,15 @@ EOF
     ;;
 
   *)
+    # Check user-saved colors
+    cf=~/.tc-colors
+    if [[ -f "$cf" ]]; then
+      read -r _n _r _g _b <<< "$(grep "^$1 " "$cf")"
+      if [[ -n "$_r" ]]; then
+        output_seq "$(make_seq "$_r" "$_g" "$_b")"
+        exit 0
+      fi
+    fi
     echo "Unknown: $1 (try 'tc help')" >&2
     exit 1
     ;;
