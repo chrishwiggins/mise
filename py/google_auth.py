@@ -41,6 +41,7 @@ SCOPE_PRESETS = {
     "calendar": ["https://www.googleapis.com/auth/calendar"],
     "forms": ["https://www.googleapis.com/auth/forms.body"],
     "docs-readonly": ["https://www.googleapis.com/auth/documents.readonly"],
+    "gmail-readonly": ["https://www.googleapis.com/auth/gmail.readonly"],
 }
 
 # ---------------------------------------------------------------------------
@@ -53,6 +54,7 @@ SERVICE_CREDENTIALS = {
     "forms": ["~/.config/gdrive/credentials.json"],
     "calendar": ["~/.config/gcal/credentials.json"],
     "thoughtgun": ["~/.config/thoughtgun/credentials.json"],
+    "gmail": ["~/.config/gdrive/credentials.json"],
 }
 
 # Default for services not explicitly listed
