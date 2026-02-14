@@ -53,6 +53,15 @@ Usage:
     claude-sessions --list     # just print, no fzf
     claude-sessions --json     # output JSON for the selected session
 
+Keybindings (in fzf):
+    Enter     Resume the selected session
+    ctrl-e    Edit the summary of the selected session (opens $EDITOR)
+
+Custom summaries:
+    Edited summaries are stored in ~/.config/claude-sessions/summaries.json
+    as a {sessionId: summary} map. These override auto-generated summaries
+    from sessions-index.json and are preserved across runs.
+
 Dependencies:
     - fzf (brew install fzf) for interactive mode
     - Python 3.7+ (for datetime.fromisoformat)
@@ -70,6 +79,7 @@ from pathlib import Path
 # XDG-conventional config location
 CONFIG_DIR = os.path.expanduser("~/.config/claude-sessions")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+SUMMARIES_FILE = os.path.join(CONFIG_DIR, "summaries.json")
 
 # Base directory for Claude Code project data
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
@@ -108,6 +118,28 @@ def load_config():
         json.dump(DEFAULT_CONFIG, f, indent=2)
         f.write("\n")
     return DEFAULT_CONFIG
+
+
+def load_summaries():
+    """Load custom summary overrides from summaries.json.
+
+    Returns a dict mapping sessionId -> custom summary string.
+    """
+    if os.path.exists(SUMMARIES_FILE):
+        try:
+            with open(SUMMARIES_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return {}
+    return {}
+
+
+def save_summaries(summaries):
+    """Write custom summary overrides to summaries.json."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(SUMMARIES_FILE, "w") as f:
+        json.dump(summaries, f, indent=2)
+        f.write("\n")
 
 
 def load_all_sessions():
@@ -295,21 +327,28 @@ def short_project(path, aliases):
     return path
 
 
-def build_display_lines(sessions, aliases):
+def build_display_lines(sessions, aliases, custom_summaries=None):
     """Build tab-separated display lines for fzf or --list output.
 
     Each line: sessionId <tab> date <tab> msgcount <tab> project <tab> summary
 
     Tab separation lets fzf treat each as a column with --delimiter.
     The summary is truncated to 60 chars to keep lines readable.
+    Custom summaries (from summaries.json) override auto-generated ones.
     """
+    if custom_summaries is None:
+        custom_summaries = {}
     lines = []
     for s in sessions:
         sid = s.get("sessionId", "?")
         date = format_date(s.get("modified"))
         msgs = str(s.get("messageCount", 0)).rjust(3)
         proj = short_project(s.get("projectPath", ""), aliases)
-        summary = (s.get("summary") or s.get("firstPrompt") or "")[:60]
+        # Custom summary wins over auto-generated
+        if sid in custom_summaries:
+            summary = custom_summaries[sid][:60]
+        else:
+            summary = (s.get("summary") or s.get("firstPrompt") or "")[:60]
         # Append git branch to project path if available
         branch = s.get("gitBranch", "")
         if branch:
@@ -329,15 +368,36 @@ def print_list(lines, count):
     print(f"\n{count} sessions")
 
 
+def edit_summary(session_id, current_summary):
+    """Open $EDITOR (or vi) to edit a session summary. Returns new summary."""
+    import tempfile
+    editor = os.environ.get("EDITOR", "vi")
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", prefix="claude-summary-", delete=False
+    ) as tf:
+        tf.write(current_summary)
+        tf_path = tf.name
+    try:
+        subprocess.run([editor, tf_path])
+        with open(tf_path) as f:
+            new_summary = f.read().strip()
+        # Collapse to single line
+        new_summary = " ".join(new_summary.split())
+        return new_summary
+    finally:
+        os.unlink(tf_path)
+
+
 def pick_with_fzf(lines):
     """Launch fzf with session lines and return the chosen line.
 
-    Returns the raw tab-separated line chosen by the user, or None
-    if the user cancelled (Esc / Ctrl-C).
+    Returns a tuple (action, line) where action is "select" or "edit",
+    or (None, None) if the user cancelled (Esc / Ctrl-C).
     """
     header = ("ID                                    Modified"
               "          Msgs  Project"
-              "                                   Summary")
+              "                                   Summary"
+              "  [ctrl-e: edit summary]")
     fzf_input = "\n".join(lines)
     try:
         result = subprocess.run(
@@ -355,6 +415,7 @@ def pick_with_fzf(lines):
                 "--height", "80%",
                 "--layout", "reverse",
                 "--prompt", "resume> ",
+                "--expect", "ctrl-e",
             ],
             input=fzf_input,
             capture_output=True,
@@ -365,10 +426,21 @@ def pick_with_fzf(lines):
         sys.exit(1)
 
     if result.returncode != 0:
-        return None  # user cancelled
+        return None, None  # user cancelled
 
-    chosen = result.stdout.strip()
-    return chosen if chosen else None
+    output_lines = result.stdout.strip().split("\n")
+    if len(output_lines) < 2:
+        return None, None
+
+    key = output_lines[0].strip()  # "" for enter, "ctrl-e" for edit
+    chosen = output_lines[1].strip()
+
+    if not chosen:
+        return None, None
+
+    if key == "ctrl-e":
+        return "edit", chosen
+    return "select", chosen
 
 
 def main():
@@ -398,6 +470,9 @@ def main():
     config = load_config()
     aliases = config.get("path_aliases", {})
 
+    # Load custom summary overrides
+    custom_summaries = load_summaries()
+
     # Aggregate sessions from all projects
     sessions = load_all_sessions()
 
@@ -413,6 +488,7 @@ def main():
             if pat.search(s.get("projectPath", ""))
             or pat.search(s.get("summary", ""))
             or pat.search(s.get("firstPrompt", ""))
+            or pat.search(custom_summaries.get(s.get("sessionId", ""), ""))
         ]
 
     # Optional limit
@@ -424,20 +500,37 @@ def main():
         sys.exit(1)
 
     # Build display lines
-    lines = build_display_lines(sessions, aliases)
+    lines = build_display_lines(sessions, aliases, custom_summaries)
 
     # --list mode: just print and exit
     if args.list:
         print_list(lines, len(lines))
         sys.exit(0)
 
-    # Interactive mode: pick with fzf
-    chosen_line = pick_with_fzf(lines)
-    if not chosen_line:
-        sys.exit(0)
+    # Interactive mode: pick with fzf, loop on edits
+    while True:
+        action, chosen_line = pick_with_fzf(lines)
+        if action is None:
+            sys.exit(0)
 
-    # Extract session ID (first tab-separated field)
-    chosen_id = chosen_line.split("\t")[0].strip()
+        chosen_id = chosen_line.split("\t")[0].strip()
+
+        if action == "edit":
+            # Get current summary (custom or auto-generated)
+            current = custom_summaries.get(chosen_id, "")
+            if not current:
+                s = next((s for s in sessions if s.get("sessionId") == chosen_id), {})
+                current = s.get("summary") or s.get("firstPrompt") or ""
+            new_summary = edit_summary(chosen_id, current)
+            if new_summary != current:
+                custom_summaries[chosen_id] = new_summary
+                save_summaries(custom_summaries)
+                # Rebuild lines with updated summary
+                lines = build_display_lines(sessions, aliases, custom_summaries)
+            continue  # re-open fzf
+
+        # action == "select": resume the session
+        break
 
     # Look up the full session entry to get projectPath
     chosen_session = next(
@@ -455,7 +548,8 @@ def main():
 
     # Resume the session via claude CLI
     project_path = chosen_session.get("projectPath", "")
-    print(f"\nResuming: {chosen_session.get('summary', chosen_id)}")
+    summary = custom_summaries.get(chosen_id) or chosen_session.get("summary", chosen_id)
+    print(f"\nResuming: {summary}")
     print(f"Project:  {project_path}")
     print(f"Command:  claude --resume {chosen_id}\n")
 
