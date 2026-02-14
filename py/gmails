@@ -1,0 +1,266 @@
+#!/Users/wiggins/mise/py/.venv/bin/python3
+"""
+List and download Gmail messages.
+
+Usage:
+    gmail                         # list 20 most recent messages
+    gmail -n 5                    # list 5 most recent
+    gmail -q "from:alice"         # list with Gmail search filter
+    gmail 3                       # download message #3 to stdout
+    gmail 3 message.eml           # download message #3 to file
+    gmail 3 /tmp/                 # download to dir with auto-generated name
+
+Designed for the !! workflow:
+    % gmail -n 5 -q "from:alice"  # see the list
+    % !! 3 reply.eml              # expands to: gmail -n 5 -q "from:alice" 3 reply.eml
+"""
+
+import argparse
+import base64
+import email
+import os
+import re
+import sys
+from email.utils import parseaddr, parsedate_to_datetime
+from pathlib import Path
+
+from google_auth import get_credentials
+from googleapiclient.discovery import build
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def parse_sender(from_header):
+    """Extract a display-friendly sender from a From header."""
+    if not from_header:
+        return "(unknown)"
+    name, addr = parseaddr(from_header)
+    return name if name else addr
+
+
+def parse_date(date_header):
+    """Parse email Date header to YYYY-MM-DD string."""
+    if not date_header:
+        return "          "
+    try:
+        dt = parsedate_to_datetime(date_header)
+        return dt.strftime("%Y-%m-%d")
+    except Exception:
+        return date_header[:10]
+
+
+def get_header(headers, name):
+    """Extract a header value from Gmail metadata headers list."""
+    for h in headers:
+        if h["name"].lower() == name.lower():
+            return h["value"]
+    return ""
+
+
+def sanitize_filename(s, max_len=60):
+    """Sanitize a string for use as a filename component."""
+    s = re.sub(r"[^\w\s.-]", "", s)
+    s = re.sub(r"\s+", "-", s.strip())
+    s = re.sub(r"-+", "-", s)
+    return s[:max_len].rstrip("-")
+
+
+def generate_filename(raw_bytes):
+    """Generate a filename from the email's Date, From, and Subject headers."""
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+
+    date_str = "unknown-date"
+    date_hdr = msg.get("Date", "")
+    if date_hdr:
+        try:
+            dt = parsedate_to_datetime(date_hdr)
+            date_str = dt.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    _, addr = parseaddr(msg.get("From", ""))
+    from_part = sanitize_filename(addr.split("@")[0] if addr else "unknown", 20)
+
+    subj = msg.get("Subject", "no-subject")
+    subj_part = sanitize_filename(subj, 30)
+
+    return f"{date_str}_{from_part}_{subj_part}.eml"
+
+
+def save_attachments(raw_bytes, output_dir):
+    """Extract and save attachments alongside the .eml file."""
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    saved = []
+
+    for part in msg.walk():
+        disp = part.get("Content-Disposition", "")
+        if "attachment" not in disp:
+            continue
+
+        filename = part.get_filename()
+        if not filename:
+            filename = f"attachment-{len(saved) + 1}.bin"
+
+        att_path = output_dir / filename
+        if att_path.exists():
+            print(f"Attachment already exists, skipping: {att_path}", file=sys.stderr)
+            continue
+
+        payload = part.get_payload(decode=True)
+        if payload:
+            att_path.write_bytes(payload)
+            saved.append(att_path)
+
+    return saved
+
+
+# ---------------------------------------------------------------------------
+# List mode
+# ---------------------------------------------------------------------------
+
+def do_list(service, count, query):
+    """List recent messages as a numbered table."""
+    kwargs = {"userId": "me", "maxResults": count}
+    if query:
+        kwargs["q"] = query
+    result = service.users().messages().list(**kwargs).execute()
+    messages = result.get("messages", [])
+
+    if not messages:
+        print("No messages found.", file=sys.stderr)
+        sys.exit(0)
+
+    try:
+        term_width = os.get_terminal_size().columns
+    except OSError:
+        term_width = 80
+
+    idx_width = len(str(len(messages)))
+    from_width = 25
+    fixed_width = idx_width + 1 + 1 + 10 + 2 + from_width + 2
+    subj_width = max(term_width - fixed_width, 10)
+
+    for i, msg_stub in enumerate(messages, 1):
+        msg = service.users().messages().get(
+            userId="me",
+            id=msg_stub["id"],
+            format="metadata",
+            metadataHeaders=["From", "Subject", "Date"],
+        ).execute()
+
+        headers = msg.get("payload", {}).get("headers", [])
+        date_str = parse_date(get_header(headers, "Date"))
+        sender = parse_sender(get_header(headers, "From"))
+        subject = get_header(headers, "Subject") or "(no subject)"
+
+        if len(sender) > from_width:
+            sender = sender[: from_width - 1] + "\u2026"
+        if len(subject) > subj_width:
+            subject = subject[: subj_width - 1] + "\u2026"
+
+        print(f"{i:>{idx_width}}. {date_str}  {sender:<{from_width}}  {subject}")
+
+
+# ---------------------------------------------------------------------------
+# Get mode
+# ---------------------------------------------------------------------------
+
+def do_get(service, index, count, query, output):
+    """Download a message by its 1-based index."""
+    kwargs = {"userId": "me", "maxResults": count}
+    if query:
+        kwargs["q"] = query
+    result = service.users().messages().list(**kwargs).execute()
+    messages = result.get("messages", [])
+
+    if not messages:
+        print("No messages found.", file=sys.stderr)
+        sys.exit(1)
+
+    if index < 1 or index > len(messages):
+        print(f"Index {index} out of range (1-{len(messages)}).", file=sys.stderr)
+        sys.exit(1)
+
+    msg_id = messages[index - 1]["id"]
+
+    raw_msg = service.users().messages().get(
+        userId="me", id=msg_id, format="raw"
+    ).execute()
+    raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+
+    # No output arg: write to stdout
+    if output is None:
+        sys.stdout.buffer.write(raw_bytes)
+        msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+        att_count = sum(
+            1 for p in msg.walk()
+            if "attachment" in p.get("Content-Disposition", "")
+        )
+        if att_count:
+            print(
+                f"({att_count} attachment(s) not saved - use a file/dir output to save them)",
+                file=sys.stderr,
+            )
+        return
+
+    output_path = Path(output)
+
+    if output_path.is_dir():
+        output_path = output_path / generate_filename(raw_bytes)
+
+    if output_path.exists():
+        print(f"File already exists: {output_path}", file=sys.stderr)
+        sys.exit(1)
+
+    output_path.write_bytes(raw_bytes)
+
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    sender = msg.get("From", "unknown")
+    subject = msg.get("Subject", "(no subject)")
+
+    attachments = save_attachments(raw_bytes, output_path.parent)
+
+    att_note = f" + {len(attachments)} attachment(s)" if attachments else ""
+    print(f"Saved: {output_path} (From: {sender}, Subject: {subject}){att_note}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="List and download Gmail messages.",
+        epilog="Run without INDEX to list. Add INDEX to download. Designed for !! workflow.",
+    )
+    parser.add_argument(
+        "index", nargs="?", type=int, default=None,
+        help="Message number to download (omit to list)"
+    )
+    parser.add_argument(
+        "output", nargs="?", default=None,
+        help="Output filename or directory (default: stdout)"
+    )
+    parser.add_argument(
+        "-n", "--count", type=int, default=20,
+        help="Number of messages (default: 20)"
+    )
+    parser.add_argument(
+        "-q", "--query", type=str, default=None,
+        help="Gmail search query (same syntax as Gmail search bar)"
+    )
+    args = parser.parse_args()
+
+    creds = get_credentials(service="gmail", scopes="gmail-readonly")
+    service = build("gmail", "v1", credentials=creds)
+
+    if args.index is None:
+        do_list(service, args.count, args.query)
+    else:
+        do_get(service, args.index, args.count, args.query, args.output)
+
+
+if __name__ == "__main__":
+    main()
