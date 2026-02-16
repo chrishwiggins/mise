@@ -1,26 +1,42 @@
 #!/Users/wiggins/mise/py/.venv/bin/python3
 """
-List and download Gmail messages.
+Gmail CLI: list, read, send, and draft messages via Gmail API.
 
 Usage:
-    gmail                         # list 20 most recent messages
-    gmail -n 5                    # list 5 most recent
-    gmail -q "from:alice"         # list with Gmail search filter
-    gmail 3                       # download message #3 to stdout
-    gmail 3 message.eml           # download message #3 to file
-    gmail 3 /tmp/                 # download to dir with auto-generated name
+    gmails                              # list 20 most recent messages
+    gmails -n 5                         # list 5 most recent
+    gmails -q "from:alice"              # list with Gmail search filter
+    gmails -q "in:sent" -n 5            # list 5 most recent sent messages
+    gmails 3                            # download message #3 to stdout
+    gmails 3 message.eml               # download message #3 to file
+    gmails 3 /tmp/                      # download to dir with auto-generated name
+
+    gmails send user@ex.com -s "hi"     # send (body from stdin)
+    gmails send -H msg.eml              # send a pre-built .eml
+    gmails send user@ex.com             # interactive (opens $EDITOR)
+    gmails send user@ex.com -s "hi" -a file.pdf  # send with attachment
+
+    gmails draft user@ex.com -s "hi"    # save to Gmail Drafts (body from stdin)
+    gmails draft -H msg.eml             # draft from .eml file
+    gmails draft user@ex.com            # interactive draft (opens $EDITOR)
 
 Designed for the !! workflow:
-    % gmail -n 5 -q "from:alice"  # see the list
-    % !! 3 reply.eml              # expands to: gmail -n 5 -q "from:alice" 3 reply.eml
+    % gmails -n 5 -q "from:alice"       # see the list
+    % !! 3 reply.eml                    # expands to: gmails -n 5 -q "from:alice" 3 reply.eml
 """
 
 import argparse
 import base64
 import email
+import mimetypes
 import os
 import re
+import subprocess
 import sys
+import tempfile
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 
@@ -86,7 +102,29 @@ def generate_filename(raw_bytes):
     subj = msg.get("Subject", "no-subject")
     subj_part = sanitize_filename(subj, 30)
 
-    return f"{date_str}_{from_part}_{subj_part}.eml"
+    return f"{date_str}-{from_part}-{subj_part}.eml"
+
+
+def versioned_path(path):
+    """If path exists, move it to path-v1.ext (or path-v{N+1}.ext) and return original path."""
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+
+    # Find the highest existing version
+    max_v = 0
+    for sibling in parent.iterdir():
+        m = re.match(re.escape(stem) + r"-v(\d+)" + re.escape(suffix) + "$", sibling.name)
+        if m:
+            max_v = max(max_v, int(m.group(1)))
+
+    new_v = max_v + 1
+    versioned = parent / f"{stem}-v{new_v}{suffix}"
+    path.rename(versioned)
+    print(f"Moved: {path.name} -> {versioned.name}", file=sys.stderr)
+    return path
 
 
 def save_attachments(raw_bytes, output_dir):
@@ -114,6 +152,98 @@ def save_attachments(raw_bytes, output_dir):
             saved.append(att_path)
 
     return saved
+
+
+ACCOUNTS_FILE = Path("~/.config/gmails/accounts").expanduser()
+
+
+def resolve_account(config_path, email_addr, scope_prefix):
+    """Resolve account from -F config file or -e email address.
+
+    Returns (token_name, login_hint) tuple, or (None, None) if neither given.
+    """
+    if email_addr:
+        # -e flag: look up config path from accounts file, derive token name
+        full_email, config_path = _lookup_config_for_email(email_addr)
+        acct = full_email.replace("@", "-at-").replace(".", "-")
+        return f"{scope_prefix}-{acct}", full_email
+    if config_path:
+        # -F flag: extract email from muttrc
+        with open(config_path) as f:
+            for line in f:
+                m = re.match(r'^set\s+imap_user\s*=\s*"(.+?)"', line)
+                if m:
+                    found_email = m.group(1)
+                    acct = found_email.replace("@", "-at-").replace(".", "-")
+                    return f"{scope_prefix}-{acct}", found_email
+        print(f"No imap_user found in {config_path}", file=sys.stderr)
+        sys.exit(1)
+    return None, None
+
+
+def _lookup_config_for_email(email_addr):
+    """Find muttrc config path for an email address from ~/.config/gmails/accounts.
+
+    Supports partial matching (e.g., 'lakedutchess' matches 'chris@lakedutchess.com').
+    Returns (full_email, config_path) tuple.
+    """
+    if not ACCOUNTS_FILE.exists():
+        print(f"No accounts file at {ACCOUNTS_FILE}", file=sys.stderr)
+        print("Create it with lines like: user@example.com /path/to/muttrc", file=sys.stderr)
+        sys.exit(1)
+
+    matches = []
+    with open(ACCOUNTS_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            acct_email, acct_path = parts
+            if email_addr in acct_email:
+                matches.append((acct_email, acct_path))
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) == 0:
+        print(f"No account matching '{email_addr}' in {ACCOUNTS_FILE}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Ambiguous: '{email_addr}' matches multiple accounts:", file=sys.stderr)
+    for acct_email, _ in matches:
+        print(f"  {acct_email}", file=sys.stderr)
+    sys.exit(1)
+
+
+def get_body_interactive(recipient, subject):
+    """Open $EDITOR and return the body text."""
+    editor = os.environ.get("EDITOR", "vim")
+    with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
+        tmpfile = f.name
+    try:
+        subprocess.call([editor, tmpfile])
+        body = Path(tmpfile).read_text()
+    finally:
+        os.unlink(tmpfile)
+    if not body.strip():
+        print("Empty body, aborting.", file=sys.stderr)
+        sys.exit(1)
+    return body
+
+
+def build_mime_message(recipient, subject, body, cc=None, bcc=None, attachments=None):
+    """Build a MIME message from parts. Returns bytes."""
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["To"] = recipient
+    if subject:
+        msg["Subject"] = subject
+    if cc:
+        msg["Cc"] = cc
+    if bcc:
+        msg["Bcc"] = bcc
+    msg = _attach_files(msg, attachments)
+    return msg.as_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -190,29 +320,19 @@ def do_get(service, index, count, query, output):
     ).execute()
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
 
-    # No output arg: write to stdout
+    # Determine output path
     if output is None:
-        sys.stdout.buffer.write(raw_bytes)
-        msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
-        att_count = sum(
-            1 for p in msg.walk()
-            if "attachment" in p.get("Content-Disposition", "")
-        )
-        if att_count:
-            print(
-                f"({att_count} attachment(s) not saved - use a file/dir output to save them)",
-                file=sys.stderr,
-            )
-        return
+        # No output arg: save to /tmp/spool (a la /var/spool/mail)
+        spool = Path("/tmp/spool")
+        spool.mkdir(exist_ok=True)
+        output_path = spool / generate_filename(raw_bytes)
+    else:
+        output_path = Path(output)
+        if output_path.is_dir():
+            output_path = output_path / generate_filename(raw_bytes)
 
-    output_path = Path(output)
-
-    if output_path.is_dir():
-        output_path = output_path / generate_filename(raw_bytes)
-
-    if output_path.exists():
-        print(f"File already exists: {output_path}", file=sys.stderr)
-        sys.exit(1)
+    # Version existing file instead of erroring
+    output_path = versioned_path(output_path)
 
     output_path.write_bytes(raw_bytes)
 
@@ -227,39 +347,281 @@ def do_get(service, index, count, query, output):
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Send mode
 # ---------------------------------------------------------------------------
 
-def main():
+def _attach_files(msg, attachments):
+    """Add file attachments to an email message, converting to multipart if needed."""
+    if not attachments:
+        return msg
+    # Wrap in multipart/mixed if not already multipart
+    if not msg.is_multipart():
+        original = msg
+        msg = MIMEMultipart()
+        # Preserve headers from the original
+        for key in ("To", "From", "Subject", "Cc", "Bcc", "Reply-To",
+                     "In-Reply-To", "References", "Date", "Message-ID"):
+            val = original.get(key)
+            if val:
+                msg[key] = val
+        # Move body to a text part
+        body = original.get_payload(decode=True)
+        charset = original.get_content_charset() or "utf-8"
+        msg.attach(MIMEText(body.decode(charset), original.get_content_subtype(), charset))
+    for att_path in attachments:
+        p = Path(att_path)
+        ctype, _ = mimetypes.guess_type(str(p))
+        if ctype is None:
+            ctype = "application/octet-stream"
+        maintype, subtype = ctype.split("/", 1)
+        with open(p, "rb") as f:
+            part = MIMEBase(maintype, subtype)
+            part.set_payload(f.read())
+        email.encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=p.name)
+        msg.attach(part)
+    return msg
+
+
+def _build_raw_bytes(args):
+    """Build raw email bytes from send/draft args. Shared by do_send and do_draft."""
+    if args.header_file:
+        raw_bytes = Path(args.header_file).read_bytes()
+        if not sys.stdin.isatty():
+            body = sys.stdin.read()
+            if body.strip():
+                raw_bytes = raw_bytes.rstrip() + b"\n\n" + body.encode()
+        if args.attach:
+            msg = email.message_from_bytes(raw_bytes, policy=email.policy.compat32)
+            msg = _attach_files(msg, args.attach)
+            raw_bytes = msg.as_bytes()
+    else:
+        if not args.recipient:
+            print("Recipient required (or use -H with an .eml file).", file=sys.stderr)
+            sys.exit(1)
+        if sys.stdin.isatty():
+            body = get_body_interactive(args.recipient, args.subject)
+        else:
+            body = sys.stdin.read()
+        raw_bytes = build_mime_message(
+            args.recipient, args.subject, body,
+            cc=args.cc, bcc=args.bcc, attachments=args.attach,
+        )
+    return raw_bytes
+
+
+def do_send(service, args):
+    """Send a message via Gmail API."""
+    raw_bytes = _build_raw_bytes(args)
+    encoded = base64.urlsafe_b64encode(raw_bytes).decode()
+    result = service.users().messages().send(
+        userId="me", body={"raw": encoded}
+    ).execute()
+
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    to = msg.get("To", "(unknown)")
+    subj = msg.get("Subject", "(no subject)")
+    print(f"Sent: To={to} Subject={subj} id={result.get('id', '?')}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Draft mode
+# ---------------------------------------------------------------------------
+
+def do_draft(service, args):
+    """Create a draft via Gmail API."""
+    raw_bytes = _build_raw_bytes(args)
+    encoded = base64.urlsafe_b64encode(raw_bytes).decode()
+    result = service.users().drafts().create(
+        userId="me", body={"message": {"raw": encoded}}
+    ).execute()
+
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    to = msg.get("To", "(unknown)")
+    subj = msg.get("Subject", "(no subject)")
+    print(f"Draft saved: To={to} Subject={subj} id={result.get('id', '?')}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+def parse_send_draft_args(argv):
+    """Parse arguments for send/draft mode."""
+    parser = argparse.ArgumentParser(
+        prog=f"gmails {argv[0]}",
+        description=f"{'Send' if argv[0] == 'send' else 'Draft'} a Gmail message.",
+    )
+    parser.add_argument("recipient", nargs="?", default=None, help="Recipient email address")
+    parser.add_argument("-s", "--subject", default="", help="Subject line")
+    parser.add_argument("-H", "--header-file", default=None, help="Use .eml file as message")
+    parser.add_argument("-a", "--attach", action="append", default=None, help="Attach file (repeatable)")
+    parser.add_argument("-c", "--cc", default=None, help="Cc recipient")
+    parser.add_argument("-b", "--bcc", default=None, help="Bcc recipient")
+    parser.add_argument("-F", "--config", default=None, help="Muttrc config for account isolation")
+    parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
+    return parser.parse_args(argv[1:])
+
+
+def parse_list_get_args(argv):
+    """Parse arguments for list/get mode (original interface)."""
     parser = argparse.ArgumentParser(
         description="List and download Gmail messages.",
         epilog="Run without INDEX to list. Add INDEX to download. Designed for !! workflow.",
     )
-    parser.add_argument(
-        "index", nargs="?", type=int, default=None,
-        help="Message number to download (omit to list)"
-    )
-    parser.add_argument(
-        "output", nargs="?", default=None,
-        help="Output filename or directory (default: stdout)"
-    )
-    parser.add_argument(
-        "-n", "--count", type=int, default=20,
-        help="Number of messages (default: 20)"
-    )
-    parser.add_argument(
-        "-q", "--query", type=str, default=None,
-        help="Gmail search query (same syntax as Gmail search bar)"
-    )
-    args = parser.parse_args()
+    parser.add_argument("index", nargs="?", type=int, default=None, help="Message number to download")
+    parser.add_argument("output", nargs="?", default=None, help="Output filename or directory")
+    parser.add_argument("-n", "--count", type=int, default=20, help="Number of messages (default: 20)")
+    parser.add_argument("-q", "--query", default=None, help="Gmail search query")
+    parser.add_argument("-F", "--config", default=None, help="Muttrc config for account isolation")
+    parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
+    return parser.parse_args(argv)
 
-    creds = get_credentials(service="gmail", scopes="gmail-readonly")
-    service = build("gmail", "v1", credentials=creds)
 
-    if args.index is None:
-        do_list(service, args.count, args.query)
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+FULL_HELP = """\
+gmails - Gmail CLI: list, read, send, and draft messages via Gmail API.
+
+Commands:
+  gmails [options] [INDEX [OUTPUT]]     List or download messages
+  gmails send [options] [RECIPIENT]     Send a message
+  gmails draft [options] [RECIPIENT]    Save a message to Gmail Drafts
+
+List messages:
+  gmails                                List 20 most recent messages
+  gmails -n 5                           List 5 most recent
+  gmails -q "from:alice"                Search with Gmail query syntax
+  gmails -q "is:unread"                 List unread messages
+  gmails -q "has:attachment"            List messages with attachments
+  gmails -q "newer_than:7d"             Messages from the last 7 days
+  gmails -e lake -q "from:buyrite"      Search another account by email substring
+
+Sent mail and search:
+  gmails -q "in:sent"                   List sent messages
+  gmails -q "in:sent" -n 10             List 10 most recent sent
+  gmails -q "in:sent to:alice"          Sent messages to alice
+  gmails -q 'from:alice subject:"the proposal"'  Faceted search with phrase
+
+Download a message:
+  gmails 3                              Print message #3 to stdout
+  gmails 3 message.eml                  Save message #3 to file
+  gmails 3 /tmp/                        Save to dir (auto-named from headers)
+
+Send a message:
+  echo "body" | gmails send user@example.com -s "subject"
+  gmails send user@example.com -s "hi"                     (opens $EDITOR)
+  gmails send user@example.com -s "hi" -a report.pdf       (with attachment)
+  gmails send user@example.com -a a.pdf -a b.pdf           (multiple attachments)
+  gmails send user@example.com -s "hi" -c boss@example.com (with cc)
+  gmails send -H message.eml                               (send a pre-built .eml)
+  cat body.txt | gmails send -H headers.eml                (eml headers + stdin body)
+  gmails -e lake send user@example.com -s "hi"             (send from another account)
+
+Save to Drafts:
+  echo "body" | gmails draft user@example.com -s "subject"
+  gmails draft user@example.com                            (opens $EDITOR)
+  gmails draft -H message.eml                              (draft from .eml file)
+  gmails draft user@example.com -s "hi" -a file.pdf        (draft with attachment)
+
+The !! workflow (list, then act on a result):
+  % gmails -n 5 -q "from:alice"
+  % !! 3 reply.eml              # re-runs: gmails -n 5 -q "from:alice" 3 reply.eml
+
+List/download options:
+  -n, --count N         Number of messages to list (default: 20)
+  -q, --query QUERY     Gmail search query (same syntax as the Gmail search bar)
+
+Send/draft options:
+  -s, --subject TEXT    Subject line
+  -H, --header-file F   Use .eml file as the message (headers and body)
+  -a, --attach FILE     Attach a file (repeatable for multiple attachments)
+  -c, --cc ADDR         Cc recipient
+  -b, --bcc ADDR        Bcc recipient
+
+Common options:
+  -F, --config FILE     Muttrc config file for multi-account token isolation
+  -e, --email ADDR      Account email or substring (alternative to -F)
+  -h, --help            Show this help (or: gmails send -h, gmails draft -h)
+
+Body input (send/draft):
+  If stdin is piped, it becomes the message body.
+  If stdin is a terminal and no -H file, opens $EDITOR for composing.
+  If -H is given with piped stdin, the .eml provides headers and stdin is appended.
+
+Authentication:
+  Uses OAuth via google_auth.py. Tokens are cached per scope in ~/.config/google-tokens/.
+  List/download uses gmail-readonly scope. Send/draft uses gmail-compose scope.
+  First use of send/draft will open a browser for OAuth consent.
+
+Multi-account (-F and -e):
+  -F: Pass a neomutt-style config file containing 'set imap_user="user@example.com"'.
+  -e: Pass an email address or substring to look up in ~/.config/gmails/accounts.
+      The accounts file has lines like: user@example.com /path/to/muttrc
+      Partial matching works: -e lake matches chris@lakedutchess.com.
+  Each account gets isolated OAuth tokens (e.g., gmail-compose-user-at-example-com).
+"""
+
+
+def main():
+    # Top-level help: show comprehensive usage for all modes
+    if len(sys.argv) < 2 or (
+        sys.argv[1] in ("-h", "--help") and
+        not (len(sys.argv) > 2 and sys.argv[2] in ("send", "draft"))
+    ):
+        if "-h" in sys.argv or "--help" in sys.argv:
+            print(FULL_HELP)
+            sys.exit(0)
+
+    # Detect mode: find "send" or "draft" anywhere in argv (skipping flag values)
+    mode = None
+    rest = sys.argv[1:]
+    mode_index = None
+    skip_next = False
+    for i, arg in enumerate(rest):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("-F", "--config", "-e", "--email"):
+            skip_next = True  # next arg is the flag's value
+            continue
+        if arg in ("send", "draft"):
+            mode = arg
+            mode_index = i
+            break
+        if arg.startswith("-"):
+            continue
+        break  # hit a positional arg that isn't send/draft
+
+    if mode:
+        # Rearrange so parse_send_draft_args sees: [mode, ...flags..., ...args...]
+        # Move common flags from before the mode into the post-mode args
+        pre = rest[:mode_index]
+        post = rest[mode_index:]  # starts with "send"/"draft"
+        rest = [post[0]] + pre + post[1:]
+
+    if mode in ("send", "draft"):
+        args = parse_send_draft_args(rest)
+        token_name, login_hint = resolve_account(args.config, args.email, "gmail-compose")
+        creds = get_credentials(service="gmail", scopes="gmail-compose",
+                                token_name=token_name, login_hint=login_hint)
+        service = build("gmail", "v1", credentials=creds)
+        if mode == "send":
+            do_send(service, args)
+        else:
+            do_draft(service, args)
     else:
-        do_get(service, args.index, args.count, args.query, args.output)
+        args = parse_list_get_args(rest)
+        token_name, login_hint = resolve_account(args.config, args.email, "gmail-readonly")
+        creds = get_credentials(service="gmail", scopes="gmail-readonly",
+                                token_name=token_name, login_hint=login_hint)
+        service = build("gmail", "v1", credentials=creds)
+        if args.index is None:
+            do_list(service, args.count, args.query)
+        else:
+            do_get(service, args.index, args.count, args.query, args.output)
 
 
 if __name__ == "__main__":
