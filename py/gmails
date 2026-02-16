@@ -157,11 +157,31 @@ def save_attachments(raw_bytes, output_dir):
 ACCOUNTS_FILE = Path("~/.config/gmails/accounts").expanduser()
 
 
+def do_list_accounts():
+    """Print configured accounts from ~/.config/gmails/accounts."""
+    if not ACCOUNTS_FILE.exists():
+        print(f"No accounts file at {ACCOUNTS_FILE}", file=sys.stderr)
+        print("Create it with lines like: user@example.com /path/to/muttrc", file=sys.stderr)
+        sys.exit(1)
+    with open(ACCOUNTS_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                print(f"  {parts[0]}")
+    sys.exit(0)
+
+
 def resolve_account(config_path, email_addr, scope_prefix):
     """Resolve account from -F config file or -e email address.
 
     Returns (token_name, login_hint) tuple, or (None, None) if neither given.
     """
+    # Fall back to GMAILS_ACCOUNT env var if neither -F nor -e given
+    if not email_addr and not config_path:
+        email_addr = os.environ.get("GMAILS_ACCOUNT")
     if email_addr:
         # -e flag: look up config path from accounts file, derive token name
         full_email, config_path = _lookup_config_for_email(email_addr)
@@ -297,7 +317,7 @@ def do_list(service, count, query):
 # Get mode
 # ---------------------------------------------------------------------------
 
-def do_get(service, index, count, query, output):
+def do_get(service, index, count, query, output, stdout=False):
     """Download a message by its 1-based index."""
     kwargs = {"userId": "me", "maxResults": count}
     if query:
@@ -319,6 +339,11 @@ def do_get(service, index, count, query, output):
         userId="me", id=msg_id, format="raw"
     ).execute()
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+
+    # -S flag: raw to stdout for piping
+    if stdout:
+        sys.stdout.buffer.write(raw_bytes)
+        return
 
     # Determine output path
     if output is None:
@@ -344,6 +369,102 @@ def do_get(service, index, count, query, output):
 
     att_note = f" + {len(attachments)} attachment(s)" if attachments else ""
     print(f"Saved: {output_path} (From: {sender}, Subject: {subject}){att_note}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Reply mode
+# ---------------------------------------------------------------------------
+
+def do_reply(service, index, count, query, args):
+    """Download message by index, extract headers, open $EDITOR for reply."""
+    kwargs = {"userId": "me", "maxResults": count}
+    if query:
+        kwargs["q"] = query
+    result = service.users().messages().list(**kwargs).execute()
+    messages = result.get("messages", [])
+
+    if not messages:
+        print("No messages found.", file=sys.stderr)
+        sys.exit(1)
+
+    if index < 1 or index > len(messages):
+        print(f"Index {index} out of range (1-{len(messages)}).", file=sys.stderr)
+        sys.exit(1)
+
+    msg_id = messages[index - 1]["id"]
+    raw_msg = service.users().messages().get(
+        userId="me", id=msg_id, format="raw"
+    ).execute()
+    raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+
+    # Extract headers for reply
+    orig_from = msg.get("From", "")
+    orig_subject = msg.get("Subject", "")
+    orig_msg_id = msg.get("Message-ID", "")
+    orig_references = msg.get("References", "")
+    orig_date = msg.get("Date", "")
+
+    # Reply-To takes precedence over From
+    reply_to = msg.get("Reply-To", orig_from)
+    _, reply_addr = parseaddr(reply_to)
+
+    # Build Re: subject
+    re_subject = orig_subject
+    if not re_subject.lower().startswith("re:"):
+        re_subject = f"Re: {orig_subject}"
+
+    # Build References chain
+    refs = orig_references
+    if orig_msg_id:
+        refs = f"{refs} {orig_msg_id}".strip()
+
+    # Quote original body
+    orig_body = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                charset = part.get_content_charset() or "utf-8"
+                orig_body = part.get_payload(decode=True).decode(charset, errors="replace")
+                break
+    else:
+        charset = msg.get_content_charset() or "utf-8"
+        orig_body = msg.get_payload(decode=True).decode(charset, errors="replace")
+
+    _, orig_name = parseaddr(orig_from)
+    quoted = "\n".join(f"> {line}" for line in orig_body.splitlines())
+    template = f"\n\nOn {orig_date}, {orig_name} wrote:\n{quoted}\n"
+
+    # Open editor with template
+    editor = os.environ.get("EDITOR", "vim")
+    with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
+        f.write(template)
+        tmpfile = f.name
+    try:
+        subprocess.call([editor, tmpfile])
+        body = Path(tmpfile).read_text()
+    finally:
+        os.unlink(tmpfile)
+
+    if not body.strip():
+        print("Empty body, aborting.", file=sys.stderr)
+        sys.exit(1)
+
+    # Build reply message
+    reply = MIMEText(body, "plain", "utf-8")
+    reply["To"] = reply_addr
+    reply["Subject"] = re_subject
+    if orig_msg_id:
+        reply["In-Reply-To"] = orig_msg_id
+    if refs:
+        reply["References"] = refs
+
+    raw_reply = base64.urlsafe_b64encode(reply.as_bytes()).decode()
+    result = service.users().messages().send(
+        userId="me", body={"raw": raw_reply}
+    ).execute()
+
+    print(f"Sent reply: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +581,7 @@ def parse_send_draft_args(argv):
     parser.add_argument("-b", "--bcc", default=None, help="Bcc recipient")
     parser.add_argument("-F", "--config", default=None, help="Muttrc config for account isolation")
     parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
+    parser.add_argument("-Q", "--show-account", action="store_true", help="Show active account and exit")
     return parser.parse_args(argv[1:])
 
 
@@ -475,6 +597,8 @@ def parse_list_get_args(argv):
     parser.add_argument("-q", "--query", default=None, help="Gmail search query")
     parser.add_argument("-F", "--config", default=None, help="Muttrc config for account isolation")
     parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
+    parser.add_argument("-S", "--stdout", action="store_true", help="Write raw message to stdout (for piping)")
+    parser.add_argument("-Q", "--show-account", action="store_true", help="Show active account and exit")
     return parser.parse_args(argv)
 
 
@@ -489,6 +613,8 @@ Commands:
   gmails [options] [INDEX [OUTPUT]]     List or download messages
   gmails send [options] [RECIPIENT]     Send a message
   gmails draft [options] [RECIPIENT]    Save a message to Gmail Drafts
+  gmails reply INDEX                    Reply to a message (opens $EDITOR)
+  gmails -E                             List configured accounts
 
 List messages:
   gmails                                List 20 most recent messages
@@ -506,9 +632,16 @@ Sent mail and search:
   gmails -q 'from:alice subject:"the proposal"'  Faceted search with phrase
 
 Download a message:
-  gmails 3                              Print message #3 to stdout
+  gmails 3                              Save #3 to /tmp/spool/ (auto-named)
   gmails 3 message.eml                  Save message #3 to file
   gmails 3 /tmp/                        Save to dir (auto-named from headers)
+  gmails 3 -S                           Raw message to stdout (for piping)
+  gmails 3 -S | grep Subject            Pipe to other tools
+
+Reply to a message:
+  gmails reply 3                        Reply to message #3 (opens $EDITOR)
+  gmails -e lake reply 3                Reply from another account
+  gmails -q "from:alice" reply 1        Reply to first search result
 
 Send a message:
   echo "body" | gmails send user@example.com -s "subject"
@@ -544,7 +677,13 @@ Send/draft options:
 Common options:
   -F, --config FILE     Muttrc config file for multi-account token isolation
   -e, --email ADDR      Account email or substring (alternative to -F)
+  -E, --list-accounts   List configured accounts and exit
+  -Q, --show-account    Show which account would be used, then exit
+  -S, --stdout          Write raw message to stdout instead of saving to file
   -h, --help            Show this help (or: gmails send -h, gmails draft -h)
+
+Environment:
+  GMAILS_ACCOUNT        Default account (same as -e). Overridden by -e or -F.
 
 Body input (send/draft):
   If stdin is piped, it becomes the message body.
@@ -569,13 +708,17 @@ def main():
     # Top-level help: show comprehensive usage for all modes
     if len(sys.argv) < 2 or (
         sys.argv[1] in ("-h", "--help") and
-        not (len(sys.argv) > 2 and sys.argv[2] in ("send", "draft"))
+        not (len(sys.argv) > 2 and sys.argv[2] in ("send", "draft", "reply"))
     ):
         if "-h" in sys.argv or "--help" in sys.argv:
             print(FULL_HELP)
             sys.exit(0)
 
-    # Detect mode: find "send" or "draft" anywhere in argv (skipping flag values)
+    # -E: list configured accounts and exit
+    if "-E" in sys.argv or "--list-accounts" in sys.argv:
+        do_list_accounts()
+
+    # Detect mode: find "send", "draft", or "reply" anywhere in argv (skipping flag values)
     mode = None
     rest = sys.argv[1:]
     mode_index = None
@@ -587,13 +730,13 @@ def main():
         if arg in ("-F", "--config", "-e", "--email"):
             skip_next = True  # next arg is the flag's value
             continue
-        if arg in ("send", "draft"):
+        if arg in ("send", "draft", "reply"):
             mode = arg
             mode_index = i
             break
         if arg.startswith("-"):
             continue
-        break  # hit a positional arg that isn't send/draft
+        break  # hit a positional arg that isn't send/draft/reply
 
     if mode:
         # Rearrange so parse_send_draft_args sees: [mode, ...flags..., ...args...]
@@ -605,6 +748,9 @@ def main():
     if mode in ("send", "draft"):
         args = parse_send_draft_args(rest)
         token_name, login_hint = resolve_account(args.config, args.email, "gmail-compose")
+        if args.show_account:
+            print(login_hint or "(default account)")
+            sys.exit(0)
         creds = get_credentials(service="gmail", scopes="gmail-compose",
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
@@ -612,16 +758,36 @@ def main():
             do_send(service, args)
         else:
             do_draft(service, args)
+    elif mode == "reply":
+        # reply uses list/get args for index, but needs compose scope to send
+        # Strip "reply" from rest so parse_list_get_args sees the index
+        reply_rest = [a for a in rest if a != "reply"]
+        args = parse_list_get_args(reply_rest)
+        if args.index is None:
+            print("Usage: gmails reply INDEX (e.g., gmails reply 3)", file=sys.stderr)
+            sys.exit(1)
+        token_name, login_hint = resolve_account(args.config, args.email, "gmail-compose")
+        if args.show_account:
+            print(login_hint or "(default account)")
+            sys.exit(0)
+        creds = get_credentials(service="gmail", scopes="gmail-compose",
+                                token_name=token_name, login_hint=login_hint)
+        service = build("gmail", "v1", credentials=creds)
+        do_reply(service, args.index, args.count, args.query, args)
     else:
         args = parse_list_get_args(rest)
         token_name, login_hint = resolve_account(args.config, args.email, "gmail-readonly")
+        if args.show_account:
+            print(login_hint or "(default account)")
+            sys.exit(0)
         creds = get_credentials(service="gmail", scopes="gmail-readonly",
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
         if args.index is None:
             do_list(service, args.count, args.query)
         else:
-            do_get(service, args.index, args.count, args.query, args.output)
+            do_get(service, args.index, args.count, args.query, args.output,
+                   stdout=args.stdout)
 
 
 if __name__ == "__main__":
