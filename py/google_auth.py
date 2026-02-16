@@ -42,6 +42,7 @@ SCOPE_PRESETS = {
     "forms": ["https://www.googleapis.com/auth/forms.body"],
     "docs-readonly": ["https://www.googleapis.com/auth/documents.readonly"],
     "gmail-readonly": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "gmail-compose": ["https://www.googleapis.com/auth/gmail.compose"],
 }
 
 # ---------------------------------------------------------------------------
@@ -121,7 +122,8 @@ def _find_credentials(service=None, creds_path=None):
     )
 
 
-def get_credentials(service=None, scopes=None, creds_path=None, token_name=None):
+def get_credentials(service=None, scopes=None, creds_path=None, token_name=None,
+                    login_hint=None):
     """
     Get Google API credentials with automatic token caching.
 
@@ -132,6 +134,7 @@ def get_credentials(service=None, scopes=None, creds_path=None, token_name=None)
                 or a list of scope URLs. Defaults to drive+sheets.
         creds_path: Override credential file path (skips service lookup).
         token_name: Override token filename (default: derived from scopes).
+        login_hint: Email address to pre-select in OAuth flow (for multi-account).
 
     Returns:
         google.oauth2.credentials.Credentials (or service account credentials)
@@ -177,7 +180,10 @@ def get_credentials(service=None, scopes=None, creds_path=None, token_name=None)
 
         if not creds:
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), scopes_list)
-            creds = flow.run_local_server(port=0)
+            kwargs = {"port": 0}
+            if login_hint:
+                kwargs["login_hint"] = login_hint
+            creds = flow.run_local_server(**kwargs)
 
         with open(token_path, "wb") as f:
             pickle.dump(creds, f)
