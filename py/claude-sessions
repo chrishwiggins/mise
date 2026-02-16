@@ -50,6 +50,8 @@ Usage:
     claude-sessions            # interactive fzf picker (all sessions)
     claude-sessions -n 50      # show only 50 most recent
     claude-sessions -q "regex" # pre-filter by project or summary
+    claude-sessions --search "covariance"  # full-text search session content
+    claude-sessions --reindex  # force rebuild of the search index
     claude-sessions --list     # just print, no fzf
     claude-sessions --json     # output JSON for the selected session
 
@@ -70,6 +72,7 @@ Dependencies:
 import json
 import glob
 import os
+import sqlite3
 import subprocess
 import sys
 import argparse
@@ -80,6 +83,7 @@ from pathlib import Path
 CONFIG_DIR = os.path.expanduser("~/.config/claude-sessions")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 SUMMARIES_FILE = os.path.join(CONFIG_DIR, "summaries.json")
+SEARCH_DB = os.path.join(CONFIG_DIR, "search.db")
 
 # Base directory for Claude Code project data
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
@@ -140,6 +144,224 @@ def save_summaries(summaries):
     with open(SUMMARIES_FILE, "w") as f:
         json.dump(summaries, f, indent=2)
         f.write("\n")
+
+
+def _extract_message_text(message):
+    """Extract plain text from a user or assistant message object.
+
+    Handles both string content and list-of-blocks content formats.
+    Skips system-reminder blocks (injected by hooks, not real content).
+    """
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                text = block.get("text", "")
+                # Skip system-reminder injections
+                if "<system-reminder>" in text:
+                    continue
+                parts.append(text)
+        return " ".join(parts)
+    return ""
+
+
+def get_search_db(force_reindex=False):
+    """Open or create the FTS5 search database.
+
+    Creates tables on first run. If force_reindex is True, drops and
+    recreates everything for a clean rebuild.
+    """
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    db = sqlite3.connect(SEARCH_DB)
+    db.execute("PRAGMA journal_mode=WAL")
+
+    if force_reindex:
+        db.execute("DROP TABLE IF EXISTS indexed_files")
+        db.execute("DROP TABLE IF EXISTS session_fts")
+
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS indexed_files (
+            jsonl_path TEXT PRIMARY KEY,
+            mtime_ns INTEGER,
+            session_id TEXT
+        )
+    """)
+    # FTS5 with porter stemming so "running" matches "run", etc.
+    db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(
+            session_id UNINDEXED,
+            project_path UNINDEXED,
+            role,
+            content,
+            tokenize='porter unicode61'
+        )
+    """)
+    db.commit()
+    return db
+
+
+def update_search_index(db):
+    """Incrementally update the FTS5 index from .jsonl session files.
+
+    Walks ~/.claude/projects/ and indexes any .jsonl files that are new
+    or have changed (by mtime). Removes index entries for deleted files.
+    Prints progress to stderr.
+    """
+    if not os.path.isdir(PROJECTS_DIR):
+        return
+
+    # Build set of all current .jsonl paths with their mtimes
+    current_files = {}  # path -> mtime_ns
+    for project_dir in os.listdir(PROJECTS_DIR):
+        full_dir = os.path.join(PROJECTS_DIR, project_dir)
+        if not os.path.isdir(full_dir):
+            continue
+        try:
+            entries = os.listdir(full_dir)
+        except OSError:
+            continue
+        for fname in entries:
+            if not fname.endswith(".jsonl"):
+                continue
+            fpath = os.path.join(full_dir, fname)
+            try:
+                st = os.stat(fpath)
+                current_files[fpath] = st.st_mtime_ns
+            except OSError:
+                continue
+
+    # Load already-indexed files
+    indexed = {}
+    for row in db.execute("SELECT jsonl_path, mtime_ns FROM indexed_files"):
+        indexed[row[0]] = row[1]
+
+    # Find files to index (new or changed) and files to remove (deleted)
+    to_index = []
+    for fpath, mtime_ns in current_files.items():
+        if fpath not in indexed or indexed[fpath] != mtime_ns:
+            to_index.append(fpath)
+
+    to_remove = [p for p in indexed if p not in current_files]
+
+    if not to_index and not to_remove:
+        print("Search index is up to date.", file=sys.stderr)
+        return
+
+    # Remove stale entries
+    for fpath in to_remove:
+        old_sid = db.execute(
+            "SELECT session_id FROM indexed_files WHERE jsonl_path = ?",
+            (fpath,)
+        ).fetchone()
+        if old_sid:
+            db.execute(
+                "DELETE FROM session_fts WHERE session_id = ? AND rowid IN "
+                "(SELECT rowid FROM session_fts WHERE session_id = ?)",
+                (old_sid[0], old_sid[0])
+            )
+        db.execute("DELETE FROM indexed_files WHERE jsonl_path = ?", (fpath,))
+
+    # Index new/changed files
+    total = len(to_index)
+    for i, fpath in enumerate(to_index, 1):
+        session_id = os.path.splitext(os.path.basename(fpath))[0]
+        mtime_ns = current_files[fpath]
+
+        if i % 50 == 0 or i == total:
+            print(f"\rIndexing: {i}/{total} sessions...", end="", file=sys.stderr)
+
+        # Remove old entries for this file if it was previously indexed
+        if fpath in indexed:
+            db.execute(
+                "DELETE FROM session_fts WHERE session_id = ?", (session_id,)
+            )
+            db.execute(
+                "DELETE FROM indexed_files WHERE jsonl_path = ?", (fpath,)
+            )
+
+        # Parse the .jsonl and extract text
+        project_path = ""
+        try:
+            with open(fpath) as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    if not project_path and "cwd" in obj:
+                        project_path = obj["cwd"]
+
+                    t = obj.get("type", "")
+                    if t not in ("user", "assistant"):
+                        continue
+
+                    msg = obj.get("message", {})
+                    text = _extract_message_text(msg)
+                    if not text or len(text.strip()) < 3:
+                        continue
+
+                    role = msg.get("role", t)
+                    db.execute(
+                        "INSERT INTO session_fts "
+                        "(session_id, project_path, role, content) "
+                        "VALUES (?, ?, ?, ?)",
+                        (session_id, project_path, role, text)
+                    )
+        except (IOError, OSError):
+            continue
+
+        # Record this file as indexed
+        db.execute(
+            "INSERT OR REPLACE INTO indexed_files "
+            "(jsonl_path, mtime_ns, session_id) VALUES (?, ?, ?)",
+            (fpath, mtime_ns, session_id)
+        )
+
+    db.commit()
+    if total > 0:
+        print(f"\rIndexed {total} sessions.{' ' * 20}", file=sys.stderr)
+
+
+def search_sessions(db, query):
+    """Search the FTS5 index and return matching session info.
+
+    Returns a dict mapping session_id -> list of snippet strings,
+    ordered by relevance (best matches first).
+    """
+    results = {}
+    try:
+        rows = db.execute(
+            "SELECT session_id, project_path, "
+            "snippet(session_fts, 3, '>>>', '<<<', '...', 40) as snip, "
+            "rank "
+            "FROM session_fts WHERE session_fts MATCH ? "
+            "ORDER BY rank "
+            "LIMIT 500",
+            (query,)
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"Search error: {e}", file=sys.stderr)
+        print("Tip: use simple words or quoted phrases. "
+              "FTS5 syntax: word1 word2 (AND), "
+              "word1 OR word2, \"exact phrase\"", file=sys.stderr)
+        return {}
+
+    for session_id, project_path, snippet, rank in rows:
+        if session_id not in results:
+            results[session_id] = []
+        # Keep up to 3 snippets per session
+        if len(results[session_id]) < 3:
+            results[session_id].append(snippet)
+
+    return results
 
 
 def load_all_sessions():
@@ -327,10 +549,12 @@ def short_project(path, aliases):
     return path
 
 
-def build_display_lines(sessions, aliases, custom_summaries=None):
+def build_display_lines(sessions, aliases, custom_summaries=None,
+                        search_snippets=None):
     """Build tab-separated display lines for fzf or --list output.
 
     Each line: sessionId <tab> date <tab> msgcount <tab> project <tab> summary
+    In search mode, a 6th field contains the search snippet (for preview).
 
     Tab separation lets fzf treat each as a column with --delimiter.
     The summary is truncated to 60 chars to keep lines readable.
@@ -338,6 +562,8 @@ def build_display_lines(sessions, aliases, custom_summaries=None):
     """
     if custom_summaries is None:
         custom_summaries = {}
+    if search_snippets is None:
+        search_snippets = {}
     lines = []
     for s in sessions:
         sid = s.get("sessionId", "?")
@@ -354,6 +580,10 @@ def build_display_lines(sessions, aliases, custom_summaries=None):
         if branch:
             proj = f"{proj} ({branch})"
         line = f"{sid}\t{date}\t{msgs}m\t{proj}\t{summary}"
+        # Append search snippets as hidden 6th field for preview
+        if sid in search_snippets:
+            snips = " | ".join(search_snippets[sid])
+            line += f"\t{snips}"
         lines.append(line)
     return lines
 
@@ -388,16 +618,34 @@ def edit_summary(session_id, current_summary):
         os.unlink(tf_path)
 
 
-def pick_with_fzf(lines):
+def pick_with_fzf(lines, search_mode=False):
     """Launch fzf with session lines and return the chosen line.
 
     Returns a tuple (action, line) where action is "select" or "edit",
     or (None, None) if the user cancelled (Esc / Ctrl-C).
+
+    In search_mode, the preview shows matching snippets (field 6)
+    instead of just metadata.
     """
     header = ("ID                                    Modified"
               "          Msgs  Project"
               "                                   Summary"
               "  [ctrl-e: edit summary]")
+    # Wrap preview in sh -c so it runs in POSIX shell, not tcsh.
+    # fzf substitutes {1}, {4}, etc. before passing to the shell,
+    # and summaries can contain () which tcsh treats as subshells.
+    if search_mode:
+        preview_cmd = (
+            "sh -c 'echo \"Session: {1}\" && echo \"Project: {4}\" && "
+            "echo \"Summary: {5}\" && echo \"---\" && echo \"Matches: {6}\"'"
+        )
+        prompt = "search> "
+    else:
+        preview_cmd = (
+            "sh -c 'echo \"Session: {1}\" && echo \"Project: {4}\" && "
+            "echo \"Summary: {5}\"'"
+        )
+        prompt = "resume> "
     fzf_input = "\n".join(lines)
     try:
         result = subprocess.run(
@@ -407,14 +655,13 @@ def pick_with_fzf(lines):
                 "--delimiter", "\t",
                 "--with-nth", "1,2,3,4,5",
                 "--tabstop", "2",
-                "--preview-window", "down:3:wrap",
-                "--preview",
-                "echo 'Session: {1}' && echo 'Project: {4}' && echo 'Summary: {5}'",
+                "--preview-window", "down:5:wrap" if search_mode else "down:3:wrap",
+                "--preview", preview_cmd,
                 "--ansi",
                 "--no-mouse",
                 "--height", "80%",
                 "--layout", "reverse",
-                "--prompt", "resume> ",
+                "--prompt", prompt,
                 "--expect", "ctrl-e",
             ],
             input=fzf_input,
@@ -428,7 +675,7 @@ def pick_with_fzf(lines):
     if result.returncode != 0:
         return None, None  # user cancelled
 
-    output_lines = result.stdout.strip().split("\n")
+    output_lines = result.stdout.split("\n")
     if len(output_lines) < 2:
         return None, None
 
@@ -464,6 +711,14 @@ def main():
         "--json", action="store_true",
         help="output raw JSON for the selected session (implies fzf)",
     )
+    parser.add_argument(
+        "--search", type=str, default="",
+        help="full-text search across session content (user + assistant messages)",
+    )
+    parser.add_argument(
+        "--reindex", action="store_true",
+        help="force full rebuild of the search index",
+    )
     args = parser.parse_args()
 
     # Load config (creates default on first run)
@@ -478,6 +733,27 @@ def main():
 
     # Most recently modified first
     sessions.sort(key=lambda s: s.get("modified", ""), reverse=True)
+
+    # Full-text search mode (--search or --reindex)
+    search_snippets = {}  # session_id -> [snippet, ...]
+    if args.search or args.reindex:
+        db = get_search_db(force_reindex=args.reindex)
+        update_search_index(db)
+        if args.reindex and not args.search:
+            print("Reindex complete.", file=sys.stderr)
+            db.close()
+            sys.exit(0)
+        search_snippets = search_sessions(db, args.search)
+        db.close()
+        if not search_snippets:
+            print(f"No sessions match: {args.search}", file=sys.stderr)
+            sys.exit(1)
+        # Filter to only matching sessions, preserve search result order
+        session_map = {s.get("sessionId"): s for s in sessions}
+        sessions = [
+            session_map[sid] for sid in search_snippets
+            if sid in session_map
+        ]
 
     # Optional regex pre-filter across project path, summary, and first prompt
     if args.q:
@@ -500,7 +776,8 @@ def main():
         sys.exit(1)
 
     # Build display lines
-    lines = build_display_lines(sessions, aliases, custom_summaries)
+    lines = build_display_lines(sessions, aliases, custom_summaries,
+                                search_snippets)
 
     # --list mode: just print and exit
     if args.list:
@@ -508,8 +785,9 @@ def main():
         sys.exit(0)
 
     # Interactive mode: pick with fzf, loop on edits
+    is_search = bool(search_snippets)
     while True:
-        action, chosen_line = pick_with_fzf(lines)
+        action, chosen_line = pick_with_fzf(lines, search_mode=is_search)
         if action is None:
             sys.exit(0)
 
@@ -526,7 +804,8 @@ def main():
                 custom_summaries[chosen_id] = new_summary
                 save_summaries(custom_summaries)
                 # Rebuild lines with updated summary
-                lines = build_display_lines(sessions, aliases, custom_summaries)
+                lines = build_display_lines(sessions, aliases, custom_summaries,
+                                            search_snippets)
             continue  # re-open fzf
 
         # action == "select": resume the session
