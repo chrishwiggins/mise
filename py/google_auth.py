@@ -43,6 +43,10 @@ SCOPE_PRESETS = {
     "docs-readonly": ["https://www.googleapis.com/auth/documents.readonly"],
     "gmail-readonly": ["https://www.googleapis.com/auth/gmail.readonly"],
     "gmail-compose": ["https://www.googleapis.com/auth/gmail.compose"],
+    "gmail-send": [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose",
+    ],
 }
 
 # ---------------------------------------------------------------------------
