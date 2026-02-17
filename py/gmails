@@ -373,7 +373,8 @@ def do_list(service, count, query, account=None):
 
     idx_width = len(str(len(messages)))
     from_width = 25
-    fixed_width = idx_width + 1 + 1 + 10 + 2 + from_width + 2
+    # +2 for unread marker "* " or "  "
+    fixed_width = idx_width + 1 + 2 + 10 + 2 + from_width + 2
     subj_width = max(term_width - fixed_width, 10)
 
     for i, msg_stub in enumerate(messages, 1):
@@ -388,13 +389,15 @@ def do_list(service, count, query, account=None):
         date_str = parse_date(get_header(headers, "Date"))
         sender = parse_sender(get_header(headers, "From"))
         subject = get_header(headers, "Subject") or "(no subject)"
+        unread = "UNREAD" in msg.get("labelIds", [])
 
         if len(sender) > from_width:
             sender = sender[: from_width - 1] + "\u2026"
         if len(subject) > subj_width:
             subject = subject[: subj_width - 1] + "\u2026"
 
-        print(f"{i:>{idx_width}}. {date_str}  {sender:<{from_width}}  {subject}")
+        marker = "*" if unread else " "
+        print(f"{i:>{idx_width}}.{marker}{date_str}  {sender:<{from_width}}  {subject}")
 
 
 # ---------------------------------------------------------------------------
@@ -702,6 +705,35 @@ def do_trash(service, index, count, query, account=None):
     service.users().messages().trash(userId="me", id=msg_id).execute()
     print(f"Trashed: From={sender} Subject={subject}", file=sys.stderr)
 
+    # Invalidate cache since list order changed
+    LAST_LIST_CACHE.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Archive mode
+# ---------------------------------------------------------------------------
+
+def do_archive(service, index, count, query, account=None):
+    """Archive a message (remove from inbox, keep in All Mail)."""
+    msg_id = _resolve_message_id(service, index, count, query, account=account)
+
+    meta = service.users().messages().get(
+        userId="me", id=msg_id, format="metadata",
+        metadataHeaders=["From", "Subject"],
+    ).execute()
+    headers = meta.get("payload", {}).get("headers", [])
+    sender = parse_sender(get_header(headers, "From"))
+    subject = get_header(headers, "Subject") or "(no subject)"
+
+    service.users().messages().modify(
+        userId="me", id=msg_id,
+        body={"removeLabelIds": ["INBOX"]},
+    ).execute()
+    print(f"Archived: From={sender} Subject={subject}", file=sys.stderr)
+
+    # Invalidate cache since list order changed
+    LAST_LIST_CACHE.unlink(missing_ok=True)
+
 
 # ---------------------------------------------------------------------------
 # Open in browser
@@ -711,10 +743,11 @@ def do_open(service, index, count, query, account=None):
     """Open a message in Gmail web UI."""
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
-    # Gmail web URL uses the message ID directly
-    # Account index: 0 for default, but we can't reliably map account to index.
-    # Use the generic format that works with any signed-in account.
-    url = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
+    # Use authuser param so the browser picks the right account
+    if account:
+        url = f"https://mail.google.com/mail/?authuser={account}#inbox/{msg_id}"
+    else:
+        url = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
     print(f"Opening: {url}", file=sys.stderr)
     webbrowser.open(url)
 
@@ -928,6 +961,7 @@ Commands:
   gmails fwd INDEX RECIPIENT            Forward a message (opens $EDITOR)
   gmails fwd INDEX RECIPIENT --draft    Save forward as draft
   gmails trash INDEX                    Move a message to trash
+  gmails archive INDEX                  Archive (remove from inbox, keep in All Mail)
   gmails open INDEX                     Open a message in Gmail web UI
   gmails thread INDEX                   Show all messages in a conversation
   gmails -E                             List configured accounts
@@ -971,9 +1005,14 @@ Forward a message:
 
 Manage messages:
   gmails trash 3                        Move message #3 to trash
+  gmails archive 3                      Archive message #3 (remove from inbox)
   gmails -q "from:spam" trash 1         Trash a search result
   gmails open 3                         Open message #3 in Gmail web UI
+  gmails -e lake open 3                 Open in correct account's Gmail
   gmails thread 3                       Show all messages in #3's conversation
+
+List output:
+  * marks unread messages (e.g., " 1.*2026-02-17  alice@example.com  ...")
 
 Send a message:
   echo "body" | gmails send user@example.com -s "subject"
@@ -1073,7 +1112,7 @@ def main():
         if arg in ("-F", "--config", "-e", "--email"):
             skip_next = True  # next arg is the flag's value
             continue
-        if arg in ("send", "draft", "reply", "fwd", "trash", "open", "thread"):
+        if arg in ("send", "draft", "reply", "fwd", "trash", "archive", "open", "thread"):
             mode = arg
             mode_index = i
             break
@@ -1133,14 +1172,14 @@ def main():
         service = build("gmail", "v1", credentials=creds)
         do_forward(service, args.index, args.count, args.query, recipient,
                    as_draft=args.draft, account=login_hint)
-    elif mode in ("trash", "open", "thread"):
+    elif mode in ("trash", "archive", "open", "thread"):
         mode_rest = [a for a in rest if a != mode]
         args = parse_list_get_args(mode_rest)
         if args.index is None:
             print(f"Usage: gmails {mode} INDEX (e.g., gmails {mode} 3)", file=sys.stderr)
             sys.exit(1)
-        # trash needs write access; open and thread only need read
-        scope = "gmail-send" if mode == "trash" else "gmail-readonly"
+        # trash/archive need write access; open and thread only need read
+        scope = "gmail-send" if mode in ("trash", "archive") else "gmail-readonly"
         token_name, login_hint = resolve_account(args.config, args.email, scope)
         if args.show_account:
             print(login_hint or "(default account)")
@@ -1150,6 +1189,8 @@ def main():
         service = build("gmail", "v1", credentials=creds)
         if mode == "trash":
             do_trash(service, args.index, args.count, args.query, account=login_hint)
+        elif mode == "archive":
+            do_archive(service, args.index, args.count, args.query, account=login_hint)
         elif mode == "open":
             do_open(service, args.index, args.count, args.query, account=login_hint)
         else:
