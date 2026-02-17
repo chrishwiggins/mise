@@ -1,6 +1,7 @@
 #!/bin/bash
 # tc - iTerm2 titlebar color and window control
 # Usage: tc <color>              - color current window
+#        tc 0 <color>            - color window 1.1 (your home shell)
 #        tc list                 - show windows + ttys
 #        tc list <target> <color> - color specific window
 #        tc -t <target> <color>  - same as above
@@ -10,10 +11,59 @@
 #        tc title <text>         - set window title
 #        tc focus <win.tab>      - bring window to front
 
+# Color Name API base URL (https://api.color.pizza)
+COLOR_API="https://api.color.pizza/v1"
+
 # Build the escape sequence for RGB (0-255)
 make_seq() {
   printf '\033]6;1;bg;red;brightness;%d\a\033]6;1;bg;green;brightness;%d\a\033]6;1;bg;blue;brightness;%d\a' "$1" "$2" "$3"
 }
+
+# Convert r g b to hex (no #)
+rgb_to_hex() {
+  printf '%02x%02x%02x' "$1" "$2" "$3"
+}
+
+# Resolve a tc color name to "r g b" - checks builtins and ~/.tc-colors
+resolve_color() {
+  local c="$1"
+  case "$c" in
+    green|g) echo "0 180 0" ;; red|r) echo "200 0 0" ;; blue|b) echo "0 0 200" ;;
+    orange|o) echo "255 128 0" ;; purple|p) echo "150 0 200" ;; yellow|y) echo "200 200 0" ;;
+    cyan|c) echo "0 180 180" ;; pink) echo "255 100 150" ;;
+    amber) echo "255 204 127" ;; peach) echo "255 204 178" ;; lavender) echo "204 178 230" ;;
+    sage) echo "204 230 191" ;; cream) echo "255 245 215" ;; slate) echo "102 115 128" ;;
+    charcoal) echo "51 60 68" ;; coal) echo "30 30 35" ;; black|noir) echo "0 0 0" ;;
+    poo) echo "139 90 43" ;; teal) echo "153 215 230" ;; mustard) echo "227 184 10" ;;
+    gold) echo "255 215 0" ;; princeton) echo "255 103 31" ;; forrest) echo "34 139 34" ;;
+    columbia) echo "185 217 235" ;; nyu) echo "87 6 140" ;; texas|ut|utexas) echo "191 87 0" ;;
+    caltech|cit) echo "198 146 20" ;; mit) echo "163 31 52" ;; stanford) echo "140 21 21" ;;
+    harvard) echo "165 28 48" ;; berkeley|cal) echo "253 181 21" ;; yale) echo "0 53 107" ;;
+    penn) echo "1 31 91" ;; cornell) echo "179 27 27" ;; brown) echo "78 54 41" ;;
+    dartmouth) echo "0 105 62" ;; duke) echo "0 48 135" ;; edi) echo "185 14 47" ;;
+    money) echo "85 130 50" ;; brat) echo "138 206 0" ;;
+    *)
+      # Check ~/.tc-colors
+      local cf=~/.tc-colors
+      if [[ -f "$cf" ]]; then
+        local _n _r _g _b
+        read -r _n _r _g _b <<< "$(grep "^$c " "$cf")"
+        if [[ -n "$_r" ]]; then
+          echo "$_r $_g $_b"
+          return 0
+        fi
+      fi
+      return 1
+      ;;
+  esac
+}
+
+# Shorthand: tc 0 <color> -> tc -t 1.1 <color>
+# "0" means "the first tab of the first window" (your home shell)
+if [[ "$1" == "0" ]]; then
+  shift
+  set -- -t 1.1 "$@"
+fi
 
 # Parse -t option for target tty
 # Accepts: win.tab (1.2), tty number (012), or full path (/dev/ttys012)
@@ -61,55 +111,26 @@ output_seq() {
 }
 
 case "$1" in
-  # Basic colors
-  green|g)    output_seq "$(make_seq 0 180 0)" ;;
-  red|r)      output_seq "$(make_seq 200 0 0)" ;;
-  blue|b)     output_seq "$(make_seq 0 0 200)" ;;
-  orange|o)   output_seq "$(make_seq 255 128 0)" ;;
-  purple|p)   output_seq "$(make_seq 150 0 200)" ;;
-  yellow|y)   output_seq "$(make_seq 200 200 0)" ;;
-  cyan|c)     output_seq "$(make_seq 0 180 180)" ;;
-  pink)       output_seq "$(make_seq 255 100 150)" ;;
-
-  # Softer/muted colors (from termcolor)
-  amber)      output_seq "$(make_seq 255 204 127)" ;;
-  peach)      output_seq "$(make_seq 255 204 178)" ;;
-  lavender)   output_seq "$(make_seq 204 178 230)" ;;
-  sage)       output_seq "$(make_seq 204 230 191)" ;;
-  cream)      output_seq "$(make_seq 255 245 215)" ;;
-  slate)      output_seq "$(make_seq 102 115 128)" ;;
-  charcoal)   output_seq "$(make_seq 51 60 68)" ;;
-  coal)       output_seq "$(make_seq 30 30 35)" ;;
-  black|noir) output_seq "$(make_seq 0 0 0)" ;;
-  poo)        output_seq "$(make_seq 139 90 43)" ;;
-  teal)       output_seq "$(make_seq 153 215 230)" ;;
-  mustard)    output_seq "$(make_seq 227 184 10)" ;;
-  gold)       output_seq "$(make_seq 255 215 0)" ;;
-
-  # School colors
-  princeton)  output_seq "$(make_seq 255 103 31)" ;;
-  forrest)    output_seq "$(make_seq 34 139 34)" ;;
-  columbia)   output_seq "$(make_seq 185 217 235)" ;;
-  nyu)        output_seq "$(make_seq 87 6 140)" ;;
-  texas|ut|utexas)  output_seq "$(make_seq 191 87 0)" ;;  # Burnt Orange
-  caltech|cit)  output_seq "$(make_seq 198 146 20)" ;;  # mustard gold
-  mit)  output_seq "$(make_seq 163 31 52)" ;;  # MIT Cardinal Red
-  stanford)  output_seq "$(make_seq 140 21 21)" ;;  # Stanford Cardinal
-  harvard)  output_seq "$(make_seq 165 28 48)" ;;  # Harvard Crimson
-  berkeley|cal)  output_seq "$(make_seq 253 181 21)" ;;  # California Gold
-  yale)  output_seq "$(make_seq 0 53 107)" ;;  # Yale Blue
-  penn)  output_seq "$(make_seq 1 31 91)" ;;  # Penn Blue
-  cornell)  output_seq "$(make_seq 179 27 27)" ;;  # Carnelian
-  brown)  output_seq "$(make_seq 78 54 41)" ;;  # Brown University
-  dartmouth)  output_seq "$(make_seq 0 105 62)" ;;  # Dartmouth Green
-  duke)  output_seq "$(make_seq 0 48 135)" ;;  # Duke Blue
-  edi)  output_seq "$(make_seq 185 14 47  )" ;;  # Edinburgh Blue #B90E2F ( make_seq 185 14 47 )
-
-  # Other
-  money)      output_seq "$(make_seq 85 130 50)" ;;  # dollar bill green
-  brat)  output_seq "$(make_seq 138 206 0)" ;;  # brat green
-
   reset|x|0)  output_seq "$(printf '\033]6;1;bg;*;default\a')" ;;
+
+  saved|colors)
+    # tc saved - list custom colors from ~/.tc-colors
+    cf=~/.tc-colors
+    if [[ ! -f "$cf" || ! -s "$cf" ]]; then
+      echo "No saved colors yet. Use 'tc set <name> <r> <g> <b>' or 'tc search <keyword>'." >&2
+      exit 0
+    fi
+    echo "Saved colors (~/.tc-colors):"
+    while read -r line; do
+      [[ -z "$line" ]] && continue
+      # Parse from right: last 3 fields are r g b, rest is name
+      _b="${line##* }" ; line="${line% *}"
+      _g="${line##* }" ; line="${line% *}"
+      _r="${line##* }" ; _n="${line% *}"
+      hex=$(rgb_to_hex "$_r" "$_g" "$_b")
+      printf "  %-16s rgb(%3d,%3d,%3d)  #%s\n" "$_n" "$_r" "$_g" "$_b" "$hex"
+    done < "$cf"
+    ;;
 
   set)
     # tc set puke 142 58 203
@@ -131,7 +152,18 @@ case "$1" in
   random|rand)
     _r=$((RANDOM % 256)) _g=$((RANDOM % 256)) _b=$((RANDOM % 256))
     output_seq "$(make_seq $_r $_g $_b)"
-    echo "rgb $_r $_g $_b" >&2
+    hex=$(rgb_to_hex "$_r" "$_g" "$_b")
+    _name=$(curl -s "${COLOR_API}/?values=${hex}" 2>/dev/null | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+colors = data.get('colors', [])
+print(colors[0]['name'] if colors else '')
+" 2>/dev/null)
+    if [[ -n "$_name" ]]; then
+      echo "rgb $_r $_g $_b  #${hex}  ($_name)" >&2
+    else
+      echo "rgb $_r $_g $_b  #${hex}" >&2
+    fi
     ;;
 
   rgb)
@@ -219,11 +251,354 @@ case "$1" in
               -e "end tell" 2>/dev/null
     ;;
 
+  # ── blingbling: Color Name API-powered commands ──────────────────────
+
+  search)
+    # tc search <keyword> - search for colors by name, apply the best match
+    keyword="$2"
+    if [[ -z "$keyword" ]]; then
+      echo "Usage: tc search <keyword>  (e.g., tc search ocean)" >&2
+      exit 1
+    fi
+    encoded=$(echo "$keyword" | python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.stdin.read().strip()))")
+    json=$(curl -s "${COLOR_API}/names/?name=${encoded}" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+      echo "Error: Could not reach color API" >&2
+      exit 1
+    fi
+    result=$(echo "$json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+colors = data.get('colors', [])
+if not colors:
+    print('NO_RESULTS')
+    sys.exit(0)
+for i, c in enumerate(colors[:5]):
+    rgb = c['rgb']
+    sim = c.get('similarity', 0)
+    mark = ' <-- applying' if i == 0 else ''
+    print(f\"{c['name']:20s} rgb({rgb['r']:3d},{rgb['g']:3d},{rgb['b']:3d})  sim={sim:.2f}{mark}\", file=sys.stderr)
+best = colors[0]
+r, g, b = best['rgb']['r'], best['rgb']['g'], best['rgb']['b']
+print(f\"{r} {g} {b} {best['name']}\")
+")
+    if [[ "$result" == "NO_RESULTS" ]]; then
+      echo "No colors found for '$keyword'" >&2
+      exit 1
+    fi
+    read -r _r _g _b _name <<< "$result"
+    output_seq "$(make_seq "$_r" "$_g" "$_b")"
+    cf=~/.tc-colors
+    if [[ -f "$cf" ]]; then
+      grep -v "^${keyword} " "$cf" > "$cf.tmp" && mv "$cf.tmp" "$cf"
+    fi
+    echo "$keyword $_r $_g $_b" >> "$cf"
+    echo "Saved: tc $keyword -> rgb $_r $_g $_b ($_name)" >&2
+    ;;
+
+  name|whatis)
+    # tc name <r> <g> <b>  OR  tc name <hex>  - what's this color called?
+    if [[ -n "$2" && -n "$3" && -n "$4" ]]; then
+      hex=$(rgb_to_hex "$2" "$3" "$4")
+    elif [[ -n "$2" ]]; then
+      hex="${2#\#}"  # strip leading # if present
+    else
+      echo "Usage: tc name <r> <g> <b>  or  tc name <hex>" >&2
+      exit 1
+    fi
+    json=$(curl -s "${COLOR_API}/?values=${hex}" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+      echo "Error: Could not reach color API" >&2
+      exit 1
+    fi
+    echo "$json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+for c in data.get('colors', []):
+    rgb = c['rgb']
+    dist = c.get('distance', 0)
+    exact = ' (exact)' if dist == 0 else f' (distance: {dist:.1f})'
+    print(f\"{c['name']}{exact}\")
+    print(f\"  hex: {c['hex']}  rgb: {rgb['r']},{rgb['g']},{rgb['b']}\")
+"
+    ;;
+
+  similar)
+    # tc similar <color> - find visually similar colors using color-space distance
+    if [[ -z "$2" ]]; then
+      echo "Usage: tc similar <color>  (e.g., tc similar sage)" >&2
+      exit 1
+    fi
+    rgb_vals=$(resolve_color "$2")
+    if [[ -z "$rgb_vals" ]]; then
+      echo "Unknown color: $2" >&2
+      exit 1
+    fi
+    read -r _r _g _b <<< "$rgb_vals"
+    hex=$(rgb_to_hex "$_r" "$_g" "$_b")
+    # Download full color list and find nearest by perceptual distance (CIE76 in Lab space)
+    json=$(curl -s "${COLOR_API}/?list=bestOf&noduplicates=true" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+      echo "Error: Could not reach color API" >&2
+      exit 1
+    fi
+    echo "Colors similar to '$2' (#${hex}):" >&2
+    echo "$json" | python3 -c "
+import json, sys, math
+
+# sRGB -> linear
+def linearize(v):
+    v = v / 255.0
+    return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
+# linear RGB -> CIE XYZ
+def rgb_to_xyz(r, g, b):
+    rl, gl, bl = linearize(r), linearize(g), linearize(b)
+    x = 0.4124564*rl + 0.3575761*gl + 0.1804375*bl
+    y = 0.2126729*rl + 0.7151522*gl + 0.0721750*bl
+    z = 0.0193339*rl + 0.1191920*gl + 0.9503041*bl
+    return x, y, z
+
+# CIE XYZ -> CIE Lab (D65 illuminant)
+def xyz_to_lab(x, y, z):
+    xn, yn, zn = 0.95047, 1.0, 1.08883
+    def f(t):
+        return t ** (1/3) if t > 0.008856 else 7.787 * t + 16/116
+    L = 116 * f(y/yn) - 16
+    a = 500 * (f(x/xn) - f(y/yn))
+    b = 200 * (f(y/yn) - f(z/zn))
+    return L, a, b
+
+def rgb_to_lab(r, g, b):
+    return xyz_to_lab(*rgb_to_xyz(r, g, b))
+
+def delta_e(lab1, lab2):
+    return math.sqrt(sum((a-b)**2 for a, b in zip(lab1, lab2)))
+
+target_lab = rgb_to_lab($_r, $_g, $_b)
+data = json.loads(sys.stdin.read())
+colors = data.get('colors', [])
+
+scored = []
+for c in colors:
+    rgb = c['rgb']
+    lab = rgb_to_lab(rgb['r'], rgb['g'], rgb['b'])
+    d = delta_e(target_lab, lab)
+    if d > 0.5:  # skip near-exact match (the color itself)
+        scored.append((d, c))
+
+scored.sort(key=lambda x: x[0])
+for d, c in scored[:8]:
+    rgb = c['rgb']
+    print(f\"  {c['name']:28s} rgb({rgb['r']:3d},{rgb['g']:3d},{rgb['b']:3d})  {c['hex']}  dE={d:.1f}\")
+"
+    ;;
+
+  palette)
+    # tc palette <keyword> [n] - show matches, pick interactively or by number
+    keyword="$2"
+    pick="$3"
+    if [[ -z "$keyword" ]]; then
+      echo "Usage: tc palette <keyword> [n]  (e.g., tc palette forest, tc palette forest 3)" >&2
+      exit 1
+    fi
+    encoded=$(echo "$keyword" | python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.stdin.read().strip()))")
+    json=$(curl -s "${COLOR_API}/names/?name=${encoded}" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+      echo "Error: Could not reach color API" >&2
+      exit 1
+    fi
+    result=$(echo "$json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+colors = data.get('colors', [])
+if not colors:
+    print('NO_RESULTS')
+    sys.exit(0)
+for i, c in enumerate(colors[:8]):
+    rgb = c['rgb']
+    sim = c.get('similarity', 0)
+    print(f\"  {i+1}. {c['name']:24s} rgb({rgb['r']:3d},{rgb['g']:3d},{rgb['b']:3d})  sim={sim:.2f}\", file=sys.stderr)
+# Output all as lines: index r g b name
+for i, c in enumerate(colors[:8]):
+    rgb = c['rgb']
+    print(f\"{i+1} {rgb['r']} {rgb['g']} {rgb['b']} {c['name']}\")
+")
+    if [[ "$result" == "NO_RESULTS" ]]; then
+      echo "No colors found for '$keyword'" >&2
+      exit 1
+    fi
+    if [[ -n "$pick" ]]; then
+      # Direct pick by number
+      chosen=$(echo "$result" | sed -n "${pick}p")
+    else
+      # Interactive pick
+      echo "Pick a number (1-8), or press Enter for #1:" >&2
+      read -r pick < /dev/tty
+      pick="${pick:-1}"
+      chosen=$(echo "$result" | sed -n "${pick}p")
+    fi
+    if [[ -z "$chosen" ]]; then
+      echo "Invalid selection" >&2
+      exit 1
+    fi
+    read -r _idx _r _g _b _name <<< "$chosen"
+    output_seq "$(make_seq "$_r" "$_g" "$_b")"
+    echo "Applied: $_name (rgb $_r $_g $_b)" >&2
+    ;;
+
+  browse)
+    # tc browse [n] - browse curated "best of" colors, apply by number
+    page="${2:-1}"
+    per_page=10
+    offset=$(( (page - 1) * per_page ))
+    json=$(curl -s "${COLOR_API}/?list=bestOf&noduplicates=true" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+      echo "Error: Could not reach color API" >&2
+      exit 1
+    fi
+    echo "$json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+colors = data.get('colors', [])
+total = len(colors)
+offset = $offset
+per_page = $per_page
+page = $page
+page_colors = colors[offset:offset+per_page]
+if not page_colors:
+    print(f'No more colors (total: {total})', file=sys.stderr)
+    sys.exit(0)
+max_pages = (total + per_page - 1) // per_page
+print(f'Curated colors (page {page}/{max_pages}, {total} total):', file=sys.stderr)
+for i, c in enumerate(page_colors):
+    rgb = c['rgb']
+    idx = offset + i + 1
+    print(f'  {idx:4d}. {c[\"name\"]:28s} rgb({rgb[\"r\"]:3d},{rgb[\"g\"]:3d},{rgb[\"b\"]:3d})  {c[\"hex\"]}', file=sys.stderr)
+print(f'', file=sys.stderr)
+print(f'tc browse {page+1} for next page  |  tc browse-pick <n> to apply', file=sys.stderr)
+"
+    ;;
+
+  browse-pick|bp)
+    # tc browse-pick <n> - apply the nth color from the bestOf list
+    if [[ -z "$2" ]]; then
+      echo "Usage: tc browse-pick <n>  (number from tc browse)" >&2
+      exit 1
+    fi
+    idx=$(( $2 - 1 ))
+    json=$(curl -s "${COLOR_API}/?list=bestOf&noduplicates=true" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+      echo "Error: Could not reach color API" >&2
+      exit 1
+    fi
+    result=$(echo "$json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+colors = data.get('colors', [])
+idx = $idx
+if idx < 0 or idx >= len(colors):
+    print('OUT_OF_RANGE')
+    sys.exit(0)
+c = colors[idx]
+rgb = c['rgb']
+print(f\"{rgb['r']} {rgb['g']} {rgb['b']} {c['name']}\")
+")
+    if [[ "$result" == "OUT_OF_RANGE" ]]; then
+      echo "Invalid number: $2" >&2
+      exit 1
+    fi
+    read -r _r _g _b _name <<< "$result"
+    output_seq "$(make_seq "$_r" "$_g" "$_b")"
+    echo "Applied: $_name (rgb $_r $_g $_b)" >&2
+    ;;
+
+  complement|comp)
+    # tc complement <color> - compute complementary color, name it, apply it
+    if [[ -z "$2" ]]; then
+      echo "Usage: tc complement <color>  (e.g., tc complement sage)" >&2
+      exit 1
+    fi
+    rgb_vals=$(resolve_color "$2")
+    if [[ -z "$rgb_vals" ]]; then
+      echo "Unknown color: $2" >&2
+      exit 1
+    fi
+    read -r _r _g _b <<< "$rgb_vals"
+    # Compute complement (invert RGB)
+    cr=$(( 255 - _r )) cg=$(( 255 - _g )) cb=$(( 255 - _b ))
+    hex=$(rgb_to_hex "$cr" "$cg" "$cb")
+    # Look up what the complement is called
+    json=$(curl -s "${COLOR_API}/?values=${hex}" 2>/dev/null)
+    comp_name=$(echo "$json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+colors = data.get('colors', [])
+if colors:
+    print(colors[0]['name'])
+else:
+    print('unknown')
+")
+    echo "Complement of '$2' (rgb $_r,$_g,$_b):" >&2
+    echo "  $comp_name  rgb($cr,$cg,$cb)  #${hex}" >&2
+    output_seq "$(make_seq "$cr" "$cg" "$cb")"
+    ;;
+
+  identify|id)
+    # tc identify - name the current titlebar color (reads from iTerm2)
+    current_rgb=$(osascript -e '
+    tell application "iTerm2"
+      set s to current session of current tab of current window
+      set bg to background color of s
+      return bg
+    end tell
+    ' 2>/dev/null)
+    if [[ -z "$current_rgb" ]]; then
+      echo "Error: Could not read current color from iTerm2" >&2
+      echo "Note: this reads the session background, not titlebar" >&2
+      exit 1
+    fi
+    # iTerm2 returns color as "rrrr,gggg,bbbb" (16-bit). Scale to 8-bit.
+    result=$(echo "$current_rgb" | python3 -c "
+import sys
+parts = sys.stdin.read().strip().split(',')
+if len(parts) == 3:
+    r = int(parts[0].strip()) >> 8
+    g = int(parts[1].strip()) >> 8
+    b = int(parts[2].strip()) >> 8
+    print(f'{r} {g} {b}')
+else:
+    print('ERROR')
+")
+    if [[ "$result" == "ERROR" ]]; then
+      echo "Could not parse color: $current_rgb" >&2
+      exit 1
+    fi
+    read -r _r _g _b <<< "$result"
+    hex=$(rgb_to_hex "$_r" "$_g" "$_b")
+    json=$(curl -s "${COLOR_API}/?values=${hex}" 2>/dev/null)
+    if [[ -z "$json" ]]; then
+      echo "Error: Could not reach color API" >&2
+      exit 1
+    fi
+    echo "$json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+for c in data.get('colors', []):
+    rgb = c['rgb']
+    dist = c.get('distance', 0)
+    exact = ' (exact)' if dist == 0 else f' (close match, distance: {dist:.1f})'
+    print(f\"Your session background is closest to: {c['name']}{exact}\")
+    print(f\"  hex: {c['hex']}  rgb: {rgb['r']},{rgb['g']},{rgb['b']}\")
+"
+    ;;
+
   help|-h|--help|"")
     cat <<'EOF'
 tc - iTerm2 titlebar color and window control
 
 Usage: tc <color>                 # current window
+       tc 0 <color>               # color window 1.1 (home shell)
        tc list                    # show windows + ttys
        tc list 1.1 <color>        # color by win.tab number
        tc -t 1.1 <color>          # same as above
@@ -233,6 +608,7 @@ Usage: tc <color>                 # current window
        tc focus <win.tab>         # bring window to front
        tc rgb <r> <g> <b>         # custom RGB (0-255)
        tc set <name> <r> <g> <b>     # save a custom color
+       tc saved                      # list saved custom colors
 
 Colors:
   Basic:  green/g red/r blue/b orange/o purple/p yellow/y cyan/c pink
@@ -243,23 +619,33 @@ Colors:
 
 Examples:
   tc green              # color this window green
+  tc 0 brown            # color your home shell (1.1) brown
   tc list               # see all windows
   tc list 1.2 blue      # color window 1 tab 2
   tc list 003 orange    # color tty 003
   tc title myproject    # set title
   tc sage               # nice muted green
+
+# blingbling (Color Name API - api.color.pizza)
+  tc search <keyword>              # find color by name, apply best match, save it
+  tc palette <keyword> [n]         # show matches, pick interactively or by number
+  tc name <r> <g> <b>             # what's this color called?
+  tc name <hex>                   # same, from hex (e.g., tc name 3c9992)
+  tc similar <color>              # find colors similar to a tc color
+  tc complement <color>           # invert a color, name & apply the complement
+  tc browse [page]                # browse curated "best of" named colors
+  tc browse-pick <n>              # apply the nth color from browse
+  tc identify                     # name your current session background color
 EOF
     ;;
 
   *)
-    # Check user-saved colors
-    cf=~/.tc-colors
-    if [[ -f "$cf" ]]; then
-      read -r _n _r _g _b <<< "$(grep "^$1 " "$cf")"
-      if [[ -n "$_r" ]]; then
-        output_seq "$(make_seq "$_r" "$_g" "$_b")"
-        exit 0
-      fi
+    # Resolve any color name: builtins, then ~/.tc-colors
+    _rgb=$(resolve_color "$1")
+    if [[ -n "$_rgb" ]]; then
+      read -r _r _g _b <<< "$_rgb"
+      output_seq "$(make_seq "$_r" "$_g" "$_b")"
+      exit 0
     fi
     echo "Unknown: $1 (try 'tc help')" >&2
     exit 1

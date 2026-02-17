@@ -86,3 +86,8 @@ set list
 
 " I like to see the ruler, so I can see where I am in the file.
 set ruler
+
+" 20260217 never write DOS line endings
+set fileformat=unix
+set fileformats=unix,dos
+autocmd BufWritePre * set fileformat=unix

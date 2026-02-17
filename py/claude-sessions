@@ -48,6 +48,8 @@ Path aliases:
 
 Usage:
     claude-sessions            # interactive fzf picker (all sessions)
+    claude-sessions -d 7       # sessions from the last 7 days
+    claude-sessions -d 1       # sessions from the last 24 hours
     claude-sessions -n 50      # show only 50 most recent
     claude-sessions -q "regex" # pre-filter by project or summary
     claude-sessions --search "covariance"  # full-text search session content
@@ -700,6 +702,10 @@ def main():
         help="show only N most recent sessions",
     )
     parser.add_argument(
+        "-d", "--days", type=float, default=0,
+        help="show only sessions modified within the last N days",
+    )
+    parser.add_argument(
         "-q", type=str, default="",
         help="pre-filter: regex match on project path, summary, or first prompt",
     )
@@ -753,6 +759,16 @@ def main():
         sessions = [
             session_map[sid] for sid in search_snippets
             if sid in session_map
+        ]
+
+    # Optional time-based filter (--days / -d)
+    if args.days > 0:
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
+        cutoff_iso = cutoff.isoformat()
+        sessions = [
+            s for s in sessions
+            if s.get("modified", "") >= cutoff_iso
         ]
 
     # Optional regex pre-filter across project path, summary, and first prompt
