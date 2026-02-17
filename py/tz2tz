@@ -115,7 +115,7 @@ def convert_time(time_str: str, from_code: str, to_code: str, date=None, fix=Fal
 def process_text(text: str, from_code: str, to_code: str, fix=False) -> str:
     """Process text and convert all found times and airport codes"""
     # Regex to find times in formats: HH.MM, HH:MM, HHhMM, and 12-hour formats like 6:30pm, 11:00am
-    time_pattern = r"\b(\d{1,2})[.:h](\d{2})[ \t]*(am|pm|AM|PM)?\b"
+    time_pattern = r"\b(\d{1,2})[.:h](\d{2})(?:[ \t]*(am|pm|AM|PM))?\b"
 
     def replace_time(match):
         time_str = match.group(0)
@@ -128,25 +128,41 @@ def process_text(text: str, from_code: str, to_code: str, fix=False) -> str:
                 return f"{converted}"
         return time_str
 
-    # First, convert times
-    result = re.sub(time_pattern, replace_time, text)
+    # First, replace source timezone abbreviation with destination abbreviation
+    # Do this before time conversion so "15:30EST" becomes "15:30 GMT",
+    # allowing the time regex (which uses \b) to match the time properly
+    from_tz = get_timezone(from_code)
+    to_tz = get_timezone(to_code)
+    result = text
+    if from_tz and to_tz:
+        now = datetime.now()
+        from_abbr = from_tz.localize(now).tzname()
+        to_abbr = to_tz.localize(now).tzname()
+        if from_abbr and to_abbr:
+            # Match tz abbreviation possibly glued to a digit (e.g., "30EST")
+            # Insert a space before the replacement if preceded by a digit
+            tz_pattern = r'(\d)[ \t]*' + re.escape(from_abbr) + r'\b'
+            result = re.sub(tz_pattern, r'\1 ' + to_abbr, result)
+            # Also handle standalone occurrences (preceded by space/start)
+            tz_pattern2 = r'(?<!\w)' + re.escape(from_abbr) + r'\b'
+            result = re.sub(tz_pattern2, to_abbr, result)
 
-    # Then, substitute airport codes (case-insensitive)
-    # Match the from_code as a standalone word
+    # Then, convert times
+    result = re.sub(time_pattern, replace_time, result)
+
+    # Substitute airport codes (case-insensitive)
     from_code_upper = from_code.upper()
     to_code_upper = to_code.upper()
 
     def replace_airport_code(match):
         matched_text = match.group(0)
-        # Preserve the case style of the original match
         if matched_text.isupper():
             return to_code_upper
         elif matched_text.islower():
             return to_code.lower()
-        else:  # Mixed or title case
+        else:
             return to_code_upper
 
-    # Use word boundaries to match only complete airport codes
     airport_pattern = r'\b' + re.escape(from_code_upper) + r'\b'
     result = re.sub(airport_pattern, replace_airport_code, result, flags=re.IGNORECASE)
 
