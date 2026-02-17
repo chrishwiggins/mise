@@ -6,7 +6,7 @@ _gmails() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    modes="send draft reply fwd trash archive open thread"
+    modes="send draft reply fwd trash archive read unread open thread"
     flags="-n -q -F -e -E -Q -S -t -c -h -s -H -a -b --all --draft --count --query --config --email --list-accounts --show-account --stdout --text --just-count --help --subject --header-file --attach --bcc"
 
     # Complete modes if first arg or after flags
@@ -17,7 +17,7 @@ _gmails() {
         local has_mode=0
         for word in "${COMP_WORDS[@]}"; do
             case "$word" in
-                send|draft|reply|fwd|trash|archive|open|thread) has_mode=1 ;;
+                send|draft|reply|fwd|trash|archive|read|unread|open|thread) has_mode=1 ;;
             esac
         done
         if [[ $has_mode -eq 0 ]]; then
