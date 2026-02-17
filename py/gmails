@@ -477,11 +477,8 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
         print(f"Subject: {subject}", file=sys.stderr)
         print("---", file=sys.stderr)
         print(extract_text_body(raw_bytes))
-        # Mark as read
-        service.users().messages().modify(
-            userId="me", id=msg_id,
-            body={"removeLabelIds": ["UNREAD"]},
-        ).execute()
+        # Mark as read (use `gmails read N` instead)
+
         return
 
     # -S flag: raw to stdout for piping
@@ -1288,8 +1285,7 @@ def main():
             do_thread(service, args.index, args.count, args.query, account=login_hint)
     else:
         args = parse_list_get_args(rest)
-        # -t marks as read, which needs modify permission
-        scope = "gmail-send" if args.text else "gmail-readonly"
+        scope = "gmail-readonly"
         token_name, login_hint = resolve_account(args.config, args.email, scope)
         if args.show_account:
             print(login_hint or "(default account)")
