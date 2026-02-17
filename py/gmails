@@ -371,25 +371,47 @@ def do_list(service, count, query, account=None):
     except OSError:
         term_width = 80
 
+    # Batch-fetch metadata for all messages (1 HTTP round-trip instead of N)
+    fetched = [None] * len(messages)
+
+    def _make_callback(idx):
+        def _cb(req_id, response, exception):
+            if exception is None:
+                fetched[idx] = response
+        return _cb
+
+    batch = service.new_batch_http_request()
+    for i, msg_stub in enumerate(messages):
+        batch.add(
+            service.users().messages().get(
+                userId="me",
+                id=msg_stub["id"],
+                format="metadata",
+                metadataHeaders=["From", "Subject", "Date"],
+            ),
+            callback=_make_callback(i),
+        )
+    batch.execute()
+
     idx_width = len(str(len(messages)))
     from_width = 25
     # +2 for unread marker "* " or "  "
     fixed_width = idx_width + 1 + 2 + 10 + 2 + from_width + 2
     subj_width = max(term_width - fixed_width, 10)
 
-    for i, msg_stub in enumerate(messages, 1):
-        msg = service.users().messages().get(
-            userId="me",
-            id=msg_stub["id"],
-            format="metadata",
-            metadataHeaders=["From", "Subject", "Date"],
-        ).execute()
+    unread_count = 0
+    for i, msg in enumerate(fetched, 1):
+        if msg is None:
+            print(f"{i:>{idx_width}}.  (fetch error)")
+            continue
 
         headers = msg.get("payload", {}).get("headers", [])
         date_str = parse_date(get_header(headers, "Date"))
         sender = parse_sender(get_header(headers, "From"))
         subject = get_header(headers, "Subject") or "(no subject)"
         unread = "UNREAD" in msg.get("labelIds", [])
+        if unread:
+            unread_count += 1
 
         if len(sender) > from_width:
             sender = sender[: from_width - 1] + "\u2026"
@@ -398,6 +420,10 @@ def do_list(service, count, query, account=None):
 
         marker = "*" if unread else " "
         print(f"{i:>{idx_width}}.{marker}{date_str}  {sender:<{from_width}}  {subject}")
+
+    # Enhancement 5: summary line
+    if unread_count:
+        print(f"  ({unread_count} unread / {len(messages)} shown)", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -556,16 +582,19 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None):
     quoted = "\n".join(f"> {line}" for line in orig_body.splitlines())
     template = f"\n\nOn {orig_date}, {orig_name} wrote:\n{quoted}\n"
 
-    # Open editor with template
-    editor = os.environ.get("EDITOR", "vim")
-    with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
-        f.write(template)
-        tmpfile = f.name
-    try:
-        subprocess.call([editor, tmpfile])
-        body = Path(tmpfile).read_text()
-    finally:
-        os.unlink(tmpfile)
+    # Stdin body or interactive editor
+    if not sys.stdin.isatty():
+        body = sys.stdin.read() + template
+    else:
+        editor = os.environ.get("EDITOR", "vim")
+        with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
+            f.write(template)
+            tmpfile = f.name
+        try:
+            subprocess.call([editor, tmpfile])
+            body = Path(tmpfile).read_text()
+        finally:
+            os.unlink(tmpfile)
 
     if not body.strip():
         print("Empty body, aborting.", file=sys.stderr)
@@ -622,18 +651,21 @@ def do_forward(service, index, count, query, recipient, subject_override=None, a
     # Extract original text body for inline quote
     orig_body = extract_text_body(raw_bytes)
     fwd_header = f"---------- Forwarded message ----------\nFrom: {orig_from}\nDate: {orig_date}\nSubject: {orig_subject}\n\n"
-    body = f"\n\n{fwd_header}{orig_body}\n"
+    template = f"\n\n{fwd_header}{orig_body}\n"
 
-    # Open editor for optional note
-    editor = os.environ.get("EDITOR", "vim")
-    with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
-        f.write(body)
-        tmpfile = f.name
-    try:
-        subprocess.call([editor, tmpfile])
-        body = Path(tmpfile).read_text()
-    finally:
-        os.unlink(tmpfile)
+    # Stdin body or interactive editor
+    if not sys.stdin.isatty():
+        body = sys.stdin.read() + template
+    else:
+        editor = os.environ.get("EDITOR", "vim")
+        with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
+            f.write(template)
+            tmpfile = f.name
+        try:
+            subprocess.call([editor, tmpfile])
+            body = Path(tmpfile).read_text()
+        finally:
+            os.unlink(tmpfile)
 
     if not body.strip():
         print("Empty body, aborting.", file=sys.stderr)
@@ -689,23 +721,22 @@ def do_forward(service, index, count, query, recipient, subject_override=None, a
 # Trash mode
 # ---------------------------------------------------------------------------
 
-def do_trash(service, index, count, query, account=None):
-    """Move a message to trash by its 1-based index."""
-    msg_id = _resolve_message_id(service, index, count, query, account=account)
+def do_trash(service, indices, count, query, account=None):
+    """Move one or more messages to trash by 1-based index."""
+    for index in indices:
+        msg_id = _resolve_message_id(service, index, count, query, account=account)
 
-    # Fetch subject/from for confirmation message
-    meta = service.users().messages().get(
-        userId="me", id=msg_id, format="metadata",
-        metadataHeaders=["From", "Subject"],
-    ).execute()
-    headers = meta.get("payload", {}).get("headers", [])
-    sender = parse_sender(get_header(headers, "From"))
-    subject = get_header(headers, "Subject") or "(no subject)"
+        meta = service.users().messages().get(
+            userId="me", id=msg_id, format="metadata",
+            metadataHeaders=["From", "Subject"],
+        ).execute()
+        headers = meta.get("payload", {}).get("headers", [])
+        sender = parse_sender(get_header(headers, "From"))
+        subject = get_header(headers, "Subject") or "(no subject)"
 
-    service.users().messages().trash(userId="me", id=msg_id).execute()
-    print(f"Trashed: From={sender} Subject={subject}", file=sys.stderr)
+        service.users().messages().trash(userId="me", id=msg_id).execute()
+        print(f"Trashed: From={sender} Subject={subject}", file=sys.stderr)
 
-    # Invalidate cache since list order changed
     LAST_LIST_CACHE.unlink(missing_ok=True)
 
 
@@ -713,26 +744,52 @@ def do_trash(service, index, count, query, account=None):
 # Archive mode
 # ---------------------------------------------------------------------------
 
-def do_archive(service, index, count, query, account=None):
-    """Archive a message (remove from inbox, keep in All Mail)."""
-    msg_id = _resolve_message_id(service, index, count, query, account=account)
+def do_archive(service, indices, count, query, account=None):
+    """Archive one or more messages (remove from inbox, keep in All Mail)."""
+    for index in indices:
+        msg_id = _resolve_message_id(service, index, count, query, account=account)
 
-    meta = service.users().messages().get(
-        userId="me", id=msg_id, format="metadata",
-        metadataHeaders=["From", "Subject"],
-    ).execute()
-    headers = meta.get("payload", {}).get("headers", [])
-    sender = parse_sender(get_header(headers, "From"))
-    subject = get_header(headers, "Subject") or "(no subject)"
+        meta = service.users().messages().get(
+            userId="me", id=msg_id, format="metadata",
+            metadataHeaders=["From", "Subject"],
+        ).execute()
+        headers = meta.get("payload", {}).get("headers", [])
+        sender = parse_sender(get_header(headers, "From"))
+        subject = get_header(headers, "Subject") or "(no subject)"
 
-    service.users().messages().modify(
-        userId="me", id=msg_id,
-        body={"removeLabelIds": ["INBOX"]},
-    ).execute()
-    print(f"Archived: From={sender} Subject={subject}", file=sys.stderr)
+        service.users().messages().modify(
+            userId="me", id=msg_id,
+            body={"removeLabelIds": ["INBOX"]},
+        ).execute()
+        print(f"Archived: From={sender} Subject={subject}", file=sys.stderr)
 
-    # Invalidate cache since list order changed
     LAST_LIST_CACHE.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Mark read/unread
+# ---------------------------------------------------------------------------
+
+def do_mark_read(service, indices, count, query, account=None):
+    """Mark one or more messages as read."""
+    for index in indices:
+        msg_id = _resolve_message_id(service, index, count, query, account=account)
+        service.users().messages().modify(
+            userId="me", id=msg_id,
+            body={"removeLabelIds": ["UNREAD"]},
+        ).execute()
+        print(f"Marked read: #{index}", file=sys.stderr)
+
+
+def do_mark_unread(service, indices, count, query, account=None):
+    """Mark one or more messages as unread."""
+    for index in indices:
+        msg_id = _resolve_message_id(service, index, count, query, account=account)
+        service.users().messages().modify(
+            userId="me", id=msg_id,
+            body={"addLabelIds": ["UNREAD"]},
+        ).execute()
+        print(f"Marked unread: #{index}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -960,8 +1017,10 @@ Commands:
   gmails reply INDEX --draft            Save reply as draft instead of sending
   gmails fwd INDEX RECIPIENT            Forward a message (opens $EDITOR)
   gmails fwd INDEX RECIPIENT --draft    Save forward as draft
-  gmails trash INDEX                    Move a message to trash
-  gmails archive INDEX                  Archive (remove from inbox, keep in All Mail)
+  gmails trash INDEX [INDEX ...]         Move message(s) to trash
+  gmails archive INDEX [INDEX ...]      Archive (remove from inbox)
+  gmails read INDEX [INDEX ...]         Mark message(s) as read
+  gmails unread INDEX [INDEX ...]       Mark message(s) as unread
   gmails open INDEX                     Open a message in Gmail web UI
   gmails thread INDEX                   Show all messages in a conversation
   gmails -E                             List configured accounts
@@ -1005,14 +1064,22 @@ Forward a message:
 
 Manage messages:
   gmails trash 3                        Move message #3 to trash
+  gmails trash 1 3 5                    Trash multiple messages at once
   gmails archive 3                      Archive message #3 (remove from inbox)
+  gmails archive 1 2 3                  Archive multiple messages
+  gmails read 3                         Mark message #3 as read
+  gmails unread 3                       Mark message #3 as unread
   gmails -q "from:spam" trash 1         Trash a search result
   gmails open 3                         Open message #3 in Gmail web UI
   gmails -e lake open 3                 Open in correct account's Gmail
   gmails thread 3                       Show all messages in #3's conversation
 
+Reply/fwd with piped body:
+  echo "thanks" | gmails reply 3        Reply without opening editor
+  echo "FYI" | gmails fwd 3 user@ex.com Forward with note from stdin
+
 List output:
-  * marks unread messages (e.g., " 1.*2026-02-17  alice@example.com  ...")
+  * marks unread messages; summary shows unread count
 
 Send a message:
   echo "body" | gmails send user@example.com -s "subject"
@@ -1112,7 +1179,7 @@ def main():
         if arg in ("-F", "--config", "-e", "--email"):
             skip_next = True  # next arg is the flag's value
             continue
-        if arg in ("send", "draft", "reply", "fwd", "trash", "archive", "open", "thread"):
+        if arg in ("send", "draft", "reply", "fwd", "trash", "archive", "open", "thread", "read", "unread"):
             mode = arg
             mode_index = i
             break
@@ -1172,14 +1239,34 @@ def main():
         service = build("gmail", "v1", credentials=creds)
         do_forward(service, args.index, args.count, args.query, recipient,
                    as_draft=args.draft, account=login_hint)
-    elif mode in ("trash", "archive", "open", "thread"):
+    elif mode in ("trash", "archive", "open", "thread", "read", "unread"):
         mode_rest = [a for a in rest if a != mode]
-        args = parse_list_get_args(mode_rest)
-        if args.index is None:
-            print(f"Usage: gmails {mode} INDEX (e.g., gmails {mode} 3)", file=sys.stderr)
+        # For multi-index modes, extract all bare integers as indices
+        indices = []
+        filtered_rest = []
+        skip_next = False
+        for arg in mode_rest:
+            if skip_next:
+                filtered_rest.append(arg)
+                skip_next = False
+                continue
+            if arg in ("-n", "--count", "-q", "--query", "-F", "--config", "-e", "--email"):
+                filtered_rest.append(arg)
+                skip_next = True
+                continue
+            if arg.startswith("-"):
+                filtered_rest.append(arg)
+                continue
+            try:
+                indices.append(int(arg))
+            except ValueError:
+                filtered_rest.append(arg)
+        args = parse_list_get_args(filtered_rest)
+        if not indices:
+            print(f"Usage: gmails {mode} INDEX [INDEX ...] (e.g., gmails {mode} 3)", file=sys.stderr)
             sys.exit(1)
-        # trash/archive need write access; open and thread only need read
-        scope = "gmail-send" if mode in ("trash", "archive") else "gmail-readonly"
+        # trash/archive/read/unread need write access; open and thread only need read
+        scope = "gmail-send" if mode in ("trash", "archive", "read", "unread") else "gmail-readonly"
         token_name, login_hint = resolve_account(args.config, args.email, scope)
         if args.show_account:
             print(login_hint or "(default account)")
@@ -1188,9 +1275,13 @@ def main():
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
         if mode == "trash":
-            do_trash(service, args.index, args.count, args.query, account=login_hint)
+            do_trash(service, indices, args.count, args.query, account=login_hint)
         elif mode == "archive":
-            do_archive(service, args.index, args.count, args.query, account=login_hint)
+            do_archive(service, indices, args.count, args.query, account=login_hint)
+        elif mode == "read":
+            do_mark_read(service, indices, args.count, args.query, account=login_hint)
+        elif mode == "unread":
+            do_mark_unread(service, indices, args.count, args.query, account=login_hint)
         elif mode == "open":
             do_open(service, args.index, args.count, args.query, account=login_hint)
         else:
