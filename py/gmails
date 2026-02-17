@@ -38,7 +38,7 @@ import tempfile
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import parseaddr, parsedate_to_datetime
+from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from pathlib import Path
 
 from google_auth import get_credentials
@@ -158,19 +158,20 @@ def save_attachments(raw_bytes, output_dir):
 LAST_LIST_CACHE = Path("/tmp/spool/.gmails-last-list.json")
 
 
-def _cache_message_ids(messages, count, query):
+def _cache_message_ids(messages, count, query, account=None):
     """Save message list to cache for !! workflow safety."""
     LAST_LIST_CACHE.parent.mkdir(exist_ok=True)
     data = {
         "count": count,
         "query": query,
+        "account": account,
         "messages": [{"id": m["id"], "threadId": m.get("threadId", "")} for m in messages],
     }
     LAST_LIST_CACHE.write_text(json.dumps(data))
 
 
-def _load_cached_ids(count, query):
-    """Load cached message IDs if they match current query params.
+def _load_cached_ids(count, query, account=None):
+    """Load cached message IDs if they match current query params and account.
 
     Returns list of message dicts, or None if no valid cache.
     """
@@ -178,7 +179,8 @@ def _load_cached_ids(count, query):
         return None
     try:
         data = json.loads(LAST_LIST_CACHE.read_text())
-        if data.get("count") == count and data.get("query") == query:
+        if (data.get("count") == count and data.get("query") == query
+                and data.get("account") == account):
             return data["messages"]
     except (json.JSONDecodeError, KeyError):
         pass
@@ -316,7 +318,7 @@ def build_mime_message(recipient, subject, body, cc=None, bcc=None, attachments=
 # List mode
 # ---------------------------------------------------------------------------
 
-def do_list(service, count, query):
+def do_list(service, count, query, account=None):
     """List recent messages as a numbered table."""
     kwargs = {"userId": "me", "maxResults": count}
     if query:
@@ -329,7 +331,7 @@ def do_list(service, count, query):
         sys.exit(0)
 
     # Cache message IDs for !! workflow safety
-    _cache_message_ids(messages, count, query)
+    _cache_message_ids(messages, count, query, account=account)
 
     try:
         term_width = os.get_terminal_size().columns
@@ -366,10 +368,10 @@ def do_list(service, count, query):
 # Get mode
 # ---------------------------------------------------------------------------
 
-def _resolve_message_id(service, index, count, query):
+def _resolve_message_id(service, index, count, query, account=None):
     """Resolve a 1-based index to a Gmail message ID, using cache when safe."""
-    # Try cache first (!! workflow: same count+query means same list)
-    cached = _load_cached_ids(count, query)
+    # Try cache first (!! workflow: same count+query+account means same list)
+    cached = _load_cached_ids(count, query, account=account)
     if cached and 1 <= index <= len(cached):
         return cached[index - 1]["id"]
 
@@ -389,13 +391,13 @@ def _resolve_message_id(service, index, count, query):
         sys.exit(1)
 
     # Update cache
-    _cache_message_ids(messages, count, query)
+    _cache_message_ids(messages, count, query, account=account)
     return messages[index - 1]["id"]
 
 
-def do_get(service, index, count, query, output, stdout=False, text_view=False):
+def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None):
     """Download a message by its 1-based index."""
-    msg_id = _resolve_message_id(service, index, count, query)
+    msg_id = _resolve_message_id(service, index, count, query, account=account)
 
     raw_msg = service.users().messages().get(
         userId="me", id=msg_id, format="raw"
@@ -450,9 +452,9 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False):
 # Reply mode
 # ---------------------------------------------------------------------------
 
-def do_reply(service, index, count, query, args, as_draft=False):
+def do_reply(service, index, count, query, args, as_draft=False, account=None):
     """Download message by index, extract headers, open $EDITOR for reply."""
-    msg_id = _resolve_message_id(service, index, count, query)
+    msg_id = _resolve_message_id(service, index, count, query, account=account)
     raw_msg = service.users().messages().get(
         userId="me", id=msg_id, format="raw"
     ).execute()
@@ -469,6 +471,23 @@ def do_reply(service, index, count, query, args, as_draft=False):
     # Reply-To takes precedence over From
     reply_to = msg.get("Reply-To", orig_from)
     _, reply_addr = parseaddr(reply_to)
+
+    # Reply-all: collect To and Cc, excluding our own address
+    reply_all = getattr(args, 'all', False)
+    cc_addrs = ""
+    if reply_all:
+        all_recipients = set()
+        for hdr_name in ("To", "Cc"):
+            hdr_val = msg.get(hdr_name, "")
+            if hdr_val:
+                for _, addr in getaddresses([hdr_val]):
+                    if addr and addr.lower() != reply_addr.lower():
+                        # Exclude ourselves (account or best guess from login_hint)
+                        if account and addr.lower() == account.lower():
+                            continue
+                        all_recipients.add(addr)
+        if all_recipients:
+            cc_addrs = ", ".join(sorted(all_recipients))
 
     # Build Re: subject
     re_subject = orig_subject
@@ -514,6 +533,8 @@ def do_reply(service, index, count, query, args, as_draft=False):
     # Build reply message
     reply = MIMEText(body, "plain", "utf-8")
     reply["To"] = reply_addr
+    if cc_addrs:
+        reply["Cc"] = cc_addrs
     reply["Subject"] = re_subject
     if orig_msg_id:
         reply["In-Reply-To"] = orig_msg_id
@@ -539,9 +560,9 @@ def do_reply(service, index, count, query, args, as_draft=False):
 # Forward mode
 # ---------------------------------------------------------------------------
 
-def do_forward(service, index, count, query, recipient, subject_override=None, as_draft=False):
+def do_forward(service, index, count, query, recipient, subject_override=None, as_draft=False, account=None):
     """Forward a message by index to a new recipient."""
-    msg_id = _resolve_message_id(service, index, count, query)
+    msg_id = _resolve_message_id(service, index, count, query, account=account)
     raw_msg = service.users().messages().get(
         userId="me", id=msg_id, format="raw"
     ).execute()
@@ -755,8 +776,11 @@ def parse_list_get_args(argv):
     parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
     parser.add_argument("-S", "--stdout", action="store_true", help="Write raw message to stdout (for piping)")
     parser.add_argument("-t", "--text", action="store_true", help="Print text body to stdout (inline view)")
+    parser.add_argument("-c", "--just-count", action="store_true", help="Print message count only (for scripting)")
     parser.add_argument("-Q", "--show-account", action="store_true", help="Show active account and exit")
     parser.add_argument("--draft", action="store_true", help="Save reply/fwd as draft instead of sending")
+    parser.add_argument("--all", action="store_true", help="Reply-all: include original To and Cc")
+    parser.add_argument("-a", "--attach", action="append", default=None, help="Attach file (repeatable)")
     return parser.parse_args(argv)
 
 
@@ -802,7 +826,9 @@ Download a message:
 
 Reply to a message:
   gmails reply 3                        Reply to message #3 (opens $EDITOR)
+  gmails reply 3 --all                  Reply-all (includes To and Cc recipients)
   gmails reply 3 --draft                Save reply as draft (review before sending)
+  gmails reply 3 -a slide.pdf           Reply with attachment
   gmails -e lake reply 3                Reply from another account
   gmails -q "from:alice" reply 1        Reply to first search result
 
@@ -828,6 +854,11 @@ Save to Drafts:
   gmails draft -H message.eml                              (draft from .eml file)
   gmails draft user@example.com -s "hi" -a file.pdf        (draft with attachment)
 
+Scripting:
+  gmails -c -q "is:unread"              Print unread count (for shell prompts)
+  gmails -c -q "from:alice newer_than:1d"  Count recent messages from alice
+  gmails -c -e lake -q "is:unread"      Unread count for another account
+
 The !! workflow (list, then act on a result):
   % gmails -n 5 -q "from:alice"
   % !! 3 reply.eml              # re-runs: gmails -n 5 -q "from:alice" 3 reply.eml
@@ -850,7 +881,10 @@ Common options:
   -Q, --show-account    Show which account would be used, then exit
   -S, --stdout          Write raw message to stdout instead of saving to file
   -t, --text            Print text body inline (headers to stderr, body to stdout)
+  -c, --just-count      Print message count only (for scripting)
+  --all                 Reply-all: include original To and Cc recipients
   --draft               Save reply/fwd as draft instead of sending
+  -a, --attach FILE     Attach file to reply/fwd (repeatable)
   -h, --help            Show this help (or: gmails send -h, gmails draft -h)
 
 Environment:
@@ -919,11 +953,11 @@ def main():
 
     if mode in ("send", "draft"):
         args = parse_send_draft_args(rest)
-        token_name, login_hint = resolve_account(args.config, args.email, "gmail-compose")
+        token_name, login_hint = resolve_account(args.config, args.email, "gmail-send")
         if args.show_account:
             print(login_hint or "(default account)")
             sys.exit(0)
-        creds = get_credentials(service="gmail", scopes="gmail-compose",
+        creds = get_credentials(service="gmail", scopes="gmail-send",
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
         if mode == "send":
@@ -945,7 +979,7 @@ def main():
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
         do_reply(service, args.index, args.count, args.query, args,
-                 as_draft=args.draft)
+                 as_draft=args.draft, account=login_hint)
     elif mode == "fwd":
         fwd_rest = [a for a in rest if a != "fwd"]
         args = parse_list_get_args(fwd_rest)
@@ -961,7 +995,7 @@ def main():
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
         do_forward(service, args.index, args.count, args.query, recipient,
-                   as_draft=args.draft)
+                   as_draft=args.draft, account=login_hint)
     else:
         args = parse_list_get_args(rest)
         token_name, login_hint = resolve_account(args.config, args.email, "gmail-readonly")
@@ -971,11 +1005,18 @@ def main():
         creds = get_credentials(service="gmail", scopes="gmail-readonly",
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
+        if args.just_count:
+            kwargs = {"userId": "me", "maxResults": args.count}
+            if args.query:
+                kwargs["q"] = args.query
+            result = service.users().messages().list(**kwargs).execute()
+            print(result.get("resultSizeEstimate", 0))
+            sys.exit(0)
         if args.index is None:
-            do_list(service, args.count, args.query)
+            do_list(service, args.count, args.query, account=login_hint)
         else:
             do_get(service, args.index, args.count, args.query, args.output,
-                   stdout=args.stdout, text_view=args.text)
+                   stdout=args.stdout, text_view=args.text, account=login_hint)
 
 
 if __name__ == "__main__":
