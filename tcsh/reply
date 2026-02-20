@@ -1,1 +1,1 @@
-awk '{print "> "$0}'
+tr -d '\r' | awk '{print "> "$0}'

@@ -1147,6 +1147,13 @@ Multi-account (-F and -e):
       The accounts file has lines like: user@example.com /path/to/muttrc
       Partial matching works: -e lake matches chris@lakedutchess.com.
   Each account gets isolated OAuth tokens (e.g., gmail-compose-user-at-example-com).
+
+gmails vs mutt:
+  gmails wins for replying: sets In-Reply-To/References headers automatically
+  via the API, so threading works correctly. Use gmails reply/fwd for conversations.
+  mutt wins for fire-and-send one-liners: direct SMTP is faster than Python
+  startup + OAuth + REST API. Use mutt (or the `send` alias) for quick sends.
+  For reading/listing/searching, always use gmails.
 """
 
 
