@@ -29,6 +29,10 @@ pip-delete-this-directory.txt
 # Retired scripts
 .retired/
 
+# Context letters (session handoff files)
+CONTEXT_LETTER.md
+*CONTEXT*
+
 # Temporary files
 tmp.*
 temp_*
