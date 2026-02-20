@@ -232,7 +232,13 @@ alias rstack "open 'http://stats.stackexchange.com/search?q=%5Br%5D+'"
 #alias urls "asciify| fix | tr '<>[]()\ ' '\n' | grep -i 'http'| sed -e 's/[,.]\$//'"
 #alias urls "asciify| fix | tr '<>[]()\ ' '\n' | grep -i 'http'| sed -e 's/[,.]$//'"
 #alias urls "asciify| fix | tr ';<>[]()\ ' '\n' | grep -i 'http'"
+#alias urls "asciify| fix | tr '{};<>[]()\ ' '\n' | grep -i 'http'"
 alias urls "asciify| fix | tr '{};<>[]()\ ' '\n' | grep -i 'http'"
+  #1. Use the octal escape in tr:
+  #alias urls "asciify| fix | tr '{};<>[]()\ \140' '\n' | grep -i 'http'"
+  #\140 is the octal code for the backtick character. tr interprets octal escapes natively.
+  #2. Use a character class with the octal:
+  #If that doesn't work cleanly in your tcsh quoting context, you could also try hex (\x60) depending on your tr version, but octal is the most portable.
 alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
 alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
 alias deck onion
