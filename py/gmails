@@ -7,9 +7,13 @@ Usage:
     gmails -n 5                         # list 5 most recent
     gmails -q "from:alice"              # list with Gmail search filter
     gmails -q "in:sent" -n 5            # list 5 most recent sent messages
-    gmails 3                            # download message #3 to stdout
+    gmails 3                            # download message #3
+    gmails 2,3,5                        # download messages #2, #3, #5
+    gmails 2-5                          # download messages #2 through #5
+    gmails 1,3-5,8                      # mix of individual and ranges
     gmails 3 message.eml               # download message #3 to file
     gmails 3 /tmp/                      # download to dir with auto-generated name
+    gmails 3 -grab                      # save + copy "/grab {path}" to clipboard
 
     gmails send user@ex.com -s "hi"     # send (body from stdin)
     gmails send -H msg.eml              # send a pre-built .eml
@@ -84,6 +88,66 @@ def sanitize_filename(s, max_len=60):
     s = re.sub(r"\s+", "-", s.strip())
     s = re.sub(r"-+", "-", s)
     return s[:max_len].rstrip("-")
+
+
+def parse_index_token(token):
+    """Parse an index token like '3', '2,5', '2-5', or '1,3-5,8' into a sorted list of ints."""
+    indices = []
+    for part in token.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            pieces = part.split("-", 1)
+            try:
+                start, end = int(pieces[0]), int(pieces[1])
+            except ValueError:
+                print(f"Invalid index range: {part!r}", file=sys.stderr)
+                sys.exit(1)
+            if start > end:
+                print(f"Invalid index range (start > end): {part!r}", file=sys.stderr)
+                sys.exit(1)
+            indices.extend(range(start, end + 1))
+        else:
+            try:
+                indices.append(int(part))
+            except ValueError:
+                print(f"Invalid index: {part!r}", file=sys.stderr)
+                sys.exit(1)
+    if not indices:
+        print(f"No valid indices in: {token!r}", file=sys.stderr)
+        sys.exit(1)
+    return sorted(set(indices))
+
+
+def collect_indices(args):
+    """Extract index tokens from an arg list, return (indices, remaining_args).
+
+    Scans args for tokens that look like index specs (digits, commas, hyphens).
+    Skips flag values. Returns combined sorted/deduped indices and the
+    remaining non-index args.
+    """
+    indices = []
+    remaining = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            remaining.append(arg)
+            skip_next = False
+            continue
+        if arg in ("-n", "--count", "-q", "--query", "-F", "--config", "-e", "--email"):
+            remaining.append(arg)
+            skip_next = True
+            continue
+        if arg.startswith("-"):
+            remaining.append(arg)
+            continue
+        # Check if it looks like an index token: digits, commas, hyphens
+        if re.match(r"^\d[\d,-]*$", arg):
+            indices.extend(parse_index_token(arg))
+        else:
+            remaining.append(arg)
+    return sorted(set(indices)), remaining
 
 
 def generate_filename(raw_bytes):
@@ -457,7 +521,7 @@ def _resolve_message_id(service, index, count, query, account=None):
     return messages[index - 1]["id"]
 
 
-def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None):
+def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None, grab=False):
     """Download a message by its 1-based index."""
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
@@ -510,6 +574,11 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
 
     att_note = f" + {len(attachments)} attachment(s)" if attachments else ""
     print(f"Saved: {output_path} (From: {sender}, Subject: {subject}){att_note}", file=sys.stderr)
+
+    if grab:
+        grab_cmd = f"/grab {output_path}"
+        subprocess.run(["pbcopy"], input=grab_cmd.encode(), check=True)
+        print(f"Copied to clipboard: {grab_cmd}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -983,7 +1052,7 @@ def parse_list_get_args(argv):
         description="List and download Gmail messages.",
         epilog="Run without INDEX to list. Add INDEX to download. Designed for !! workflow.",
     )
-    parser.add_argument("index", nargs="?", type=int, default=None, help="Message number to download")
+    parser.add_argument("index", nargs="?", type=str, default=None, help="Message number(s): 3, 2,5, 2-5, 1,3-5,8")
     parser.add_argument("output", nargs="?", default=None, help="Output filename or directory")
     parser.add_argument("-n", "--count", type=int, default=20, help="Number of messages (default: 20)")
     parser.add_argument("-q", "--query", default=None, help="Gmail search query")
@@ -1014,13 +1083,16 @@ Commands:
   gmails reply INDEX --draft            Save reply as draft instead of sending
   gmails fwd INDEX RECIPIENT            Forward a message (opens $EDITOR)
   gmails fwd INDEX RECIPIENT --draft    Save forward as draft
-  gmails trash INDEX [INDEX ...]         Move message(s) to trash
+  gmails trash INDEX [INDEX ...]        Move message(s) to trash
   gmails archive INDEX [INDEX ...]      Archive (remove from inbox)
   gmails read INDEX [INDEX ...]         Mark message(s) as read
   gmails unread INDEX [INDEX ...]       Mark message(s) as unread
   gmails open INDEX                     Open a message in Gmail web UI
   gmails thread INDEX                   Show all messages in a conversation
   gmails -E                             List configured accounts
+
+  INDEX can be: 3 (single), 2,5 (comma-separated), 2-5 (range), 1,3-5,8 (mixed).
+  Shell brace expansion also works: {2,3,5} expands to separate args.
 
 List messages:
   gmails                                List 20 most recent messages
@@ -1037,13 +1109,18 @@ Sent mail and search:
   gmails -q "in:sent to:alice"          Sent messages to alice
   gmails -q 'from:alice subject:"the proposal"'  Faceted search with phrase
 
-Download a message:
+Download message(s):
   gmails 3                              Save #3 to /tmp/spool/ (auto-named)
+  gmails 2,3,5                          Save multiple messages (comma-separated)
+  gmails 2-5                            Save a range of messages
+  gmails 1,3-5,8                        Mix of individual and ranges
   gmails 3 message.eml                  Save message #3 to file
   gmails 3 /tmp/                        Save to dir (auto-named from headers)
   gmails 3 -S                           Raw message to stdout (for piping)
   gmails 3 -S | grep Subject            Pipe to other tools
   gmails 3 -t                           Print text body inline (quick read)
+  gmails 3 -grab                        Save and copy "/grab {path}" to clipboard
+  gmails -q "from:alice" 3 -grab        Works with any flag combo
 
 Reply to a message:
   gmails reply 3                        Reply to message #3 (opens $EDITOR)
@@ -1061,9 +1138,11 @@ Forward a message:
 
 Manage messages:
   gmails trash 3                        Move message #3 to trash
-  gmails trash 1 3 5                    Trash multiple messages at once
+  gmails trash 1,3,5                    Trash multiple (comma-separated)
+  gmails trash 1-5                      Trash a range
+  gmails trash 1 3 5                    Trash multiple (space-separated)
   gmails archive 3                      Archive message #3 (remove from inbox)
-  gmails archive 1 2 3                  Archive multiple messages
+  gmails archive 1-3                    Archive a range
   gmails read 3                         Mark message #3 as read
   gmails unread 3                       Mark message #3 as unread
   gmails -q "from:spam" trash 1         Trash a search result
@@ -1121,6 +1200,7 @@ Common options:
   -Q, --show-account    Show which account would be used, then exit
   -S, --stdout          Write raw message to stdout instead of saving to file
   -t, --text            Print text body inline (headers to stderr, body to stdout)
+  -grab                 Copy "/grab {path}" to clipboard after saving (for Claude Code)
   -c, --just-count      Print message count only (for scripting)
   --all                 Reply-all: include original To and Cc recipients
   --draft               Save reply/fwd as draft instead of sending
@@ -1158,6 +1238,10 @@ gmails vs mutt:
 
 
 def main():
+    # Strip -grab / --grab from argv before any parsing
+    grab_mode = "-grab" in sys.argv or "--grab" in sys.argv
+    sys.argv = [a for a in sys.argv if a not in ("-grab", "--grab")]
+
     # Top-level help: show comprehensive usage for all modes
     if len(sys.argv) < 2 or (
         sys.argv[1] in ("-h", "--help") and
@@ -1218,6 +1302,12 @@ def main():
         if args.index is None:
             print("Usage: gmails reply INDEX (e.g., gmails reply 3)", file=sys.stderr)
             sys.exit(1)
+        indices = parse_index_token(args.index)
+        if len(indices) > 1:
+            print("reply only works with a single message, got "
+                  f"{len(indices)} indices: {indices}", file=sys.stderr)
+            sys.exit(1)
+        reply_idx = indices[0]
         token_name, login_hint = resolve_account(args.config, args.email, "gmail-send")
         if args.show_account:
             print(login_hint or "(default account)")
@@ -1225,7 +1315,7 @@ def main():
         creds = get_credentials(service="gmail", scopes="gmail-send",
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
-        do_reply(service, args.index, args.count, args.query, args,
+        do_reply(service, reply_idx, args.count, args.query, args,
                  as_draft=args.draft, account=login_hint)
     elif mode == "fwd":
         fwd_rest = [a for a in rest if a != "fwd"]
@@ -1233,6 +1323,12 @@ def main():
         if args.index is None or args.output is None:
             print("Usage: gmails fwd INDEX RECIPIENT (e.g., gmails fwd 3 user@example.com)", file=sys.stderr)
             sys.exit(1)
+        indices = parse_index_token(args.index)
+        if len(indices) > 1:
+            print("fwd only works with a single message, got "
+                  f"{len(indices)} indices: {indices}", file=sys.stderr)
+            sys.exit(1)
+        fwd_idx = indices[0]
         recipient = args.output  # the "output" positional is the recipient for fwd
         token_name, login_hint = resolve_account(args.config, args.email, "gmail-send")
         if args.show_account:
@@ -1241,33 +1337,19 @@ def main():
         creds = get_credentials(service="gmail", scopes="gmail-send",
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
-        do_forward(service, args.index, args.count, args.query, recipient,
+        do_forward(service, fwd_idx, args.count, args.query, recipient,
                    as_draft=args.draft, account=login_hint)
     elif mode in ("trash", "archive", "open", "thread", "read", "unread"):
         mode_rest = [a for a in rest if a != mode]
-        # For multi-index modes, extract all bare integers as indices
-        indices = []
-        filtered_rest = []
-        skip_next = False
-        for arg in mode_rest:
-            if skip_next:
-                filtered_rest.append(arg)
-                skip_next = False
-                continue
-            if arg in ("-n", "--count", "-q", "--query", "-F", "--config", "-e", "--email"):
-                filtered_rest.append(arg)
-                skip_next = True
-                continue
-            if arg.startswith("-"):
-                filtered_rest.append(arg)
-                continue
-            try:
-                indices.append(int(arg))
-            except ValueError:
-                filtered_rest.append(arg)
+        indices, filtered_rest = collect_indices(mode_rest)
         args = parse_list_get_args(filtered_rest)
         if not indices:
-            print(f"Usage: gmails {mode} INDEX [INDEX ...] (e.g., gmails {mode} 3)", file=sys.stderr)
+            print(f"Usage: gmails {mode} INDEX [INDEX ...] (e.g., gmails {mode} 3 or gmails {mode} 1,3-5)",
+                  file=sys.stderr)
+            sys.exit(1)
+        if mode in ("open", "thread") and len(indices) > 1:
+            print(f"{mode} only works with a single message, got "
+                  f"{len(indices)} indices: {indices}", file=sys.stderr)
             sys.exit(1)
         # trash/archive/read/unread need write access; open and thread only need read
         scope = "gmail-send" if mode in ("trash", "archive", "read", "unread") else "gmail-readonly"
@@ -1287,9 +1369,9 @@ def main():
         elif mode == "unread":
             do_mark_unread(service, indices, args.count, args.query, account=login_hint)
         elif mode == "open":
-            do_open(service, args.index, args.count, args.query, account=login_hint)
+            do_open(service, indices[0], args.count, args.query, account=login_hint)
         else:
-            do_thread(service, args.index, args.count, args.query, account=login_hint)
+            do_thread(service, indices[0], args.count, args.query, account=login_hint)
     else:
         args = parse_list_get_args(rest)
         scope = "gmail-readonly"
@@ -1310,8 +1392,11 @@ def main():
         if args.index is None:
             do_list(service, args.count, args.query, account=login_hint)
         else:
-            do_get(service, args.index, args.count, args.query, args.output,
-                   stdout=args.stdout, text_view=args.text, account=login_hint)
+            indices = parse_index_token(args.index)
+            for idx in indices:
+                do_get(service, idx, args.count, args.query, args.output,
+                       stdout=args.stdout, text_view=args.text, account=login_hint,
+                       grab=grab_mode)
 
 
 if __name__ == "__main__":
