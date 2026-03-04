@@ -290,9 +290,13 @@ process_file() {
 
     if command -v whisper-cli &>/dev/null && [ -n "$cpp_model_file" ] && [ -f "$cpp_model_file" ]; then
         # Use whisper.cpp (most memory-efficient, fast on Apple Silicon)
+        # whisper-cli requires WAV input; convert m4a/other formats first
+        local wav_input="/tmp/${file_basename%.*}_$$.wav"
+        ffmpeg -i "$voice_file" -ar 16000 -ac 1 -c:a pcm_s16le "$wav_input" -y -loglevel warning 2>&1
         local srt_output="/tmp/${file_basename%.*}"
-        whisper-cli -m "$cpp_model_file" -l en -osrt -of "$srt_output" "$voice_file" 2>&1 | grep -v "^$"
+        whisper-cli -m "$cpp_model_file" -l en -osrt -of "$srt_output" "$wav_input" 2>&1 | grep -v "^$"
         local whisper_exit=$?
+        rm -f "$wav_input"
         # Convert SRT to timestamped text format matching Python output
         if [ -f "${srt_output}.srt" ]; then
             /Users/wiggins/.local/venvs/whisper/bin/python3 - "${srt_output}.srt" "$whisper_output" <<'SRT_CONVERT'
