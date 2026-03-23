@@ -123,7 +123,6 @@ alias vv 'setv; pbpaste >! $vstr; vi $vstr; echo vstr:;echo $vstr'
 alias v 'setv; vi $vstr; echo vstr:;echo $vstr'
 alias tv 'setv; echo % `datetxt` >$vstr ; vi +16 -c startinsert $vstr; echo vstr:;echo $vstr'
 alias d 'setd; date +"%a %b %d, week %U of %Y" >>! $dstr; vi $dstr; echo dstr:;echo $dstr'
-alias o 'setv; vi $vstr; oai-f $vstr'
 alias sv 'source $vstr'
 alias gv 'smail $vstr'
 # v & b (quicknotes+longnotes)
@@ -333,7 +332,7 @@ alias cwnotes 'head `ls -1t $ndir/cwnote_2026_*T*_*_*.md | normalize` | more'
 alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
 alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
 #alias vi-null vim -u NONE
-alias vi-null "vi -c 'set nonumber' -c 'set list!'"
+alias vi-null "vi -c 'set nonumber' -c 'set list!' -c 'Copilot disable'"
 
 
 # good fu: exploits quick add but adds browser to edit event, send invitesjj
@@ -400,7 +399,7 @@ alias doccs docs
 
 # things using gm which i changed to gg 20180708
 alias att gg has:attachment
-alias frm "gg from:\!*"
+#alias frm "gg from:\!*" # 20260319 moved to seiton, uses m now
 alias to "gg to:\!*"
 
 # cu library
@@ -560,3 +559,4 @@ alias hideme-start 'scutil --nc start "hide.me VPN (Wireguard)"'
 alias hideme-stop 'scutil --nc stop "hide.me VPN (Wireguard)"'
 alias hideme-status 'scutil --nc status "hide.me VPN (Wireguard)"'
 alias hideme-check 'scutil --nc status "hide.me VPN (Wireguard)" | head -1'
+alias claw 'ssh -i ~/.ssh/google_compute_engine root@23.95.164.201'

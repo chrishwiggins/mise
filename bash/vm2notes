@@ -116,6 +116,10 @@ cat "$INPUT_FILE" >> "$tmpfile"
 echo "Processing transcript with $MODEL..."
 
 if [ "$MODEL" = "claude" ]; then
+    # Unset parent IDE / Agent detection vars
+    for var in $(env | grep -oE '^(CLAUDE|VSCODE)[A-Z_]*'); do unset "$var"; done
+    unset ELECTRON_RUN_AS_NODE
+
     claude --print < "$tmpfile" > "$output_file" 2>&1
 else
     ollama run --nowordwrap "$MODEL" < "$tmpfile" 2>/dev/null > "$output_file"

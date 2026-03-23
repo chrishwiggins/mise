@@ -1,4 +1,4 @@
-#!/Users/wiggins/mise/py/.venv/bin/python3
+#!/usr/bin/env python3
 """
 Gmail CLI: list, read, send, and draft messages via Gmail API.
 
@@ -6,14 +6,15 @@ Usage:
     gmails                              # list 20 most recent messages
     gmails -n 5                         # list 5 most recent
     gmails -q "from:alice"              # list with Gmail search filter
-    gmails -q "in:sent" -n 5            # list 5 most recent sent messages
+    gmails sent                           # list sent messages (shows recipients)
+    gmails sent -v                        # sent messages with snippet preview
     gmails 3                            # download message #3
     gmails 2,3,5                        # download messages #2, #3, #5
     gmails 2-5                          # download messages #2 through #5
     gmails 1,3-5,8                      # mix of individual and ranges
     gmails 3 message.eml               # download message #3 to file
     gmails 3 /tmp/                      # download to dir with auto-generated name
-    gmails 3 -grab                      # save + copy "/grab {path}" to clipboard
+    gmails 3 -peek                      # save + copy "/peek {path}" to clipboard
 
     gmails send user@ex.com -s "hi"     # send (body from stdin)
     gmails send -H msg.eml              # send a pre-built .eml
@@ -31,12 +32,14 @@ Designed for the !! workflow:
 
 import argparse
 import base64
+import configparser
 import email
 import html as html_mod
 import json
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,11 +47,99 @@ import webbrowser
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import getaddresses, parseaddr, parsedate_to_datetime
+from email.utils import formatdate, getaddresses, make_msgid, parseaddr, parsedate_to_datetime
 from pathlib import Path
 
 from google_auth import get_credentials
 from googleapiclient.discovery import build
+
+
+# ---------------------------------------------------------------------------
+# Configuration (~/.config/gmails/config, all keys optional)
+# ---------------------------------------------------------------------------
+
+CONFIG_FILE = Path("~/.config/gmails/config").expanduser()
+
+
+def _load_config():
+    """Load optional INI config from ~/.config/gmails/config."""
+    cp = configparser.ConfigParser()
+    if CONFIG_FILE.exists():
+        cp.read(CONFIG_FILE)
+    return cp
+
+
+_CONFIG = _load_config()
+
+
+def _config_get(key, env_var=None, default=None):
+    """Read a config value: env var > config file > default."""
+    if env_var:
+        val = os.environ.get(env_var)
+        if val:
+            return val
+    try:
+        return _CONFIG.get("gmails", key)
+    except (configparser.NoSectionError, configparser.NoOptionError):
+        return default
+
+
+# ---------------------------------------------------------------------------
+# Contact resolution
+# ---------------------------------------------------------------------------
+
+_contacts_path = _config_get("contacts_file", env_var="GMAILS_CONTACTS_FILE")
+CONTACTS_FILE = Path(_contacts_path).expanduser() if _contacts_path else None
+
+
+def resolve_recipient(addr):
+    """Resolve a partial name/email to a full email address via contacts file.
+
+    If addr already contains '@' and a '.', return it as-is.
+    Otherwise search the contacts file (semicolon-delimited) for a matching field.
+    """
+    if "@" in addr and "." in addr.split("@", 1)[1]:
+        return addr
+    if not CONTACTS_FILE or not CONTACTS_FILE.exists():
+        return addr
+    matches = []
+    needle = addr.lower()
+    with open(CONTACTS_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            fields = [fld.strip() for fld in line.split(";")]
+            # Find email fields (contain @)
+            emails = [fld for fld in fields if "@" in fld]
+            if not emails:
+                continue
+            # Check if needle matches any field (substring)
+            if any(needle in fld.lower() for fld in fields):
+                matches.append((fields, emails))
+    if len(matches) == 0:
+        print(f"Warning: '{addr}' not found in contacts, using as-is", file=sys.stderr)
+        return addr
+    if len(matches) == 1:
+        chosen = matches[0][1][0]  # first email of the single match
+        name_parts = [f for f in matches[0][0] if "@" not in f]
+        display = " ".join(name_parts) if name_parts else chosen
+        print(f"Resolved: {addr} -> {chosen} ({display})", file=sys.stderr)
+        return chosen
+    # Multiple matches: try exact field match to disambiguate
+    exact = [(fields, emails) for fields, emails in matches
+             if any(needle == fld.lower() for fld in fields)]
+    if len(exact) == 1:
+        chosen = exact[0][1][0]
+        name_parts = [f for f in exact[0][0] if "@" not in f]
+        display = " ".join(name_parts) if name_parts else chosen
+        print(f"Resolved: {addr} -> {chosen} ({display})", file=sys.stderr)
+        return chosen
+    print(f"Ambiguous: '{addr}' matches {len(matches)} contacts:", file=sys.stderr)
+    for fields, emails in matches[:5]:
+        print(f"  {';'.join(fields)}", file=sys.stderr)
+    print(f"Use a full email address instead.", file=sys.stderr)
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +152,21 @@ def parse_sender(from_header):
         return "(unknown)"
     name, addr = parseaddr(from_header)
     return name if name else addr
+
+
+def parse_recipient(to_header):
+    """Extract a display-friendly recipient from a To header."""
+    if not to_header:
+        return "(unknown)"
+    # To header can have multiple addresses separated by commas
+    addrs = [a.strip() for a in to_header.split(",") if a.strip()]
+    if not addrs:
+        return "(unknown)"
+    name, addr = parseaddr(addrs[0])
+    first = name if name else addr
+    if len(addrs) > 1:
+        first += f" +{len(addrs) - 1}"
+    return first
 
 
 def parse_date(date_header):
@@ -80,6 +186,17 @@ def get_header(headers, name):
         if h["name"].lower() == name.lower():
             return h["value"]
     return ""
+
+
+def _count_attachments_payload(payload):
+    """Count file attachments in a Gmail API payload structure."""
+    count = 0
+    for part in payload.get("parts", []):
+        if part.get("filename"):
+            count += 1
+        if "parts" in part:
+            count += _count_attachments_payload(part)
+    return count
 
 
 def sanitize_filename(s, max_len=60):
@@ -221,19 +338,26 @@ def save_attachments(raw_bytes, output_dir):
     return saved
 
 
-LAST_LIST_CACHE = Path("/tmp/spool/.gmails-last-list.json")
+CACHE_DIR = Path("/tmp/spool")
+
+
+def _cache_path(account=None):
+    """Return per-account cache file path."""
+    slug = (account or "default").replace("@", "-at-").replace(".", "-")
+    return CACHE_DIR / f".gmails-last-list-{slug}.json"
+
 
 
 def _cache_message_ids(messages, count, query, account=None):
-    """Save message list to cache for !! workflow safety."""
-    LAST_LIST_CACHE.parent.mkdir(exist_ok=True)
+    """Save message list to per-account cache for !! workflow safety."""
+    CACHE_DIR.mkdir(exist_ok=True)
     data = {
         "count": count,
         "query": query,
         "account": account,
         "messages": [{"id": m["id"], "threadId": m.get("threadId", "")} for m in messages],
     }
-    LAST_LIST_CACHE.write_text(json.dumps(data))
+    _cache_path(account).write_text(json.dumps(data))
 
 
 def _load_cached_ids(count, query, account=None):
@@ -241,10 +365,11 @@ def _load_cached_ids(count, query, account=None):
 
     Returns list of message dicts, or None if no valid cache.
     """
-    if not LAST_LIST_CACHE.exists():
+    path = _cache_path(account)
+    if not path.exists():
         return None
     try:
-        data = json.loads(LAST_LIST_CACHE.read_text())
+        data = json.loads(path.read_text())
         if (data.get("count") == count and data.get("query") == query
                 and data.get("account") == account):
             return data["messages"]
@@ -302,6 +427,32 @@ def extract_text_body(raw_bytes):
 ACCOUNTS_FILE = Path("~/.config/gmails/accounts").expanduser()
 
 
+def _default_from_email():
+    """Return the first real email from the accounts file (the default account)."""
+    if not ACCOUNTS_FILE.exists():
+        return None
+    with open(ACCOUNTS_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            acct = line.split(None, 1)[0]
+            if "@" in acct:
+                return acct
+    return None
+
+
+def _default_from_addr():
+    """Build a From header value from config default_name + default account email."""
+    email_addr = _default_from_email()
+    if not email_addr:
+        return None
+    name = _config_get("default_name")
+    if name:
+        return f"{name} <{email_addr}>"
+    return email_addr
+
+
 def do_list_accounts():
     """Print configured accounts from ~/.config/gmails/accounts."""
     if not ACCOUNTS_FILE.exists():
@@ -349,15 +500,17 @@ def resolve_account(config_path, email_addr, scope_prefix):
 def _lookup_config_for_email(email_addr):
     """Find muttrc config path for an email address from ~/.config/gmails/accounts.
 
-    Supports partial matching (e.g., 'lakedutchess' matches 'chris@lakedutchess.com').
-    Returns (full_email, config_path) tuple.
+    Supports partial matching (e.g., 'work' matches 'alice@work.example.com')
+    and bare aliases (e.g., 'personal' -> 'alice@example.com').
+    Returns (full_email, config_path) tuple.  full_email always contains '@'.
     """
     if not ACCOUNTS_FILE.exists():
         print(f"No accounts file at {ACCOUNTS_FILE}", file=sys.stderr)
         print("Create it with lines like: user@example.com /path/to/muttrc", file=sys.stderr)
         sys.exit(1)
 
-    matches = []
+    # Parse all entries, separating real emails from bare aliases
+    all_entries = []
     with open(ACCOUNTS_FILE) as f:
         for line in f:
             line = line.strip()
@@ -366,19 +519,40 @@ def _lookup_config_for_email(email_addr):
             parts = line.split(None, 1)
             if len(parts) != 2:
                 continue
-            acct_email, acct_path = parts
-            if email_addr in acct_email:
-                matches.append((acct_email, acct_path))
+            all_entries.append((parts[0], parts[1]))
 
-    if len(matches) == 1:
-        return matches[0]
+    matches = [(e, p) for e, p in all_entries if email_addr in e]
+
     if len(matches) == 0:
         print(f"No account matching '{email_addr}' in {ACCOUNTS_FILE}", file=sys.stderr)
         sys.exit(1)
-    print(f"Ambiguous: '{email_addr}' matches multiple accounts:", file=sys.stderr)
-    for acct_email, _ in matches:
-        print(f"  {acct_email}", file=sys.stderr)
-    sys.exit(1)
+    if len(matches) > 2:
+        # Filter: prefer real email matches over bare aliases
+        real = [(e, p) for e, p in matches if "@" in e]
+        if len(real) == 1:
+            matches = real
+
+    # If we matched a bare alias (no @), resolve to the real email that shares
+    # the same config path.  e.g., "work /dev/null" -> "alice@work.example.com /dev/null"
+    chosen_email, chosen_path = matches[0]
+    if "@" not in chosen_email:
+        for entry_email, entry_path in all_entries:
+            if "@" in entry_email and entry_path == chosen_path:
+                chosen_email = entry_email
+                break
+        if "@" not in chosen_email:
+            # Still no real email found; warn but continue
+            print(f"Warning: alias '{chosen_email}' has no corresponding email "
+                  f"entry in {ACCOUNTS_FILE}", file=sys.stderr)
+
+    if len(matches) > 1 and all("@" not in e for e, _ in matches):
+        # Multiple bare aliases, ambiguous
+        print(f"Ambiguous: '{email_addr}' matches multiple accounts:", file=sys.stderr)
+        for acct_email, _ in matches:
+            print(f"  {acct_email}", file=sys.stderr)
+        sys.exit(1)
+
+    return chosen_email, chosen_path
 
 
 def get_body_interactive(recipient, subject):
@@ -397,12 +571,21 @@ def get_body_interactive(recipient, subject):
     return body
 
 
-def build_mime_message(recipient, subject, body, cc=None, bcc=None, attachments=None):
+def build_mime_message(recipient, subject, body, cc=None, bcc=None, attachments=None,
+                       from_addr=None):
     """Build a MIME message from parts. Returns bytes."""
-    msg = MIMEText(body, "plain", "utf-8")
+    plain_part = MIMEText(body, "plain", "utf-8")
+    html_body = "<pre style=\"font-family:sans-serif;white-space:pre-wrap\">" + html_mod.escape(body) + "</pre>"
+    html_part = MIMEText(html_body, "html", "utf-8")
+    msg = MIMEMultipart("alternative")
+    msg.attach(plain_part)
+    msg.attach(html_part)
+    msg["From"] = from_addr or _default_from_addr() or "user@example.com"
     msg["To"] = recipient
     if subject:
         msg["Subject"] = subject
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain="gmail.com")
     if cc:
         msg["Cc"] = cc
     if bcc:
@@ -415,7 +598,43 @@ def build_mime_message(recipient, subject, body, cc=None, bcc=None, attachments=
 # List mode
 # ---------------------------------------------------------------------------
 
-def do_list(service, count, query, account=None):
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN") or shutil.which("claude")
+
+
+def _summarize_snippets(snippets):
+    """Send snippets to Claude CLI, return list of keyword strings."""
+    if not CLAUDE_BIN:
+        return None
+    numbered = "\n".join(f"{i}. {s}" for i, s in enumerate(snippets, 1))
+    prompt = (
+        "For each numbered email snippet below, extract 3-5 keywords or a short phrase "
+        "(under 10 words) that captures what the email is about. "
+        "Return ONLY numbered lines like:\n"
+        "1. [keyword, keyword, keyword]\n"
+        "2. [keyword, keyword]\n"
+        "No other text.\n\n" + numbered
+    )
+    try:
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        result = subprocess.run(
+            [CLAUDE_BIN, "-p", "--model", "haiku", prompt],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        if result.returncode != 0:
+            return None
+        lines = result.stdout.strip().splitlines()
+        out = {}
+        for line in lines:
+            m = re.match(r"(\d+)\.\s*(.*)", line.strip())
+            if m:
+                out[int(m.group(1))] = m.group(2).strip()
+        return out
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+
+def do_list(service, count, query, account=None, sent=False, verbose=False,
+            summary=False, json_output=False):
     """List recent messages as a numbered table."""
     kwargs = {"userId": "me", "maxResults": count}
     if query:
@@ -451,17 +670,64 @@ def do_list(service, count, query, account=None):
                 userId="me",
                 id=msg_stub["id"],
                 format="metadata",
-                metadataHeaders=["From", "Subject", "Date"],
+                metadataHeaders=["From", "To", "Subject", "Date"] if sent else ["From", "Subject", "Date"],
             ),
             callback=_make_callback(i),
         )
     batch.execute()
+
+    # --json: structured output for TUI/scripting consumers
+    if json_output:
+        out = []
+        for i, msg in enumerate(fetched, 1):
+            if msg is None:
+                out.append({"index": i, "error": True})
+                continue
+            headers = msg.get("payload", {}).get("headers", [])
+            unread = "UNREAD" in msg.get("labelIds", [])
+            if sent:
+                person = parse_recipient(get_header(headers, "To"))
+            else:
+                person = parse_sender(get_header(headers, "From"))
+            att_count = _count_attachments_payload(msg.get("payload", {}))
+            out.append({
+                "index": i,
+                "id": msg["id"],
+                "threadId": msg.get("threadId", ""),
+                "unread": unread,
+                "date": parse_date(get_header(headers, "Date")),
+                "from": person,
+                "from_full": get_header(headers, "From") if not sent else get_header(headers, "To"),
+                "subject": get_header(headers, "Subject") or "(no subject)",
+                "hasAttachment": att_count > 0,
+                "attachmentCount": att_count,
+            })
+        print(json.dumps(out))
+        return
 
     idx_width = len(str(len(messages)))
     from_width = 25
     # +2 for unread marker "* " or "  "
     fixed_width = idx_width + 1 + 2 + 10 + 2 + from_width + 2
     subj_width = max(term_width - fixed_width, 10)
+
+    # If --summary, collect snippets and call Claude before printing
+    keywords = None
+    if summary:
+        raw_snippets = []
+        for msg in fetched:
+            if msg is None:
+                raw_snippets.append("")
+            else:
+                raw_snippets.append(
+                    html_mod.unescape(msg.get("snippet", ""))
+                    + " [Subject: "
+                    + (get_header(msg.get("payload", {}).get("headers", []), "Subject") or "")
+                    + "]"
+                )
+        print("  (summarizing...)", file=sys.stderr, end="\r")
+        keywords = _summarize_snippets(raw_snippets)
+        print("                  ", file=sys.stderr, end="\r")
 
     unread_count = 0
     for i, msg in enumerate(fetched, 1):
@@ -471,19 +737,32 @@ def do_list(service, count, query, account=None):
 
         headers = msg.get("payload", {}).get("headers", [])
         date_str = parse_date(get_header(headers, "Date"))
-        sender = parse_sender(get_header(headers, "From"))
+        if sent:
+            person = parse_recipient(get_header(headers, "To"))
+        else:
+            person = parse_sender(get_header(headers, "From"))
         subject = get_header(headers, "Subject") or "(no subject)"
         unread = "UNREAD" in msg.get("labelIds", [])
         if unread:
             unread_count += 1
 
-        if len(sender) > from_width:
-            sender = sender[: from_width - 1] + "\u2026"
+        if len(person) > from_width:
+            person = person[: from_width - 1] + "\u2026"
         if len(subject) > subj_width:
             subject = subject[: subj_width - 1] + "\u2026"
 
         marker = "*" if unread else " "
-        print(f"{i:>{idx_width}}.{marker}{date_str}  {sender:<{from_width}}  {subject}")
+        print(f"{i:>{idx_width}}.{marker}{date_str}  {person:<{from_width}}  {subject}")
+
+        if summary and keywords and i in keywords:
+            print(f"{'':{idx_width + 3}}{keywords[i]}")
+        elif verbose:
+            snippet = html_mod.unescape(msg.get("snippet", ""))
+            if snippet:
+                snippet_width = term_width - idx_width - 3
+                if len(snippet) > snippet_width:
+                    snippet = snippet[: snippet_width - 3] + "..."
+                print(f"{'':{idx_width + 3}}{snippet}")
 
     # Enhancement 5: summary line
     if unread_count:
@@ -494,14 +773,32 @@ def do_list(service, count, query, account=None):
 # Get mode
 # ---------------------------------------------------------------------------
 
-def _resolve_message_id(service, index, count, query, account=None):
-    """Resolve a 1-based index to a Gmail message ID, using cache when safe."""
+def _resolve_message_id(service, index, count, query, account=None,
+                        verify=False):
+    """Resolve a 1-based index to a Gmail message ID, using cache when safe.
+
+    If verify=True, confirm the cached ID is accessible via messages.get
+    before returning it. Falls back to a fresh list on 404.
+    """
     # Try cache first (!! workflow: same count+query+account means same list)
     cached = _load_cached_ids(count, query, account=account)
     if cached and 1 <= index <= len(cached):
-        return cached[index - 1]["id"]
+        msg_id = cached[index - 1]["id"]
+        if verify:
+            try:
+                service.users().messages().get(
+                    userId="me", id=msg_id, format="minimal"
+                ).execute()
+            except Exception:
+                print(f"Cached message {msg_id} not accessible, refreshing list...",
+                      file=sys.stderr)
+                cached = None  # fall through to fresh list
+        if cached:
+            return msg_id
 
     # Cache miss or stale: fetch fresh
+    if _cache_path(account).exists():
+        print(f"Cache miss (query={query!r}); re-fetching message list", file=sys.stderr)
     kwargs = {"userId": "me", "maxResults": count}
     if query:
         kwargs["q"] = query
@@ -534,15 +831,30 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
     if text_view:
         msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
         sender = msg.get("From", "unknown")
+        to = msg.get("To", "")
+        cc = msg.get("Cc", "")
         subject = msg.get("Subject", "(no subject)")
         date = msg.get("Date", "")
         print(f"From: {sender}", file=sys.stderr)
+        if to:
+            print(f"To: {to}", file=sys.stderr)
+        if cc:
+            print(f"Cc: {cc}", file=sys.stderr)
         print(f"Date: {date}", file=sys.stderr)
         print(f"Subject: {subject}", file=sys.stderr)
         print("---", file=sys.stderr)
-        print(extract_text_body(raw_bytes))
-        # Mark as read (use `gmails read N` instead)
-
+        body_text = extract_text_body(raw_bytes)
+        print(body_text)
+        if grab:
+            # -peek -t: save .eml and copy /peek path (so Claude can ingest it)
+            spool = Path("/tmp/spool")
+            spool.mkdir(exist_ok=True)
+            output_path = versioned_path(spool / generate_filename(raw_bytes))
+            output_path.write_bytes(raw_bytes)
+            peek_cmd = f"/peek {output_path}"
+            subprocess.run(["pbcopy"], input=peek_cmd.encode(), check=True)
+            print(f"Saved: {output_path}", file=sys.stderr)
+            print(f"Copied to clipboard: {peek_cmd}", file=sys.stderr)
         return
 
     # -S flag: raw to stdout for piping
@@ -576,18 +888,20 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
     print(f"Saved: {output_path} (From: {sender}, Subject: {subject}){att_note}", file=sys.stderr)
 
     if grab:
-        grab_cmd = f"/grab {output_path}"
-        subprocess.run(["pbcopy"], input=grab_cmd.encode(), check=True)
-        print(f"Copied to clipboard: {grab_cmd}", file=sys.stderr)
+        peek_cmd = f"/peek {output_path}"
+        subprocess.run(["pbcopy"], input=peek_cmd.encode(), check=True)
+        print(f"Copied to clipboard: {peek_cmd}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
 # Reply mode
 # ---------------------------------------------------------------------------
 
-def do_reply(service, index, count, query, args, as_draft=False, account=None):
+def do_reply(service, index, count, query, args, as_draft=False, account=None,
+             sent=False):
     """Download message by index, extract headers, open $EDITOR for reply."""
-    msg_id = _resolve_message_id(service, index, count, query, account=account)
+    msg_id = _resolve_message_id(service, index, count, query, account=account,
+                                 verify=True)
     raw_msg = service.users().messages().get(
         userId="me", id=msg_id, format="raw"
     ).execute()
@@ -596,16 +910,42 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None):
 
     # Extract headers for reply
     orig_from = msg.get("From", "")
+    orig_to = msg.get("To", "")
     orig_subject = msg.get("Subject", "")
     orig_msg_id = msg.get("Message-ID", "")
     orig_references = msg.get("References", "")
     orig_date = msg.get("Date", "")
 
-    # Reply-To takes precedence over From
-    reply_to = msg.get("Reply-To", orig_from)
-    _, reply_addr = parseaddr(reply_to)
+    # Replying to our own sent message: reply target is the original To:, not From:
+    is_sent = sent
+    if is_sent:
+        # First To: recipient becomes the reply target
+        to_addrs = getaddresses([orig_to]) if orig_to else []
+        reply_addr = to_addrs[0][1] if to_addrs else ""
+        if not reply_addr:
+            print("Cannot reply to sent message: no To: address found", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Reply-To takes precedence over From
+        reply_to = msg.get("Reply-To", orig_from)
+        _, reply_addr = parseaddr(reply_to)
 
-    # Reply-all: collect To and Cc, excluding our own address
+    # Collect all known self-addresses for exclusion from Cc
+    self_addrs = set()
+    if account:
+        self_addrs.add(account.lower())
+    # Also load all configured account emails
+    if ACCOUNTS_FILE.exists():
+        with open(ACCOUNTS_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                acct_email = line.split(None, 1)[0]
+                if "@" in acct_email:
+                    self_addrs.add(acct_email.lower())
+
+    # Reply-all: collect To and Cc, excluding self and reply_addr
     reply_all = getattr(args, 'all', False)
     cc_addrs = ""
     if reply_all:
@@ -614,11 +954,14 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None):
             hdr_val = msg.get(hdr_name, "")
             if hdr_val:
                 for _, addr in getaddresses([hdr_val]):
-                    if addr and addr.lower() != reply_addr.lower():
-                        # Exclude ourselves (account or best guess from login_hint)
-                        if account and addr.lower() == account.lower():
-                            continue
-                        all_recipients.add(addr)
+                    if not addr:
+                        continue
+                    addr_lower = addr.lower()
+                    if addr_lower == reply_addr.lower():
+                        continue
+                    if addr_lower in self_addrs:
+                        continue
+                    all_recipients.add(addr)
         if all_recipients:
             cc_addrs = ", ".join(sorted(all_recipients))
 
@@ -632,17 +975,8 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None):
     if orig_msg_id:
         refs = f"{refs} {orig_msg_id}".strip()
 
-    # Quote original body
-    orig_body = ""
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/plain":
-                charset = part.get_content_charset() or "utf-8"
-                orig_body = part.get_payload(decode=True).decode(charset, errors="replace")
-                break
-    else:
-        charset = msg.get_content_charset() or "utf-8"
-        orig_body = msg.get_payload(decode=True).decode(charset, errors="replace")
+    # Quote original body (uses extract_text_body which handles HTML fallback)
+    orig_body = extract_text_body(raw_bytes)
 
     _, orig_name = parseaddr(orig_from)
     quoted = "\n".join(f"> {line}" for line in orig_body.splitlines())
@@ -650,7 +984,12 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None):
 
     # Stdin body or interactive editor
     if not sys.stdin.isatty():
-        body = sys.stdin.read() + template
+        stdin_body = sys.stdin.read().strip()
+        if not stdin_body:
+            # No actual reply content piped in; save as draft to prevent accidental sends
+            print("No body on stdin, saving as draft instead of sending.", file=sys.stderr)
+            as_draft = True
+        body = (stdin_body + "\n" if stdin_body else "") + template
     else:
         editor = os.environ.get("EDITOR", "vim")
         with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
@@ -665,6 +1004,23 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None):
     if not body.strip():
         print("Empty body, aborting.", file=sys.stderr)
         sys.exit(1)
+
+    # Confirm before sending (skip for drafts)
+    if not as_draft and sys.stdin.isatty():
+        if account:
+            print(f"\nFrom: {account}", file=sys.stderr)
+        print(f"To: {reply_addr}", file=sys.stderr)
+        if cc_addrs:
+            print(f"Cc: {cc_addrs}", file=sys.stderr)
+        print(f"Subject: {re_subject}", file=sys.stderr)
+        print(f"Body length: {len(body.strip())} chars", file=sys.stderr)
+        try:
+            answer = input("Send this reply? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer.strip().lower() != "y":
+            print("Aborted.", file=sys.stderr)
+            sys.exit(1)
 
     # Build reply message
     reply = MIMEText(body, "plain", "utf-8")
@@ -698,7 +1054,9 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None):
 
 def do_forward(service, index, count, query, recipient, subject_override=None, as_draft=False, account=None):
     """Forward a message by index to a new recipient."""
-    msg_id = _resolve_message_id(service, index, count, query, account=account)
+    recipient = resolve_recipient(recipient)
+    msg_id = _resolve_message_id(service, index, count, query, account=account,
+                                 verify=True)
     raw_msg = service.users().messages().get(
         userId="me", id=msg_id, format="raw"
     ).execute()
@@ -721,7 +1079,11 @@ def do_forward(service, index, count, query, recipient, subject_override=None, a
 
     # Stdin body or interactive editor
     if not sys.stdin.isatty():
-        body = sys.stdin.read() + template
+        stdin_body = sys.stdin.read().strip()
+        if not stdin_body:
+            print("No body on stdin, saving as draft instead of sending.", file=sys.stderr)
+            as_draft = True
+        body = (stdin_body + "\n" if stdin_body else "") + template
     else:
         editor = os.environ.get("EDITOR", "vim")
         with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
@@ -736,6 +1098,21 @@ def do_forward(service, index, count, query, recipient, subject_override=None, a
     if not body.strip():
         print("Empty body, aborting.", file=sys.stderr)
         sys.exit(1)
+
+    # Confirm before sending (skip for drafts)
+    if not as_draft and sys.stdin.isatty():
+        if account:
+            print(f"\nFrom: {account}", file=sys.stderr)
+        print(f"To: {recipient}", file=sys.stderr)
+        print(f"Subject: {fwd_subject}", file=sys.stderr)
+        print(f"Body length: {len(body.strip())} chars", file=sys.stderr)
+        try:
+            answer = input("Send this forward? [y/N] ")
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer.strip().lower() != "y":
+            print("Aborted.", file=sys.stderr)
+            sys.exit(1)
 
     fwd = MIMEText(body, "plain", "utf-8")
     fwd["To"] = recipient
@@ -803,7 +1180,7 @@ def do_trash(service, indices, count, query, account=None):
         service.users().messages().trash(userId="me", id=msg_id).execute()
         print(f"Trashed: From={sender} Subject={subject}", file=sys.stderr)
 
-    LAST_LIST_CACHE.unlink(missing_ok=True)
+    _cache_path(account).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -829,7 +1206,7 @@ def do_archive(service, indices, count, query, account=None):
         ).execute()
         print(f"Archived: From={sender} Subject={subject}", file=sys.stderr)
 
-    LAST_LIST_CACHE.unlink(missing_ok=True)
+    _cache_path(account).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -863,14 +1240,25 @@ def do_mark_unread(service, indices, count, query, account=None):
 # ---------------------------------------------------------------------------
 
 def do_open(service, index, count, query, account=None):
-    """Open a message in Gmail web UI."""
+    """Open a message in Gmail web UI, using gmail_web for Chrome profile routing."""
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
-    # Use authuser param so the browser picks the right account
+    chrome_profile = os.environ.get("GMAILS_CHROME_PROFILE")
+    if chrome_profile is not None:
+        # Route through gmail_web for correct Chrome profile
+        import shutil
+        gmail_web = shutil.which("gmail_web")
+        if gmail_web:
+            url = f"https://mail.google.com/mail/u/0/#all/{msg_id}"
+            print(f"Opening: {url}", file=sys.stderr)
+            subprocess.run([gmail_web, chrome_profile, f"all/{msg_id}"])
+            return
+
+    # Fallback: webbrowser.open with authuser (#all works for any folder)
     if account:
-        url = f"https://mail.google.com/mail/?authuser={account}#inbox/{msg_id}"
+        url = f"https://mail.google.com/mail/?authuser={account}#all/{msg_id}"
     else:
-        url = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
+        url = f"https://mail.google.com/mail/u/0/#all/{msg_id}"
     print(f"Opening: {url}", file=sys.stderr)
     webbrowser.open(url)
 
@@ -936,10 +1324,21 @@ def _attach_files(msg, attachments):
     """Add file attachments to an email message, converting to multipart if needed."""
     if not attachments:
         return msg
-    # Wrap in multipart/mixed if not already multipart
-    if not msg.is_multipart():
+    # Always wrap in multipart/mixed for attachments.
+    # If msg is already multipart/alternative (text+html), nest it inside mixed.
+    if msg.is_multipart():
+        mixed = MIMEMultipart("mixed")
+        for key in ("To", "From", "Subject", "Cc", "Bcc", "Reply-To",
+                     "In-Reply-To", "References", "Date", "Message-ID"):
+            val = msg.get(key)
+            if val:
+                mixed[key] = val
+                del msg[key]
+        mixed.attach(msg)
+        msg = mixed
+    else:
         original = msg
-        msg = MIMEMultipart()
+        msg = MIMEMultipart("mixed")
         # Preserve headers from the original
         for key in ("To", "From", "Subject", "Cc", "Bcc", "Reply-To",
                      "In-Reply-To", "References", "Date", "Message-ID"):
@@ -965,7 +1364,7 @@ def _attach_files(msg, attachments):
     return msg
 
 
-def _build_raw_bytes(args):
+def _build_raw_bytes(args, from_addr=None):
     """Build raw email bytes from send/draft args. Shared by do_send and do_draft."""
     if args.header_file:
         raw_bytes = Path(args.header_file).read_bytes()
@@ -981,6 +1380,7 @@ def _build_raw_bytes(args):
         if not args.recipient:
             print("Recipient required (or use -H with an .eml file).", file=sys.stderr)
             sys.exit(1)
+        args.recipient = resolve_recipient(args.recipient)
         if sys.stdin.isatty():
             body = get_body_interactive(args.recipient, args.subject)
         else:
@@ -988,13 +1388,14 @@ def _build_raw_bytes(args):
         raw_bytes = build_mime_message(
             args.recipient, args.subject, body,
             cc=args.cc, bcc=args.bcc, attachments=args.attach,
+            from_addr=from_addr,
         )
     return raw_bytes
 
 
-def do_send(service, args):
+def do_send(service, args, from_addr=None):
     """Send a message via Gmail API."""
-    raw_bytes = _build_raw_bytes(args)
+    raw_bytes = _build_raw_bytes(args, from_addr=from_addr)
     encoded = base64.urlsafe_b64encode(raw_bytes).decode()
     result = service.users().messages().send(
         userId="me", body={"raw": encoded}
@@ -1002,17 +1403,26 @@ def do_send(service, args):
 
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
     to = msg.get("To", "(unknown)")
+    cc = msg.get("Cc", "")
+    bcc = msg.get("Bcc", "")
     subj = msg.get("Subject", "(no subject)")
-    print(f"Sent: To={to} Subject={subj} id={result.get('id', '?')}", file=sys.stderr)
+    parts = [f"Sent: To={to}"]
+    if cc:
+        parts.append(f"CC={cc}")
+    if bcc:
+        parts.append(f"Bcc={bcc}")
+    parts.append(f"Subject={subj}")
+    parts.append(f"id={result.get('id', '?')}")
+    print(" ".join(parts), file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
 # Draft mode
 # ---------------------------------------------------------------------------
 
-def do_draft(service, args):
+def do_draft(service, args, from_addr=None):
     """Create a draft via Gmail API."""
-    raw_bytes = _build_raw_bytes(args)
+    raw_bytes = _build_raw_bytes(args, from_addr=from_addr)
     encoded = base64.urlsafe_b64encode(raw_bytes).decode()
     result = service.users().drafts().create(
         userId="me", body={"message": {"raw": encoded}}
@@ -1020,8 +1430,17 @@ def do_draft(service, args):
 
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
     to = msg.get("To", "(unknown)")
+    cc = msg.get("Cc", "")
+    bcc = msg.get("Bcc", "")
     subj = msg.get("Subject", "(no subject)")
-    print(f"Draft saved: To={to} Subject={subj} id={result.get('id', '?')}", file=sys.stderr)
+    parts = [f"Draft saved: To={to}"]
+    if cc:
+        parts.append(f"CC={cc}")
+    if bcc:
+        parts.append(f"Bcc={bcc}")
+    parts.append(f"Subject={subj}")
+    parts.append(f"id={result.get('id', '?')}")
+    print(" ".join(parts), file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -1056,6 +1475,9 @@ def parse_list_get_args(argv):
     parser.add_argument("output", nargs="?", default=None, help="Output filename or directory")
     parser.add_argument("-n", "--count", type=int, default=20, help="Number of messages (default: 20)")
     parser.add_argument("-q", "--query", default=None, help="Gmail search query")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show message snippet under each entry")
+    parser.add_argument("-j", "--json", action="store_true", help="Output message list as JSON (for TUI/scripting)")
+    parser.add_argument("--summary", action="store_true", help="Show AI-generated keywords (uses claude CLI)")
     parser.add_argument("-F", "--config", default=None, help="Muttrc config for account isolation")
     parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
     parser.add_argument("-S", "--stdout", action="store_true", help="Write raw message to stdout (for piping)")
@@ -1076,7 +1498,8 @@ FULL_HELP = """\
 gmails - Gmail CLI: list, read, send, and draft messages via Gmail API.
 
 Commands:
-  gmails [options] [INDEX [OUTPUT]]     List or download messages
+  gmails [options] [INDEX [OUTPUT]]     List or download inbox messages
+  gmails sent [options] [INDEX [OUTPUT]] List or download sent messages
   gmails send [options] [RECIPIENT]     Send a message
   gmails draft [options] [RECIPIENT]    Save a message to Gmail Drafts
   gmails reply INDEX                    Reply to a message (opens $EDITOR)
@@ -1091,6 +1514,9 @@ Commands:
   gmails thread INDEX                   Show all messages in a conversation
   gmails -E                             List configured accounts
 
+  "sent" is a modifier that composes with other commands:
+  gmails sent reply 3, gmails sent fwd 3 user@ex.com, gmails sent trash 1-3
+
   INDEX can be: 3 (single), 2,5 (comma-separated), 2-5 (range), 1,3-5,8 (mixed).
   Shell brace expansion also works: {2,3,5} expands to separate args.
 
@@ -1101,12 +1527,14 @@ List messages:
   gmails -q "is:unread"                 List unread messages
   gmails -q "has:attachment"            List messages with attachments
   gmails -q "newer_than:7d"             Messages from the last 7 days
-  gmails -e lake -q "from:buyrite"      Search another account by email substring
+  gmails -e work -q "from:bob"           Search another account by email substring
 
-Sent mail and search:
-  gmails -q "in:sent"                   List sent messages
-  gmails -q "in:sent" -n 10             List 10 most recent sent
-  gmails -q "in:sent to:alice"          Sent messages to alice
+Sent mail:
+  gmails sent                           List sent messages (shows recipients)
+  gmails sent -n 10                     List 10 most recent sent
+  gmails sent -v                        Sent messages with snippet preview
+  gmails sent --summary                 Sent messages with AI keywords
+  gmails sent -q "to:alice"             Sent messages to alice
   gmails -q 'from:alice subject:"the proposal"'  Faceted search with phrase
 
 Download message(s):
@@ -1119,22 +1547,29 @@ Download message(s):
   gmails 3 -S                           Raw message to stdout (for piping)
   gmails 3 -S | grep Subject            Pipe to other tools
   gmails 3 -t                           Print text body inline (quick read)
-  gmails 3 -grab                        Save and copy "/grab {path}" to clipboard
-  gmails -q "from:alice" 3 -grab        Works with any flag combo
+  gmails 3 -peek                        Save and copy "/peek {path}" to clipboard
+  gmails -q "from:alice" 3 -peek        Works with any flag combo
 
 Reply to a message:
   gmails reply 3                        Reply to message #3 (opens $EDITOR)
   gmails reply 3 --all                  Reply-all (includes To and Cc recipients)
   gmails reply 3 --draft                Save reply as draft (review before sending)
   gmails reply 3 -a slide.pdf           Reply with attachment
-  gmails -e lake reply 3                Reply from another account
+  gmails -e work reply 3                Reply from another account
   gmails -q "from:alice" reply 1        Reply to first search result
 
 Forward a message:
   gmails fwd 3 user@example.com         Forward message #3 (opens $EDITOR)
   gmails fwd 3 user@example.com --draft Save forward as draft
-  gmails -e lake fwd 3 user@ex.com      Forward from another account
+  gmails -e work fwd 3 user@ex.com      Forward from another account
   gmails -q "from:alice" fwd 1 user@ex.com  Forward a search result
+  echo "FYI" | gmails fwd 3 user@ex.com Forward with note from stdin
+
+Forward a sent message:
+  gmails sent                           List sent messages to find the index
+  gmails sent fwd 3 user@example.com    Forward sent message #3
+  gmails sent fwd 3 user@ex.com --draft Forward sent message as draft
+  gmails sent -q "to:alice" fwd 1 user@ex.com  Search sent, then forward
 
 Manage messages:
   gmails trash 3                        Move message #3 to trash
@@ -1147,7 +1582,7 @@ Manage messages:
   gmails unread 3                       Mark message #3 as unread
   gmails -q "from:spam" trash 1         Trash a search result
   gmails open 3                         Open message #3 in Gmail web UI
-  gmails -e lake open 3                 Open in correct account's Gmail
+  gmails -e work open 3                 Open in correct account's Gmail
   gmails thread 3                       Show all messages in #3's conversation
 
 Reply/fwd with piped body:
@@ -1165,7 +1600,7 @@ Send a message:
   gmails send user@example.com -s "hi" -c boss@example.com (with cc)
   gmails send -H message.eml                               (send a pre-built .eml)
   cat body.txt | gmails send -H headers.eml                (eml headers + stdin body)
-  gmails -e lake send user@example.com -s "hi"             (send from another account)
+  gmails -e work send user@example.com -s "hi"             (send from another account)
 
 Save to Drafts:
   echo "body" | gmails draft user@example.com -s "subject"
@@ -1176,7 +1611,7 @@ Save to Drafts:
 Scripting:
   gmails -c -q "is:unread"              Print unread count (for shell prompts)
   gmails -c -q "from:alice newer_than:1d"  Count recent messages from alice
-  gmails -c -e lake -q "is:unread"      Unread count for another account
+  gmails -c -e work -q "is:unread"      Unread count for another account
 
 The !! workflow (list, then act on a result):
   % gmails -n 5 -q "from:alice"
@@ -1200,7 +1635,7 @@ Common options:
   -Q, --show-account    Show which account would be used, then exit
   -S, --stdout          Write raw message to stdout instead of saving to file
   -t, --text            Print text body inline (headers to stderr, body to stdout)
-  -grab                 Copy "/grab {path}" to clipboard after saving (for Claude Code)
+  -peek                 Copy "/peek {path}" to clipboard after saving (for Claude Code)
   -c, --just-count      Print message count only (for scripting)
   --all                 Reply-all: include original To and Cc recipients
   --draft               Save reply/fwd as draft instead of sending
@@ -1225,8 +1660,16 @@ Multi-account (-F and -e):
   -F: Pass a neomutt-style config file containing 'set imap_user="user@example.com"'.
   -e: Pass an email address or substring to look up in ~/.config/gmails/accounts.
       The accounts file has lines like: user@example.com /path/to/muttrc
-      Partial matching works: -e lake matches chris@lakedutchess.com.
+      Partial matching works: -e work matches alice@work.example.com.
   Each account gets isolated OAuth tokens (e.g., gmail-compose-user-at-example-com).
+
+Contact resolution:
+  Recipients for send/fwd can be partial names instead of full emails.
+  If contacts_file is set in ~/.config/gmails/config (or GMAILS_CONTACTS_FILE env var),
+  gmails searches that file (semicolon-delimited fields, any field with @ is an email).
+  Examples: "alice.smith" -> alice.smith@example.com
+            "bob" -> bob@example.com
+  Full email addresses are passed through unchanged.
 
 gmails vs mutt:
   gmails wins for replying: sets In-Reply-To/References headers automatically
@@ -1238,9 +1681,30 @@ gmails vs mutt:
 
 
 def main():
-    # Strip -grab / --grab from argv before any parsing
-    grab_mode = "-grab" in sys.argv or "--grab" in sys.argv
-    sys.argv = [a for a in sys.argv if a not in ("-grab", "--grab")]
+    # Strip -peek / --peek (and legacy -grab / --grab) from argv before any parsing
+    peek_flags = {"-peek", "--peek", "-grab", "--grab"}
+    grab_mode = bool(peek_flags & set(sys.argv))
+    sys.argv = [a for a in sys.argv if a not in peek_flags]
+
+    # Detect "sent" modifier: strip from argv, set flag for query building.
+    # Skips flag values so -q "from:sent" doesn't false-match.
+    sent_mode = False
+    filtered = [sys.argv[0]]
+    _skip = False
+    for _a in sys.argv[1:]:
+        if _skip:
+            filtered.append(_a)
+            _skip = False
+            continue
+        if _a in ("-F", "--config", "-e", "--email", "-n", "--count", "-q", "--query"):
+            filtered.append(_a)
+            _skip = True
+            continue
+        if _a == "sent":
+            sent_mode = True
+            continue
+        filtered.append(_a)
+    sys.argv = filtered
 
     # Top-level help: show comprehensive usage for all modes
     if len(sys.argv) < 2 or (
@@ -1264,7 +1728,7 @@ def main():
         if skip_next:
             skip_next = False
             continue
-        if arg in ("-F", "--config", "-e", "--email"):
+        if arg in ("-F", "--config", "-e", "--email", "-n", "--count", "-q", "--query"):
             skip_next = True  # next arg is the flag's value
             continue
         if arg in ("send", "draft", "reply", "fwd", "trash", "archive", "open", "thread", "read", "unread"):
@@ -1292,9 +1756,9 @@ def main():
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
         if mode == "send":
-            do_send(service, args)
+            do_send(service, args, from_addr=login_hint)
         else:
-            do_draft(service, args)
+            do_draft(service, args, from_addr=login_hint)
     elif mode == "reply":
         # reply needs both readonly (to fetch) and compose (to send)
         reply_rest = [a for a in rest if a != "reply"]
@@ -1308,6 +1772,12 @@ def main():
                   f"{len(indices)} indices: {indices}", file=sys.stderr)
             sys.exit(1)
         reply_idx = indices[0]
+        # Apply same query defaults as listing, so cache keys match
+        query = args.query
+        if sent_mode:
+            query = f"in:sent {query}" if query else "in:sent"
+        elif not query:
+            query = "in:inbox"
         token_name, login_hint = resolve_account(args.config, args.email, "gmail-send")
         if args.show_account:
             print(login_hint or "(default account)")
@@ -1315,8 +1785,8 @@ def main():
         creds = get_credentials(service="gmail", scopes="gmail-send",
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
-        do_reply(service, reply_idx, args.count, args.query, args,
-                 as_draft=args.draft, account=login_hint)
+        do_reply(service, reply_idx, args.count, query, args,
+                 as_draft=args.draft, account=login_hint, sent=sent_mode)
     elif mode == "fwd":
         fwd_rest = [a for a in rest if a != "fwd"]
         args = parse_list_get_args(fwd_rest)
@@ -1337,7 +1807,13 @@ def main():
         creds = get_credentials(service="gmail", scopes="gmail-send",
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
-        do_forward(service, fwd_idx, args.count, args.query, recipient,
+        # Apply same query defaults as listing, so cache keys match
+        query = args.query
+        if sent_mode:
+            query = f"in:sent {query}" if query else "in:sent"
+        elif not query:
+            query = "in:inbox"
+        do_forward(service, fwd_idx, args.count, query, recipient,
                    as_draft=args.draft, account=login_hint)
     elif mode in ("trash", "archive", "open", "thread", "read", "unread"):
         mode_rest = [a for a in rest if a != mode]
@@ -1360,18 +1836,24 @@ def main():
         creds = get_credentials(service="gmail", scopes=scope,
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
+        # Apply same query defaults as listing, so cache keys match
+        query = args.query
+        if sent_mode:
+            query = f"in:sent {query}" if query else "in:sent"
+        elif not query:
+            query = "in:inbox"
         if mode == "trash":
-            do_trash(service, indices, args.count, args.query, account=login_hint)
+            do_trash(service, indices, args.count, query, account=login_hint)
         elif mode == "archive":
-            do_archive(service, indices, args.count, args.query, account=login_hint)
+            do_archive(service, indices, args.count, query, account=login_hint)
         elif mode == "read":
-            do_mark_read(service, indices, args.count, args.query, account=login_hint)
+            do_mark_read(service, indices, args.count, query, account=login_hint)
         elif mode == "unread":
-            do_mark_unread(service, indices, args.count, args.query, account=login_hint)
+            do_mark_unread(service, indices, args.count, query, account=login_hint)
         elif mode == "open":
-            do_open(service, indices[0], args.count, args.query, account=login_hint)
+            do_open(service, indices[0], args.count, query, account=login_hint)
         else:
-            do_thread(service, indices[0], args.count, args.query, account=login_hint)
+            do_thread(service, indices[0], args.count, query, account=login_hint)
     else:
         args = parse_list_get_args(rest)
         scope = "gmail-readonly"
@@ -1382,19 +1864,35 @@ def main():
         creds = get_credentials(service="gmail", scopes=scope,
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
+        query = args.query
+        if sent_mode:
+            query = f"in:sent {query}" if query else "in:sent"
+        elif not query:
+            query = "in:inbox"
+        
+        # -peek implies -t (text view) and requires an index
+        if grab_mode:
+            args.text = True
+            if args.index is None:
+                print("Warning: -peek requires a message index or range (e.g., gmails 3 -peek)", file=sys.stderr)
+                # Fall through to listing, but text_view/grab won't be used
+        
         if args.just_count:
             kwargs = {"userId": "me", "maxResults": args.count}
-            if args.query:
-                kwargs["q"] = args.query
+            if query:
+                kwargs["q"] = query
             result = service.users().messages().list(**kwargs).execute()
             print(result.get("resultSizeEstimate", 0))
             sys.exit(0)
         if args.index is None:
-            do_list(service, args.count, args.query, account=login_hint)
+            do_list(service, args.count, query, account=login_hint,
+                    sent=sent_mode, verbose=args.verbose,
+                    summary=args.summary,
+                    json_output=getattr(args, 'json', False))
         else:
             indices = parse_index_token(args.index)
             for idx in indices:
-                do_get(service, idx, args.count, args.query, args.output,
+                do_get(service, idx, args.count, query, args.output,
                        stdout=args.stdout, text_view=args.text, account=login_hint,
                        grab=grab_mode)
 
