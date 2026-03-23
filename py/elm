@@ -1,0 +1,1070 @@
+#!/usr/bin/env python3
+"""gmails: re-exec under the venv python that has google-api-python-client."""
+import os, sys  # noqa: E401,E402
+_venv = os.path.join(os.path.dirname(os.path.realpath(__file__)), ".venv", "bin", "python3")
+if os.path.exists(_venv) and os.path.realpath(sys.executable) != os.path.realpath(_venv):
+    os.execv(_venv, [_venv] + sys.argv)
+"""elm - Gmail API-backed TUI mail client with classic elm 2.5 aesthetics.
+
+Usage:
+    elm                    # personal gmail (default)
+    elm -e work            # another account
+    elm -e personal        # yet another
+    elm -q "is:unread"     # launch into search
+    elm -e work -q "from:bob"
+"""
+
+import curses
+import json
+import re
+import shutil
+import subprocess
+import textwrap
+import webbrowser
+
+_SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+GMAILS = os.path.join(_SCRIPT_DIR, "gmails")
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN") or shutil.which("claude")
+GCAL_TOOL = os.environ.get("GCAL_TOOL") or shutil.which("gcal-invite-advanced")
+ACCOUNTS_FILE = os.path.expanduser("~/.config/gmails/accounts")
+
+
+# ---------------------------------------------------------------------------
+# gmails subprocess interface
+# ---------------------------------------------------------------------------
+
+def gmails_cmd(account, *args):
+    """Build a gmails command with optional account flag."""
+    cmd = [GMAILS]
+    if account:
+        cmd += ["-e", account]
+    cmd += list(args)
+    return cmd
+
+
+def fetch_list(account, count=20, query=None):
+    """Fetch message list as JSON from gmails."""
+    cmd = gmails_cmd(account, "-n", str(count), "--json")
+    if query:
+        cmd += ["-q", query]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return []
+    if result.returncode != 0:
+        return []
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+
+
+def fetch_message_text(account, index, count=20, query=None):
+    """Fetch message body via gmails -t. Returns (header_lines, body_text)."""
+    cmd = gmails_cmd(account, "-n", str(count), "-t", str(index))
+    if query:
+        cmd += ["-q", query]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return ["(timeout fetching message)"], "(timeout)"
+    headers = result.stderr.strip().splitlines()
+    body = result.stdout
+    return headers, body
+
+
+def get_account_email(account):
+    """Resolve the display email for the given account."""
+    if account:
+        cmd = gmails_cmd(account, "-Q")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            email = result.stdout.strip()
+            if email and email != "(default account)":
+                return email
+        except subprocess.TimeoutExpired:
+            pass
+    # Fall back to first entry in accounts file
+    try:
+        with open(ACCOUNTS_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "@" in line:
+                    return line.split()[0]
+    except FileNotFoundError:
+        pass
+    return "unknown"
+
+
+def run_gmails_interactive(account, *args):
+    """Run a gmails command that needs the terminal (reply, fwd, send)."""
+    cmd = gmails_cmd(account, *args)
+    subprocess.call(cmd)
+
+
+# ---------------------------------------------------------------------------
+# TUI
+# ---------------------------------------------------------------------------
+
+# Color pair IDs
+C_NORMAL = 0
+C_HEADER = 1
+C_STATUS = 2
+C_HIGHLIGHT = 3
+C_UNREAD = 4
+C_DELETED = 5
+C_HELP = 6
+
+
+def init_colors():
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(C_HEADER, curses.COLOR_WHITE, curses.COLOR_BLUE)
+    curses.init_pair(C_STATUS, curses.COLOR_WHITE, curses.COLOR_BLUE)
+    curses.init_pair(C_HIGHLIGHT, curses.COLOR_WHITE, curses.COLOR_BLUE)
+    curses.init_pair(C_UNREAD, curses.COLOR_CYAN, -1)
+    curses.init_pair(C_DELETED, curses.COLOR_RED, -1)
+    curses.init_pair(C_HELP, curses.COLOR_YELLOW, -1)
+
+
+class ElmApp:
+    def __init__(self, account=None, count=20, query=None):
+        self.account = account
+        self.count = count
+        self.messages = []
+        self.cursor = 0
+        self.offset = 0         # scroll offset for index view
+        self.view = "index"
+        self.pager_lines = []
+        self.pager_offset = 0
+        self.pager_msg_idx = -1  # which message is in the pager (0-based)
+        self.deletions = set()   # message IDs marked for deletion
+        self.query = query
+        self.account_email = ""
+        self.status_msg = ""     # transient status message
+
+    def _index_args(self):
+        """Common args for gmails calls that resolve a 1-based index."""
+        args = ["-n", str(self.count)]
+        if self.query:
+            args += ["-q", self.query]
+        return args
+
+    def load_messages(self):
+        """Fetch message list from gmails."""
+        self.messages = fetch_list(self.account, self.count, self.query)
+        if self.cursor >= len(self.messages):
+            self.cursor = max(0, len(self.messages) - 1)
+        self.offset = 0
+
+    def run(self, stdscr):
+        curses.curs_set(0)
+        init_colors()
+        stdscr.timeout(-1)  # blocking getch
+
+        self.account_email = get_account_email(self.account)
+        self.load_messages()
+
+        while True:
+            if self.view == "index":
+                self.draw_index(stdscr)
+                if not self.handle_index_key(stdscr):
+                    break
+            elif self.view == "pager":
+                self.draw_pager(stdscr)
+                if not self.handle_pager_key(stdscr):
+                    break
+
+    # -------------------------------------------------------------------
+    # Index view
+    # -------------------------------------------------------------------
+
+    def draw_index(self, stdscr):
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        if h < 4 or w < 40:
+            stdscr.addstr(0, 0, "Terminal too small")
+            stdscr.refresh()
+            return
+
+        # Top bar
+        folder = self.query or "inbox"
+        unread = sum(1 for m in self.messages if m.get("unread"))
+        unread_str = f", {unread} new" if unread else ""
+        top = f" Mailbox '{folder}' [{self.account_email}] - {len(self.messages)} messages{unread_str}"
+        top = top[:w - 6].ljust(w - 6) + " [elm]"
+        try:
+            stdscr.addnstr(0, 0, top, w, curses.color_pair(C_HEADER) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+        # Message list area: rows 2 .. h-3
+        list_h = h - 3
+        # Adjust scroll offset so cursor is visible
+        if self.cursor < self.offset:
+            self.offset = self.cursor
+        if self.cursor >= self.offset + list_h:
+            self.offset = self.cursor - list_h + 1
+
+        idx_width = len(str(len(self.messages))) if self.messages else 1
+        from_width = min(20, max(12, (w - idx_width - 18) // 3))
+        subj_width = w - idx_width - 6 - 12 - from_width - 4
+
+        for row in range(list_h):
+            mi = self.offset + row
+            y = row + 2
+            if mi >= len(self.messages):
+                break
+
+            msg = self.messages[mi]
+            if msg.get("error"):
+                line = f"{'':>{idx_width}}   (fetch error)"
+                try:
+                    stdscr.addnstr(y, 0, line[:w], w)
+                except curses.error:
+                    pass
+                continue
+
+            # Status marker
+            if msg.get("id") in self.deletions:
+                marker = "D"
+            elif msg.get("unread"):
+                marker = "N"
+            else:
+                marker = " "
+
+            idx_str = f"{msg['index']:>{idx_width}}"
+            date_str = msg.get("date", "          ")[:10]
+            sender = msg.get("from", "")
+            if len(sender) > from_width:
+                sender = sender[:from_width - 1] + "\u2026"
+            subject = msg.get("subject", "")
+            if len(subject) > subj_width:
+                subject = subject[:subj_width - 1] + "\u2026"
+
+            line = f" {marker}  {idx_str}  {date_str}  {sender:<{from_width}}  {subject}"
+            line = line[:w]
+
+            attr = curses.A_NORMAL
+            if mi == self.cursor:
+                attr = curses.color_pair(C_HIGHLIGHT) | curses.A_BOLD
+                line = line.ljust(w)
+            elif mi in self.deletions:
+                attr = curses.color_pair(C_DELETED)
+            elif msg.get("unread"):
+                attr = curses.color_pair(C_UNREAD) | curses.A_BOLD
+
+            try:
+                stdscr.addnstr(y, 0, line, w, attr)
+            except curses.error:
+                pass
+
+        # Status message (if any)
+        if self.status_msg:
+            try:
+                stdscr.addnstr(h - 2, 0, self.status_msg[:w], w,
+                               curses.color_pair(C_HELP))
+            except curses.error:
+                pass
+
+        # Bottom bar
+        bottom = " d)el  a)rchive  r)eply  g)roup  f)wd  m)ail  o)pen  /)search  q)uit  ?=help"
+        try:
+            stdscr.addnstr(h - 1, 0, bottom[:w].ljust(w), w,
+                           curses.color_pair(C_STATUS) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+
+    def handle_index_key(self, stdscr):
+        """Handle a keypress in index view. Returns False to quit."""
+        key = stdscr.getch()
+        self.status_msg = ""
+        n = len(self.messages)
+
+        if key in (ord('q'),):
+            return self._quit_with_deletions(stdscr)
+        elif key in (ord('x'),):
+            return False  # quit without processing deletions
+        elif key in (ord('j'), curses.KEY_DOWN):
+            if self.cursor < n - 1:
+                self.cursor += 1
+        elif key in (ord('k'), curses.KEY_UP):
+            if self.cursor > 0:
+                self.cursor -= 1
+        elif key == curses.KEY_HOME:
+            self.cursor = 0
+        elif key in (ord('G'), curses.KEY_END):
+            self.cursor = max(0, n - 1)
+        elif key in (curses.KEY_NPAGE, 6):  # PgDn or Ctrl-F
+            h, _ = stdscr.getmaxyx()
+            page = h - 4
+            self.cursor = min(n - 1, self.cursor + page)
+        elif key in (curses.KEY_PPAGE, 2):  # PgUp or Ctrl-B
+            h, _ = stdscr.getmaxyx()
+            page = h - 4
+            self.cursor = max(0, self.cursor - page)
+        elif key in (ord('\n'), ord(' ')) and n > 0:
+            self._open_pager(stdscr)
+        elif key == ord('n'):
+            if self.cursor < n - 1:
+                self.cursor += 1
+            else:
+                # At bottom: load more
+                self.count += 20
+                self.status_msg = f"Loading {self.count} messages..."
+                self.draw_index(stdscr)
+                self.load_messages()
+                if self.cursor < len(self.messages) - 1:
+                    self.cursor += 1
+        elif key == ord('\t'):
+            self._next_unread()
+        elif key == ord('d') and n > 0:
+            mid = self.messages[self.cursor].get("id")
+            if mid:
+                self.deletions.symmetric_difference_update({mid})
+            if self.cursor < n - 1:
+                self.cursor += 1
+        elif key == ord('u') and n > 0:
+            mid = self.messages[self.cursor].get("id")
+            if mid:
+                self.deletions.discard(mid)
+        elif key == ord('r') and n > 0:
+            self._do_reply(stdscr)
+        elif key == ord('g') and n > 0:
+            self._do_reply(stdscr, reply_all=True)
+        elif key == ord('f') and n > 0:
+            self._do_forward(stdscr)
+        elif key == ord('m'):
+            self._do_compose(stdscr)
+        elif key == ord('/'):
+            self._do_search(stdscr)
+        elif key == ord('a') and n > 0:
+            self._do_archive(stdscr)
+        elif key == ord('o') and n > 0:
+            self._do_open_browser(stdscr)
+        elif key == ord('L'):
+            self.count += 20
+            self.status_msg = f"Loading {self.count} messages..."
+            self.draw_index(stdscr)
+            self.load_messages()
+        elif key == ord('R'):
+            self.status_msg = "Refreshing..."
+            self.draw_index(stdscr)
+            self.load_messages()
+        elif key == ord('?'):
+            self._show_help(stdscr)
+        elif key == curses.KEY_RESIZE:
+            pass  # redraw on next loop iteration
+
+        return True
+
+    def _next_unread(self):
+        """Jump cursor to next unread message."""
+        n = len(self.messages)
+        for i in range(1, n):
+            idx = (self.cursor + i) % n
+            if self.messages[idx].get("unread"):
+                self.cursor = idx
+                return
+        self.status_msg = "No unread messages"
+
+    def _open_pager(self, stdscr):
+        """Load and display the current message in the pager."""
+        if not self.messages:
+            return
+        msg = self.messages[self.cursor]
+        idx = msg.get("index", self.cursor + 1)
+        self.status_msg = f"Loading message {idx}..."
+        self.draw_index(stdscr)
+
+        headers, body = fetch_message_text(self.account, idx,
+                                            count=self.count, query=self.query)
+        # Build pager content
+        h, w = stdscr.getmaxyx()
+        content_w = max(w - 2, 40)
+        lines = []
+        # Headers
+        for hline in headers:
+            if hline == "---":
+                lines.append("\u2500" * min(content_w, 72))
+            else:
+                lines.append(hline)
+        lines.append("")
+        # Body: wrap long lines
+        for bline in body.splitlines():
+            if len(bline) <= content_w:
+                lines.append(bline)
+            else:
+                lines.extend(textwrap.wrap(bline, content_w))
+
+        self.pager_lines = lines
+        self.pager_offset = 0
+        self.pager_msg_idx = self.cursor
+        self.view = "pager"
+
+    def _quit_with_deletions(self, stdscr):
+        """Confirm and process deletions on quit."""
+        if not self.deletions:
+            return False
+
+        h, w = stdscr.getmaxyx()
+        prompt = f" {len(self.deletions)} message(s) marked for deletion. Trash them? [y/n] "
+        try:
+            stdscr.addnstr(h - 2, 0, prompt[:w], w,
+                           curses.color_pair(C_HELP) | curses.A_BOLD)
+        except curses.error:
+            pass
+        stdscr.refresh()
+        key = stdscr.getch()
+        if key in (ord('y'), ord('Y')):
+            self._process_deletions(stdscr)
+        return False
+
+    def _process_deletions(self, stdscr):
+        """Trash marked messages via gmails, using current index positions."""
+        # Map message IDs back to current 1-based indices
+        indices = sorted(m["index"] for m in self.messages
+                         if m.get("id") in self.deletions)
+        if not indices:
+            return
+        idx_str = ",".join(str(i) for i in indices)
+        self.status_msg = f"Trashing {idx_str}..."
+        self.draw_index(stdscr)
+        cmd = gmails_cmd(self.account, *self._index_args(), "trash", idx_str)
+        subprocess.run(cmd, capture_output=True, timeout=30)
+
+    def _do_reply(self, stdscr, reply_all=False):
+        """Suspend TUI and run gmails reply."""
+        msg = self.messages[self.cursor]
+        idx = str(msg.get("index", self.cursor + 1))
+        curses.endwin()
+        # Pass -s when viewing sent mail so gmails replies to To: not From:
+        sent_flag = ["-s"] if self.query and "in:sent" in self.query else []
+        args = sent_flag + self._index_args() + ["reply", idx]
+        if reply_all:
+            args.append("--all")
+        run_gmails_interactive(self.account, *args)
+        stdscr.refresh()
+        curses.doupdate()
+
+    def _do_forward(self, stdscr):
+        """Prompt for recipient, then suspend TUI and run gmails fwd."""
+        recipient = self._prompt(stdscr, "Forward to: ")
+        if not recipient:
+            return
+        msg = self.messages[self.cursor]
+        idx = str(msg.get("index", self.cursor + 1))
+        curses.endwin()
+        sent_flag = ["-s"] if self.query and "in:sent" in self.query else []
+        run_gmails_interactive(self.account, *sent_flag, *self._index_args(), "fwd", idx, recipient)
+        stdscr.refresh()
+        curses.doupdate()
+
+    def _do_compose(self, stdscr):
+        """Suspend TUI and run gmails send (interactive)."""
+        curses.endwin()
+        run_gmails_interactive(self.account, "send")
+        stdscr.refresh()
+        curses.doupdate()
+
+    def _do_search(self, stdscr):
+        """Prompt for a search query and reload."""
+        query = self._prompt(stdscr, "Search: ")
+        if query is None:
+            return
+        if query == "":
+            self.query = None
+        else:
+            self.query = query
+        self.cursor = 0
+        self.deletions.clear()
+        self.load_messages()
+
+    def _do_archive(self, stdscr):
+        """Archive the current message via gmails, then reload list."""
+        msg = self.messages[self.cursor]
+        idx = str(msg.get("index", self.cursor + 1))
+        self.status_msg = f"Archiving {idx}..."
+        self.draw_index(stdscr)
+        cmd = gmails_cmd(self.account, *self._index_args(), "archive", idx)
+        subprocess.run(cmd, capture_output=True, timeout=30)
+        self.status_msg = f"Archived message {idx}"
+        self.load_messages()
+
+    def _do_open_browser(self, stdscr):
+        """Open message in Gmail web UI via gmails open."""
+        msg = self.messages[self.cursor]
+        idx = str(msg.get("index", self.cursor + 1))
+        cmd = gmails_cmd(self.account, *self._index_args(), "open", idx)
+        subprocess.run(cmd, capture_output=True, timeout=10)
+        self.status_msg = f"Opened message {idx} in browser"
+
+    def _show_help(self, stdscr):
+        """Show help overlay."""
+        help_text = [
+            "elm - Gmail TUI (classic elm aesthetics)",
+            "",
+            "Index view:",
+            "  j/Down    Move down          k/Up    Move up",
+            "  Enter     Open message        n       Next (loads more at end)",
+            "  Tab       Next unread",
+            "  d         Mark for deletion    u       Undelete",
+            "  a         Archive              o       Open in browser",
+            "  r         Reply               g       Group reply (all)",
+            "  f         Forward              m       Compose new",
+            "  /         Search               R       Refresh",
+            "  L         Load 20 more         ?       This help",
+            "  PgDn/^F   Page down            PgUp/^B Page up",
+            "  Home      First message        G/End   Last message",
+            "  q         Quit (trash marked)  x       Quit (no trash)",
+            "",
+            "Pager view:",
+            "  Space     Page down            b       Page up",
+            "  j/Down    Scroll down          k/Up    Scroll up",
+            "  i/q       Return to index      n       Next message",
+            "  p         Previous message     r       Reply",
+            "  g         Group reply (all)    f       Forward",
+            "  d         Delete, return       a       Archive, return",
+            "  o         Open in browser      U       URL picker",
+            "  S         Save attachments      C       Create calendar event",
+            "  P         Peek (copy to Claude)",
+            "",
+            "Press any key to close.",
+        ]
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        for i, line in enumerate(help_text):
+            if i >= h - 1:
+                break
+            try:
+                stdscr.addnstr(i, 1, line, w - 2, curses.color_pair(C_HELP))
+            except curses.error:
+                pass
+        stdscr.refresh()
+        stdscr.getch()
+
+    def _prompt(self, stdscr, prompt_str):
+        """Show a prompt on the bottom line and read input. Returns None on Esc."""
+        h, w = stdscr.getmaxyx()
+        curses.curs_set(1)
+        try:
+            stdscr.addnstr(h - 2, 0, prompt_str, w,
+                           curses.color_pair(C_HELP) | curses.A_BOLD)
+        except curses.error:
+            pass
+        stdscr.clrtoeol()
+        stdscr.refresh()
+
+        buf = []
+        col = len(prompt_str)
+        while True:
+            key = stdscr.getch()
+            if key == 27:  # Esc
+                curses.curs_set(0)
+                return None
+            elif key in (ord('\n'), curses.KEY_ENTER):
+                curses.curs_set(0)
+                return "".join(buf)
+            elif key in (curses.KEY_BACKSPACE, 127, 8):
+                if buf:
+                    buf.pop()
+                    col -= 1
+                    try:
+                        stdscr.addch(h - 2, col, ' ')
+                        stdscr.move(h - 2, col)
+                    except curses.error:
+                        pass
+            elif 32 <= key <= 126:
+                buf.append(chr(key))
+                try:
+                    stdscr.addch(h - 2, col, key)
+                except curses.error:
+                    pass
+                col += 1
+
+    # -------------------------------------------------------------------
+    # Pager view
+    # -------------------------------------------------------------------
+
+    def draw_pager(self, stdscr):
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        if h < 4:
+            return
+
+        # Top bar
+        msg_num = self.pager_msg_idx + 1
+        total = len(self.messages)
+        folder = self.query or "inbox"
+        att_count = self.messages[self.pager_msg_idx].get("attachmentCount", 0)
+        att_str = ""
+        if att_count == 1:
+            att_str = " [1 attachment]"
+        elif att_count > 0:
+            att_str = f" [{att_count} attachments]"
+        top = f" Message {msg_num} of {total} - '{folder}'{att_str} [{self.account_email}]"
+        top = top[:w - 6].ljust(w - 6) + " [elm]"
+        try:
+            stdscr.addnstr(0, 0, top, w, curses.color_pair(C_HEADER) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+        # Content area: rows 2 .. h-2
+        content_h = h - 3
+        for row in range(content_h):
+            li = self.pager_offset + row
+            y = row + 2
+            if li >= len(self.pager_lines):
+                break
+            line = self.pager_lines[li]
+            # Colorize header lines (before the separator)
+            attr = curses.A_NORMAL
+            if li < 10 and (line.startswith("From:") or line.startswith("To:") or
+                            line.startswith("Date:") or line.startswith("Subject:") or
+                            line.startswith("Cc:")):
+                attr = curses.A_BOLD
+            try:
+                stdscr.addnstr(y, 0, line[:w], w, attr)
+            except curses.error:
+                pass
+
+        # Bottom bar
+        bottom = " i)ndex  r)eply  g)roup  f)wd  d)el  a)rchive  o)pen  U)rl  S)ave  C)al  P)eek  n)ext  p)rev  ?=help  q)uit"
+        try:
+            stdscr.addnstr(h - 1, 0, bottom[:w].ljust(w), w,
+                           curses.color_pair(C_STATUS) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+
+    def handle_pager_key(self, stdscr):
+        """Handle a keypress in pager view. Returns False to quit."""
+        key = stdscr.getch()
+        h, w = stdscr.getmaxyx()
+        content_h = h - 3
+        max_offset = max(0, len(self.pager_lines) - content_h)
+
+        if key in (ord('i'), ord('q')):
+            self.view = "index"
+        elif key == ord(' '):
+            if self.pager_offset < max_offset:
+                self.pager_offset = min(self.pager_offset + content_h, max_offset)
+            else:
+                # At end of message: go to next
+                self._pager_next(stdscr)
+        elif key == ord('b'):
+            self.pager_offset = max(0, self.pager_offset - content_h)
+        elif key in (ord('j'), curses.KEY_DOWN):
+            if self.pager_offset < max_offset:
+                self.pager_offset += 1
+        elif key in (ord('k'), curses.KEY_UP):
+            if self.pager_offset > 0:
+                self.pager_offset -= 1
+        elif key == ord('n'):
+            self._pager_next(stdscr)
+        elif key == ord('p'):
+            self._pager_prev(stdscr)
+        elif key == ord('r'):
+            self._do_reply(stdscr)
+        elif key == ord('g'):
+            self._do_reply(stdscr, reply_all=True)
+        elif key == ord('f'):
+            self._do_forward(stdscr)
+        elif key == ord('d'):
+            mid = self.messages[self.pager_msg_idx].get("id")
+            if mid:
+                self.deletions.add(mid)
+            self.view = "index"
+        elif key == ord('a'):
+            self._do_archive(stdscr)
+            self.view = "index"
+        elif key == ord('o'):
+            self._do_open_browser(stdscr)
+        elif key == ord('U'):
+            self._show_url_picker(stdscr)
+        elif key == ord('S'):
+            self._save_attachments(stdscr)
+        elif key == ord('C'):
+            self._create_calendar_event(stdscr)
+        elif key == ord('P'):
+            self._peek_message(stdscr)
+        elif key == ord('?'):
+            self._show_help(stdscr)
+        elif key == curses.KEY_RESIZE:
+            pass  # redraw on next loop iteration
+
+        return True
+
+    def _extract_urls(self):
+        """Extract unique URLs from pager content.
+
+        Handles URLs that wrap across lines: if a URL-bearing line ends
+        with a hyphen (or the URL runs to EOL) and the next line starts
+        with a non-whitespace continuation that looks like part of the
+        same URL, join them.
+        """
+        url_re = re.compile(r'https?://\S+')
+        seen = []
+        lines = self.pager_lines
+        i = 0
+        while i < len(lines):
+            for match in url_re.finditer(lines[i]):
+                url = match.group(0)
+                # Strip trailing punctuation that's likely not part of the URL
+                url = url.rstrip('.,;:>)]\'"')
+                # If the URL reaches end-of-line, try joining continuation lines
+                if match.end() >= len(lines[i].rstrip()):
+                    j = i + 1
+                    while j < len(lines):
+                        cont = lines[j].strip()
+                        # Continuation: no scheme, no leading space in original,
+                        # and looks like URL path/query (not a new sentence)
+                        if (cont and not cont.startswith(('http://', 'https://'))
+                                and not cont[0].isspace()
+                                and re.match(r'[\w./?&=%-]', cont)):
+                            # If URL ended with hyphen, it's a soft break (join without gap)
+                            if url.endswith('-'):
+                                url = url + cont.split()[0]
+                            else:
+                                url = url + cont.split()[0]
+                            url = url.rstrip('.,;:>)]\'"')
+                            j += 1
+                        else:
+                            break
+                if url not in seen:
+                    seen.append(url)
+            i += 1
+        return seen
+
+    def _show_url_picker(self, stdscr):
+        """Show URL picker overlay. Press number to open, Esc to cancel."""
+        urls = self._extract_urls()
+        if not urls:
+            h, w = stdscr.getmaxyx()
+            try:
+                stdscr.addnstr(h - 2, 0, " No URLs found".ljust(w), w,
+                               curses.color_pair(C_HELP))
+            except curses.error:
+                pass
+            stdscr.refresh()
+            stdscr.getch()
+            return
+
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+
+        lines = [" URLs in this message:", ""]
+        for i, url in enumerate(urls, 1):
+            display_url = url if len(url) <= w - 8 else url[:w - 11] + "..."
+            lines.append(f"  {i}. {display_url}")
+        lines.append("")
+        lines.append(f" Open [1-{len(urls)}, Esc to cancel]: ")
+
+        for i, line in enumerate(lines):
+            if i >= h - 1:
+                break
+            try:
+                stdscr.addnstr(i, 0, line[:w], w, curses.color_pair(C_HELP))
+            except curses.error:
+                pass
+        stdscr.refresh()
+
+        # Read selection
+        buf = []
+        while True:
+            key = stdscr.getch()
+            if key == 27:  # Esc
+                return
+            elif key in (ord('\n'), curses.KEY_ENTER):
+                if buf:
+                    try:
+                        idx = int("".join(buf))
+                        if 1 <= idx <= len(urls):
+                            webbrowser.open(urls[idx - 1])
+                            return
+                    except ValueError:
+                        pass
+            elif ord('0') <= key <= ord('9'):
+                buf.append(chr(key))
+                # Auto-select for single digit when <= 9 URLs
+                if len(urls) <= 9 and len(buf) == 1:
+                    try:
+                        idx = int(buf[0])
+                        if 1 <= idx <= len(urls):
+                            webbrowser.open(urls[idx - 1])
+                            return
+                    except ValueError:
+                        pass
+
+    def _save_attachments(self, stdscr):
+        """Save attachments via gmails download."""
+        msg = self.messages[self.pager_msg_idx]
+        h, w = stdscr.getmaxyx()
+
+        idx = msg.get("index", self.pager_msg_idx + 1)
+        try:
+            stdscr.addnstr(h - 2, 0, " Saving message + attachments...".ljust(w), w,
+                           curses.color_pair(C_HELP))
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        # Call gmails to download (.eml + attachments to /tmp/spool/)
+        cmd = gmails_cmd(self.account, *self._index_args(), str(idx))
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            # Parse stderr for saved file info
+            saved_info = result.stderr.strip()
+            lines = saved_info.splitlines() if saved_info else ["(no output)"]
+            display = " | ".join(lines)
+            if len(display) > w - 2:
+                display = display[:w - 5] + "..."
+            try:
+                stdscr.addnstr(h - 2, 0, f" {display}".ljust(w), w,
+                               curses.color_pair(C_HELP))
+            except curses.error:
+                pass
+        except subprocess.TimeoutExpired:
+            try:
+                stdscr.addnstr(h - 2, 0, " (timeout saving attachments)".ljust(w), w,
+                               curses.color_pair(C_HELP))
+            except curses.error:
+                pass
+        stdscr.refresh()
+        stdscr.getch()
+
+    def _create_calendar_event(self, stdscr):
+        """Parse email for calendar event via Claude, preview, and create."""
+        import datetime
+
+        h, w = stdscr.getmaxyx()
+
+        # Show status while Claude parses
+        try:
+            stdscr.addnstr(h - 2, 0, " Parsing calendar info...".ljust(w), w,
+                           curses.color_pair(C_HELP))
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        # Gather email text from pager; strip invisible Unicode (zero-width
+        # joiners etc.) that bloat the text, then truncate
+        email_text = "\n".join(self.pager_lines)
+        email_text = re.sub(r'[\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]+',
+                            '', email_text)
+        email_text = email_text[:4000]
+        today = datetime.date.today().isoformat()
+
+        prompt = (
+            f"Today is {today}. Extract ONE calendar event from this email thread. "
+            "The most recent (top) message contains the proposed/agreed time. "
+            "Output ONLY valid JSON, no markdown fences, with exactly these fields:\n"
+            '{"title": "...", "when": "YYYY-MM-DD H:MMam", '
+            '"duration_min": N, "attendees": "email1,email2", "description": "..."}\n'
+            "Rules:\n"
+            "- title: short meeting title with the other person's first name\n"
+            "- when: start time from the most recent message, as YYYY-MM-DD H:MMam/pm\n"
+            "- duration_min: from the time range, or 60 if unclear\n"
+            "- attendees: other people's emails from the thread headers (not the reader)\n"
+            "- description: one-line context from the subject/thread\n"
+            f"- The reader is {self.account_email}; exclude from attendees\n\n"
+            f"Email:\n{email_text}"
+        )
+
+        try:
+            # Strip IDE/agent env vars (same as pbcal) so Claude CLI
+            # runs in clean subprocess mode
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(("CLAUDE", "VSCODE"))
+                   and k not in ("ELECTRON_RUN_AS_NODE", "GIT_EDITOR")
+                   and not k.startswith("OTEL_")}
+            # Use helper script for full process isolation from curses/env
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt',
+                                             delete=False) as f:
+                f.write(prompt)
+                prompt_file = f.name
+            helper = os.path.expanduser("~/mise/bash/elm-cal-helper.sh")
+            rc = subprocess.call(
+                [helper, prompt_file, out_file],
+                timeout=60,
+                env=env,
+            )
+            stdscr.refresh()
+            os.unlink(prompt_file)
+            if rc != 0:
+                self._cal_status(stdscr, f"Claude failed (rc={rc})")
+                return
+            try:
+                raw = open(out_file).read().strip()
+            except FileNotFoundError:
+                raw = ""
+            if not raw:
+                self._cal_status(stdscr, "Empty response from Claude")
+                return
+            # Extract JSON from response (may be wrapped in markdown fences)
+            json_match = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
+            if not json_match:
+                self._cal_status(stdscr, f"No JSON: {raw[:w-12]}")
+                return
+            event = json.loads(json_match.group(0))
+        except subprocess.TimeoutExpired:
+            self._cal_status(stdscr, "(timeout parsing calendar info)")
+            return
+        except (json.JSONDecodeError, ValueError) as e:
+            self._cal_status(stdscr, f"Parse error: {e}")
+            return
+
+        # Show preview overlay
+        title = event.get("title", "?")
+        when = event.get("when", "?")
+        dur = event.get("duration_min", 60)
+        attendees = event.get("attendees", "")
+        desc = event.get("description", "")
+
+        stdscr.erase()
+        preview = [
+            " Calendar Event Preview:",
+            "",
+            f"  Title:    {title}",
+            f"  When:     {when}",
+            f"  Duration: {dur} min",
+            f"  With:     {attendees}" if attendees else "  With:     (solo)",
+        ]
+        if desc:
+            preview.append(f"  Note:     {desc}")
+        preview += ["", " Create? [y/n] "]
+
+        for i, line in enumerate(preview):
+            if i >= h - 1:
+                break
+            try:
+                stdscr.addnstr(i, 0, line[:w], w, curses.color_pair(C_HELP))
+            except curses.error:
+                pass
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key not in (ord('y'), ord('Y')):
+            return
+
+        # Create the event via gcal-invite-advanced
+        try:
+            stdscr.addnstr(h - 2, 0, " Creating event...".ljust(w), w,
+                           curses.color_pair(C_HELP))
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        cmd = [GCAL_TOOL, "add", title, when, str(dur), attendees or ""]
+        if desc:
+            cmd.append(desc)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            output = (result.stdout.strip() or result.stderr.strip() or "Done")
+            if len(output) > w - 2:
+                output = output[:w - 5] + "..."
+            self._cal_status(stdscr, output)
+        except subprocess.TimeoutExpired:
+            self._cal_status(stdscr, "(timeout creating event)")
+
+    def _peek_message(self, stdscr):
+        """Call gmails with -peek to save .eml and copy /peek path to clipboard."""
+        msg = self.messages[self.pager_msg_idx]
+        idx = msg.get("index", self.pager_msg_idx + 1)
+        h, w = stdscr.getmaxyx()
+
+        try:
+            stdscr.addnstr(h - 2, 0, f" Peeking message {idx}...".ljust(w), w,
+                           curses.color_pair(C_HELP))
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        # Call gmails -peek -t. -t ensures we get text output (ignored but good practice)
+        # and -peek does the heavy lifting of saving and pbcopying.
+        cmd = gmails_cmd(self.account, *self._index_args(), str(idx), "-peek", "-t")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            # Parse stderr for "Copied to clipboard: /peek ..."
+            peek_info = ""
+            for line in result.stderr.splitlines():
+                if "Copied to clipboard:" in line:
+                    peek_info = line.split(":", 1)[1].strip()
+                    break
+            
+            if peek_info:
+                status = f" Grabbed: {peek_info}"
+            else:
+                status = " Message peeked (check clipboard)"
+            
+            if len(status) > w - 2:
+                status = status[:w - 5] + "..."
+            
+            try:
+                stdscr.addnstr(h - 2, 0, status.ljust(w), w,
+                               curses.color_pair(C_HELP))
+            except curses.error:
+                pass
+        except subprocess.TimeoutExpired:
+            try:
+                stdscr.addnstr(h - 2, 0, " (timeout peeking message)".ljust(w), w,
+                               curses.color_pair(C_HELP))
+            except curses.error:
+                pass
+        stdscr.refresh()
+        stdscr.getch()
+
+    def _cal_status(self, stdscr, msg):
+        """Show a status message and wait for keypress."""
+        h, w = stdscr.getmaxyx()
+        try:
+            stdscr.addnstr(h - 2, 0, f" {msg}".ljust(w), w,
+                           curses.color_pair(C_HELP))
+        except curses.error:
+            pass
+        stdscr.refresh()
+        stdscr.getch()
+
+    def _pager_next(self, stdscr):
+        """Go to next message in pager."""
+        if self.pager_msg_idx < len(self.messages) - 1:
+            self.cursor = self.pager_msg_idx + 1
+            self._open_pager(stdscr)
+
+    def _pager_prev(self, stdscr):
+        """Go to previous message in pager."""
+        if self.pager_msg_idx > 0:
+            self.cursor = self.pager_msg_idx - 1
+            self._open_pager(stdscr)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="elm - Gmail TUI with classic elm 2.5 aesthetics",
+    )
+    parser.add_argument("-e", "--email", default=None,
+                        help="Account email or alias (same as gmails -e)")
+    parser.add_argument("-n", "--count", type=int, default=20,
+                        help="Number of messages to load (default: 20)")
+    parser.add_argument("-q", "--query", default=None,
+                        help="Initial Gmail search query (e.g., 'is:unread')")
+    args = parser.parse_args()
+
+    app = ElmApp(account=args.email, count=args.count, query=args.query)
+    try:
+        curses.wrapper(app.run)
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
