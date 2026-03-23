@@ -220,7 +220,14 @@ PROMPT
     echo "$transcript" >> "$temp_file"
 
     # Use Claude to analyze the transcript
-    topic=$(claude --print < "$temp_file" 2>/dev/null | head -n 1 | tr ' ' '_' | tr -cd '[:alnum:]_-' | tr '[:upper:]' '[:lower:]')
+    # Unset parent IDE / Agent detection vars to prevent output swallowing
+    for var in $(env | grep -oE '^(CLAUDE|VSCODE)[A-Z_]*'); do unset "$var"; done
+    unset ELECTRON_RUN_AS_NODE
+
+    local claude_tmp=$(mktemp /tmp/xcribe-claude-XXXXXX)
+    claude --print < "$temp_file" > "$claude_tmp" 2>/dev/null
+    topic=$(cat "$claude_tmp" | head -n 1 | tr ' ' '_' | tr -cd '[:alnum:]_-' | tr '[:upper:]' '[:lower:]')
+    rm -f "$claude_tmp"
 
     # Debug: log raw Claude output
     echo "  -> DEBUG: Raw Claude output: '$topic'" >> "$LOG_FILE"

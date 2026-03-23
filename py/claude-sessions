@@ -332,6 +332,25 @@ def update_search_index(db):
         print(f"\rIndexed {total} sessions.{' ' * 20}", file=sys.stderr)
 
 
+def _sanitize_fts5_query(query):
+    """Sanitize a user query for FTS5 MATCH.
+
+    FTS5 treats punctuation (periods, hyphens, etc.) as syntax operators,
+    so raw queries like "jamie.liao" or "next-auth" cause parse errors.
+    Wraps each whitespace-delimited token in double quotes so FTS5 treats
+    them as literal phrase searches. Already-quoted phrases are preserved.
+    """
+    import shlex
+    try:
+        # shlex.split respects existing "quoted phrases"
+        tokens = shlex.split(query)
+    except ValueError:
+        # Unbalanced quotes, etc. - fall back to simple split
+        tokens = query.split()
+    # Quote each token; shlex already stripped quotes from user-quoted phrases
+    return " ".join(f'"{t}"' for t in tokens if t)
+
+
 def search_sessions(db, query):
     """Search the FTS5 index and return matching session info.
 
@@ -339,6 +358,7 @@ def search_sessions(db, query):
     ordered by relevance (best matches first).
     """
     results = {}
+    safe_query = _sanitize_fts5_query(query)
     try:
         rows = db.execute(
             "SELECT session_id, project_path, "
@@ -347,7 +367,7 @@ def search_sessions(db, query):
             "FROM session_fts WHERE session_fts MATCH ? "
             "ORDER BY rank "
             "LIMIT 500",
-            (query,)
+            (safe_query,)
         ).fetchall()
     except sqlite3.OperationalError as e:
         print(f"Search error: {e}", file=sys.stderr)
