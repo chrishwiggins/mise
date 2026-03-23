@@ -47,14 +47,14 @@ query {
       }
     }
   }
-}' --jq '
+}' 2>/dev/null | jq -r '
   [
     .data.viewer.repositories.nodes[].collaborators.nodes[]?,
     .data.viewer.repositories.nodes[].mentionableUsers.nodes[]?,
     .data.viewer.repositoriesContributedTo.nodes[].mentionableUsers.nodes[]?
   ] |
-  map(select(.login != "'$(gh api user --jq '.login')'")) |
+  map(select(.login != "'"$(gh api user --jq '.login')"'")) |
   unique_by(.login) |
   .[] |
-  "• \(.name // .login) (@\(.login), ID: \(.id))"
+  "\u2022 \(.name // .login) (@\(.login), ID: \(.id))"
 '

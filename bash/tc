@@ -8,7 +8,7 @@
 #          target: 1.2           - win.tab number
 #                  012           - tty number (short)
 #                  /dev/ttys012  - full tty path
-#        tc title <text>         - set window title
+#        tc title <text>         - save window title
 #        tc focus <win.tab>      - bring window to front
 
 # Color Name API base URL (https://api.color.pizza)
@@ -58,11 +58,19 @@ resolve_color() {
   esac
 }
 
-# Shorthand: tc 0 <color> -> tc -t 1.1 <color>
-# "0" means "the first tab of the first window" (your home shell)
-if [[ "$1" == "0" ]]; then
+# Shorthand: tc 01 <color> -> tc 0 <color> ; tc <color>
+# "01" means "color both window 1.1 (home shell) AND the current window"
+if [[ "$1" == "01" ]]; then
   shift
-  set -- -t 1.1 "$@"
+  "$0" -t 1.1 "$@"
+  # fall through to color the current window
+else
+  # Shorthand: tc 0 <color> -> tc -t 1.1 <color>
+  # "0" means "the first tab of the first window" (your home shell)
+  if [[ "$1" == "0" ]]; then
+    shift
+    set -- -t 1.1 "$@"
+  fi
 fi
 
 # Parse -t option for target tty
@@ -117,7 +125,7 @@ case "$1" in
     # tc saved - list custom colors from ~/.tc-colors
     cf=~/.tc-colors
     if [[ ! -f "$cf" || ! -s "$cf" ]]; then
-      echo "No saved colors yet. Use 'tc set <name> <r> <g> <b>' or 'tc search <keyword>'." >&2
+      echo "No saved colors yet. Use 'tc save <name> <r> <g> <b>' or 'tc search <keyword>'." >&2
       exit 0
     fi
     echo "Saved colors (~/.tc-colors):"
@@ -133,9 +141,9 @@ case "$1" in
     ;;
 
   set)
-    # tc set puke 142 58 203
+    # tc save puke 142 58 203
     if [[ -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
-      echo "Usage: tc set <name> <r> <g> <b>" >&2
+      echo "Usage: tc save <name> <r> <g> <b>" >&2
       exit 1
     fi
     name="$2" r="$3" g="$4" b="$5"
@@ -249,6 +257,87 @@ print(colors[0]['name'] if colors else '')
               -e "activate" \
               -e "set index of window $win to 1" \
               -e "end tell" 2>/dev/null
+    ;;
+
+  # ── window tiling ───────────────────────────────────────────────────
+
+  join)
+    # tc join 3.1 8.1 - tile two windows side by side (left/right)
+    # tc join 3.1 8.1 5.1 - tile three windows in thirds
+    shift
+    if [[ $# -lt 2 ]]; then
+      echo "Usage: tc join <win.tab> <win.tab> [win.tab ...]" >&2
+      echo "  e.g., tc join 3.1 8.1       # two windows, left/right" >&2
+      echo "        tc join 3.1 8.1 5.1   # three windows in thirds" >&2
+      exit 1
+    fi
+
+    # Collect window numbers from win.tab specs
+    wins=()
+    for spec in "$@"; do
+      if [[ "$spec" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        wins+=("${spec%%.*}")
+      else
+        echo "Error: '$spec' is not a valid win.tab spec (e.g., 3.1)" >&2
+        exit 1
+      fi
+    done
+
+    # Get logical screen size from system_profiler
+    read -r screen_w screen_h <<< "$(python3 -c "
+import subprocess, re
+out = subprocess.check_output(['system_profiler', 'SPDisplaysDataType'], text=True)
+m = re.search(r'Resolution:\s+(\d+)\s+x\s+(\d+)\s+(Retina)?', out)
+if m:
+    w, h = int(m.group(1)), int(m.group(2))
+    scale = 2 if m.group(3) else 1
+    print(f'{w // scale} {h // scale}')
+" 2>/dev/null)"
+
+    if [[ -z "$screen_w" || -z "$screen_h" ]]; then
+      echo "Error: Could not determine screen size" >&2
+      exit 1
+    fi
+
+    # Menu bar is ~25px from top; use y=25 as top of usable area
+    sx=0
+    sy=25
+    sw=$screen_w
+    sh=$screen_h
+    total_w=$screen_w
+    total_h=$(( screen_h - sy ))
+    n=${#wins[@]}
+    slice_w=$(( total_w / n ))
+
+    # Position each window
+    for i in "${!wins[@]}"; do
+      x1=$(( sx + i * slice_w ))
+      x2=$(( sx + (i + 1) * slice_w ))
+      # Last window gets any remaining pixels
+      if [[ $i -eq $(( n - 1 )) ]]; then
+        x2=$sw
+      fi
+      osascript -e "
+        tell application \"iTerm2\"
+          set bounds of window ${wins[$i]} to {$x1, $sy, $x2, $sh}
+        end tell
+      " 2>/dev/null
+      if [[ $? -ne 0 ]]; then
+        echo "Error: Could not resize window ${wins[$i]}" >&2
+      fi
+    done
+
+    # Bring all joined windows to front, last one on top
+    for i in $(seq $(( n - 1 )) -1 0); do
+      osascript -e "
+        tell application \"iTerm2\"
+          activate
+          set index of window ${wins[$i]} to 1
+        end tell
+      " 2>/dev/null
+    done
+
+    echo "Tiled $n windows: $*" >&2
     ;;
 
   # ── blingbling: Color Name API-powered commands ──────────────────────
@@ -593,6 +682,35 @@ for c in data.get('colors', []):
 "
     ;;
 
+  discuss|--discuss)
+    # Show the color design doc if it exists.
+    # Searches known locations; the doc lives outside this repo.
+    for candidate in \
+      "$HOME/.config/tc/color-audit.md" \
+      "$HOME/doc/tc-color-audit.md" \
+      ; do
+      if [[ -f "$candidate" ]]; then
+        ${PAGER:-less} "$candidate"
+        exit 0
+      fi
+    done
+    # Fallback: dump inline summary
+    cat <<'DISCUSS'
+tc color design notes
+=====================
+
+Principles:
+  - Lightness differences are perceived faster than hue differences.
+  - School colors stay matched to collaborators (semantic assignments).
+  - Intentional duplicates are OK when semantically meaningful.
+  - When adding new projects, check for hue gaps before picking.
+
+To install the full design doc, place it at ~/.config/tc/color-audit.md
+
+See also: tc saved, tc similar <color>, tc palette <keyword>
+DISCUSS
+    ;;
+
   help|-h|--help|"")
     cat <<'EOF'
 tc - iTerm2 titlebar color and window control
@@ -606,6 +724,7 @@ Usage: tc <color>                 # current window
        tc -t /dev/ttys012 <color> # by full path
        tc title <text>            # set window title
        tc focus <win.tab>         # bring window to front
+       tc join <w.t> <w.t> [...]  # tile windows side by side
        tc rgb <r> <g> <b>         # custom RGB (0-255)
        tc set <name> <r> <g> <b>     # save a custom color
        tc saved                      # list saved custom colors
@@ -625,6 +744,8 @@ Examples:
   tc list 003 orange    # color tty 003
   tc title myproject    # set title
   tc sage               # nice muted green
+  tc join 3.1 8.1       # tile two windows left/right
+  tc join 1.1 3.1 5.1   # tile three windows in thirds
 
 # blingbling (Color Name API - api.color.pizza)
   tc search <keyword>              # find color by name, apply best match, save it
@@ -636,6 +757,9 @@ Examples:
   tc browse [page]                # browse curated "best of" named colors
   tc browse-pick <n>              # apply the nth color from browse
   tc identify                     # name your current session background color
+
+Design:
+  tc --discuss                    # color assignment principles and audit doc
 EOF
     ;;
 
