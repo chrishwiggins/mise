@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""gmails: re-exec under the venv python that has google-api-python-client."""
+import os, sys  # noqa: E401,E402
+_venv = os.path.join(os.path.dirname(os.path.realpath(__file__)), ".venv", "bin", "python3")
+if os.path.exists(_venv) and os.path.realpath(sys.executable) != os.path.realpath(_venv):
+    os.execv(_venv, [_venv] + sys.argv)
 """
 Gmail CLI: list, read, send, and draft messages via Gmail API.
 
