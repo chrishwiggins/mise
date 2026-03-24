@@ -340,8 +340,8 @@ class ElmApp:
             self._do_compose(stdscr)
         elif key == ord('/'):
             self._do_search(stdscr)
-        elif key == ord('a') and n > 0:
-            self._do_archive(stdscr)
+        elif key in (ord('a'), ord('A')) and n > 0:
+            self._do_reply(stdscr, reply_all=True)
         elif key == ord('o') and n > 0:
             self._do_open_browser(stdscr)
         elif key == ord('L'):
@@ -678,9 +678,8 @@ class ElmApp:
             if mid:
                 self.deletions.add(mid)
             self.view = "index"
-        elif key == ord('a'):
-            self._do_archive(stdscr)
-            self.view = "index"
+        elif key in (ord('a'), ord('A')):
+            self._do_reply(stdscr, reply_all=True)
         elif key == ord('o'):
             self._do_open_browser(stdscr)
         elif key == ord('U'):
