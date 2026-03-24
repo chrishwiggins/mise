@@ -43,27 +43,22 @@ MAPPING = {
 
 
 def main():
-    prog = sys.argv[0]
-    # No arguments: dump the full mapping
-    if len(sys.argv) == 1:
+    # Argument takes priority; fall back to stdin; bare invocation dumps table
+    if len(sys.argv) == 2:
+        text = sys.argv[1]
+    elif not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+    else:
         for key in sorted(MAPPING):
             print(f"{key} {MAPPING[key]}")
         return
 
-    # One argument: spell each char
-    if len(sys.argv) == 2:
-        text = sys.argv[1]
-        for ch in text:
-            code = MAPPING.get(ch.upper())
-            if code:
-                print(code)
-            else:
-                # not in A–Z or 0–9
-                print(f"[{ch}]")
-        return
-
-    # Too many args
-    print(f"Usage: {prog} [string_of_letters_and_numbers]")
+    for ch in text:
+        code = MAPPING.get(ch.upper())
+        if code:
+            print(code)
+        else:
+            print(f"[{ch}]")
 
 
 if __name__ == "__main__":
