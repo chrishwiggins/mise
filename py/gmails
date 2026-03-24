@@ -1407,11 +1407,12 @@ def do_send(service, args, from_addr=None):
     ).execute()
 
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    frm = msg.get("From") or from_addr or "(unknown)"
     to = msg.get("To", "(unknown)")
     cc = msg.get("Cc", "")
     bcc = msg.get("Bcc", "")
     subj = msg.get("Subject", "(no subject)")
-    parts = [f"Sent: To={to}"]
+    parts = [f"Sent: From={frm} To={to}"]
     if cc:
         parts.append(f"CC={cc}")
     if bcc:
@@ -1434,11 +1435,12 @@ def do_draft(service, args, from_addr=None):
     ).execute()
 
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    frm = msg.get("From", "(unknown)")
     to = msg.get("To", "(unknown)")
     cc = msg.get("Cc", "")
     bcc = msg.get("Bcc", "")
     subj = msg.get("Subject", "(no subject)")
-    parts = [f"Draft saved: To={to}"]
+    parts = [f"Draft saved: From={frm} To={to}"]
     if cc:
         parts.append(f"CC={cc}")
     if bcc:
