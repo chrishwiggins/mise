@@ -57,7 +57,7 @@ set wrap linebreak nolist
 
 " 20240115T08h00 set noic
 :set noic
- 
+
 " 20231204T15h49 copilot
 autocmd BufEnter *.py Copilot enable
 autocmd BufEnter *.txt Copilot enable
@@ -91,3 +91,9 @@ set ruler
 set fileformat=unix
 set fileformats=unix,dos
 autocmd BufWritePre * set fileformat=unix
+
+" 20260404 strip trailing whitespace on save (all files)
+autocmd BufWritePre * %s/\s\+$//e
+
+" 20260404 collapse double spaces in prose files on save
+autocmd BufWritePre *.md,*.txt,*.eml,*.tex,*.rst,*.html %s/\(\S\)  \+/\1 /ge

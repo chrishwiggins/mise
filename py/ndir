@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+import os
+import sys
+import subprocess
+import argparse
+from datetime import datetime
+
+MANPAGE = """
+NDIR(1)                     User Commands                     NDIR(1)
+
+NAME
+    ndir - create timestamped directories for Claude sessions
+
+SYNOPSIS
+    ndir [title]
+    ndir -c [prompt]
+    ndir -p <prompt>
+    ndir -c -t <title> [prompt]
+
+DESCRIPTION
+    Creates a timestamped directory in /tmp and optionally launches
+    Claude Code. Directory names are always prefixed with YYMMDDHHMMSS.
+
+OPTIONS
+    -c, --claude
+        Start an interactive Claude session. If a prompt is provided,
+        it becomes Claude's first message. Without a prompt, Claude
+        starts with an empty session.
+
+    -p, --print
+        Run Claude in print mode (non-interactive). Claude processes
+        the prompt and exits. Requires a prompt.
+
+    -t, --title <name>
+        Explicitly set the directory suffix. Use with -c/-p when you
+        want a specific directory name instead of auto-generating
+        from the prompt.
+
+    -h, --help
+        Show this help message.
+
+ARGUMENT INTERPRETATION
+    The positional argument's meaning depends on the mode:
+
+    No flags:    argument is the directory TITLE
+    With -c/-p:  argument is the Claude PROMPT (title auto-generated)
+
+    This design lets you type natural prompts without worrying about
+    directory names:
+
+        ndc "fix the bug in auth.py"
+        -> creates /tmp/260126.._fix-the-bug-in-auth-py
+        -> starts claude with that prompt
+
+ALIASES (recommended for .cshrc/.tcshrc)
+    alias ndd  'set ndpath=`ndir \\!*`; cd $ndpath'
+    alias ndc  'ndir -c'
+    alias ndp  'ndir -p'
+
+EXAMPLES
+    ndd                     Create /tmp/260126120000, cd into it
+    ndd myproject           Create /tmp/260126120000_myproject, cd into it
+
+    ndc                     Create dir, start interactive Claude
+    ndc "explain this code" Create dir, Claude with initial prompt
+
+    ndp "summarize README"  Create dir, Claude prints response and exits
+
+    ndc -t bugfix "fix it"  Create /tmp/..._bugfix, Claude with prompt
+
+DESIGN RATIONALE
+    1. Timestamp prefix ensures unique, chronologically sorted dirs
+    2. Arg interpretation changes with flags because:
+       - Without Claude, you care about the directory name
+       - With Claude, you care about the prompt (dir name is incidental)
+    3. Auto-sanitization: prompts become safe directory names by
+       replacing non-alphanumeric chars with hyphens (first 30 chars)
+    4. Print mode (-p) for scripting/piping Claude output
+
+FILES
+    /tmp/YYMMDDHHMMSS[_suffix]/
+
+SEE ALSO
+    claude(1)
+
+"""
+
+def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('arg', nargs='*', help='Title (no flags) or prompt (with -c/-p)')
+    parser.add_argument('-t', '--title', help='Explicit directory name (use with -c/-p)')
+    parser.add_argument('-c', '--claude', action='store_true', help='Start interactive Claude')
+    parser.add_argument('-p', '--print', action='store_true', dest='print_mode', help='Run Claude in print mode')
+    parser.add_argument('-h', '--help', action='store_true', dest='show_help', help='Show help')
+    args = parser.parse_args()
+
+    if args.show_help:
+        print(MANPAGE)
+        sys.exit(0)
+
+    datestr = datetime.now().strftime("%y%m%d%H%M%S")
+    arg_text = ' '.join(args.arg) if args.arg else None
+
+    # Determine prompt and title based on mode
+    if args.claude or args.print_mode:
+        # Claude mode: arg is the prompt, auto-generate title
+        prompt_text = arg_text
+        if args.title:
+            name = f"{datestr}_{args.title}"
+        elif prompt_text:
+            sanitized = "".join(c if c.isalnum() else "-" for c in prompt_text[:30]).strip("-")
+            name = f"{datestr}_{sanitized}"
+        else:
+            name = datestr
+    else:
+        # Directory-only mode: arg is the title
+        prompt_text = None
+        title = args.title or arg_text
+        name = f"{datestr}_{title}" if title else datestr
+
+    dir_path = f"/tmp/{name}"
+    os.makedirs(dir_path, exist_ok=True)
+    print(dir_path)
+
+    # Run claude if requested
+    if args.claude:
+        os.chdir(dir_path)
+        if prompt_text:
+            subprocess.run(["claude", prompt_text])
+        else:
+            subprocess.run(["claude"])
+    elif args.print_mode:
+        os.chdir(dir_path)
+        if prompt_text:
+            subprocess.run(["claude", "-p", prompt_text])
+        else:
+            print("Error: -p (print mode) requires a prompt", file=sys.stderr)
+            sys.exit(1)
+
+if __name__ == '__main__':
+    main()

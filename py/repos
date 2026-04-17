@@ -31,5 +31,5 @@ echo "Recent GitHub repositories for $USER:"
 echo
 
 # Get repositories sorted by push date
-gh repo list "$USER" $LIMIT --json name,pushedAt |
-  jq -r --arg user "$USER" 'sort_by(.pushedAt) | reverse | .[] | "\(.name) (\(.pushedAt | fromdateiso8601 | strftime("%Y-%m-%d"))) - https://github.com/\($user)/\(.name)"'
+gh repo list "$USER" $LIMIT --json name,pushedAt,isPrivate |
+  jq -r --arg user "$USER" 'sort_by(.pushedAt) | reverse | .[] | "\(if .isPrivate then "-" else "+" end) \(.name) (\(.pushedAt | fromdateiso8601 | strftime("%Y-%m-%d"))) - https://github.com/\($user)/\(.name)"'

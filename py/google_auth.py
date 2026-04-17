@@ -175,12 +175,26 @@ def get_credentials(service=None, scopes=None, creds_path=None, token_name=None,
     # Refresh or create new token
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception as e:
-                print(f"Token refresh failed ({e}), re-authenticating...", file=sys.stderr)
-                token_path.unlink(missing_ok=True)
-                creds = None
+            import time
+            from google.auth.exceptions import RefreshError
+            for attempt in range(3):
+                try:
+                    creds.refresh(Request())
+                    break
+                except RefreshError as e:
+                    # Token revoked or invalid grant: must re-auth
+                    print(f"Token revoked ({e}), re-authenticating...", file=sys.stderr)
+                    token_path.unlink(missing_ok=True)
+                    creds = None
+                    break
+                except Exception as e:
+                    if attempt < 2:
+                        print(f"Token refresh failed ({e}), retrying ({attempt+1}/3)...", file=sys.stderr)
+                        time.sleep(1)
+                    else:
+                        print(f"Token refresh failed after 3 attempts ({e}), re-authenticating...", file=sys.stderr)
+                        token_path.unlink(missing_ok=True)
+                        creds = None
 
         if not creds:
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), scopes_list)
