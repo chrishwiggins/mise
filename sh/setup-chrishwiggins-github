@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# One-time: log into gh as chrishwiggins, upload ~/.ssh/id_ed25519_chrishwiggins.pub, test SSH.
+set -euo pipefail
+KEY="${HOME}/.ssh/id_ed25519_chrishwiggins.pub"
+if [[ ! -f "$KEY" ]]; then
+  echo "Missing $KEY — generate with: ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_chrishwiggins" >&2
+  exit 1
+fi
+echo ">>> Add GitHub account chrishwiggins to gh (browser or device flow)."
+gh auth login -h github.com -p https
+gh auth switch -u chrishwiggins
+echo ">>> Register SSH public key on chrishwiggins (title: mise-$(hostname -s | tr ' ' -))"
+gh ssh-key add "$KEY" -t "mise-$(hostname -s | tr ' ' -)" || {
+  echo "If the key already exists, continuing." >&2
+}
+echo ">>> Load key into agent (macOS keychain) and test GitHub SSH..."
+ssh-add --apple-use-keychain "${HOME}/.ssh/id_ed25519_chrishwiggins" 2>/dev/null || ssh-add "${HOME}/.ssh/id_ed25519_chrishwiggins"
+ssh -T git@github.com-chrishwiggins
+echo ">>> From ~/mise: git pull && git push"
+echo "    (Use: gh auth switch -u chrishwiggins-cnn when you need the CNN gh token again.)"
