@@ -1,60 +1,68 @@
 #!/usr/bin/env python3
 import sys
 
-# Hard-coded NATO phonetic & digit mapping
-MAPPING = {
-    "A": "Alfa",
-    "B": "Bravo",
-    "C": "Charlie",
-    "D": "Delta",
-    "E": "Echo",
-    "F": "Foxtrot",
-    "G": "Golf",
-    "H": "Hotel",
-    "I": "India",
-    "J": "Juliett",
-    "K": "Kilo",
-    "L": "Lima",
-    "M": "Mike",
-    "N": "November",
-    "O": "Oscar",
-    "P": "Papa",
-    "Q": "Quebec",
-    "R": "Romeo",
-    "S": "Sierra",
-    "T": "Tango",
-    "U": "Uniform",
-    "V": "Victor",
-    "W": "Whiskey",
-    "X": "X-ray",
-    "Y": "Yankee",
-    "Z": "Zulu",
-    "0": "Zero",
-    "1": "One",
-    "2": "Two",
-    "3": "Three",
-    "4": "Four",
-    "5": "Five",
-    "6": "Six",
-    "7": "Seven",
-    "8": "Eight",
-    "9": "Nine",
+NATO = {
+    "A": "Alfa",    "B": "Bravo",   "C": "Charlie", "D": "Delta",
+    "E": "Echo",    "F": "Foxtrot", "G": "Golf",    "H": "Hotel",
+    "I": "India",   "J": "Juliett", "K": "Kilo",    "L": "Lima",
+    "M": "Mike",    "N": "November","O": "Oscar",   "P": "Papa",
+    "Q": "Quebec",  "R": "Romeo",   "S": "Sierra",  "T": "Tango",
+    "U": "Uniform", "V": "Victor",  "W": "Whiskey", "X": "X-ray",
+    "Y": "Yankee",  "Z": "Zulu",
 }
+
+APCO = {
+    "A": "Adam",    "B": "Boy",     "C": "Charles", "D": "David",
+    "E": "Edward",  "F": "Frank",   "G": "George",  "H": "Henry",
+    "I": "Ida",     "J": "John",    "K": "King",    "L": "Lincoln",
+    "M": "Mary",    "N": "Nora",    "O": "Ocean",   "P": "Paul",
+    "Q": "Queen",   "R": "Robert",  "S": "Sam",     "T": "Tom",
+    "U": "Union",   "V": "Victor",  "W": "William", "X": "X-ray",
+    "Y": "Young",   "Z": "Zebra",
+}
+
+DIGITS = {
+    "0": "Zero", "1": "One", "2": "Two",   "3": "Three", "4": "Four",
+    "5": "Five", "6": "Six", "7": "Seven", "8": "Eight", "9": "Nine",
+}
+
+ALPHABETS = {"nato": NATO, "apco": APCO}
 
 
 def main():
-    # Argument takes priority; fall back to stdin; bare invocation dumps table
-    if len(sys.argv) == 2:
-        text = sys.argv[1]
+    args = sys.argv[1:]
+    alpha = NATO
+
+    if args and args[0] in ("-h", "--help"):
+        print("usage: alpha [-a|--apco] [-n|--nato] [-h] [TEXT]")
+        print()
+        print("  -a, --apco   APCO/police alphabet (Adam Boy Charles ...)")
+        print("  -n, --nato   NATO alphabet (default) (Alfa Bravo Charlie ...)")
+        print("  -h, --help   list available alphabets")
+        print()
+        for name, table in ALPHABETS.items():
+            words = " ".join(table[k] for k in sorted(table))
+            print(f"  {name:5s}  {words}")
+        return
+    elif args and args[0] in ("-a", "--apco"):
+        alpha = APCO
+        args.pop(0)
+    elif args and args[0] in ("-n", "--nato"):
+        args.pop(0)
+
+    mapping = {**alpha, **DIGITS}
+
+    if args:
+        text = args[0]
     elif not sys.stdin.isatty():
         text = sys.stdin.read().strip()
     else:
-        for key in sorted(MAPPING):
-            print(f"{key} {MAPPING[key]}")
+        for key in sorted(mapping):
+            print(f"{key} {mapping[key]}")
         return
 
     for ch in text:
-        code = MAPPING.get(ch.upper())
+        code = mapping.get(ch.upper())
         if code:
             print(code)
         else:

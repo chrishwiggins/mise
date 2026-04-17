@@ -4,6 +4,7 @@ Convert EML files to plain text format.
 Usage: python3 eml2txt.py <input.eml> [output.txt]
 """
 
+import os
 import sys
 import email
 import html2text
@@ -28,10 +29,45 @@ def eml_to_text(eml_file, output_file=None):
     output_lines.append("-" * 60)
     output_lines.append("")
 
+    # Determine attachment directory based on the eml file location
+    base_dir = os.path.dirname(os.path.abspath(eml_file))
+    stem = os.path.splitext(os.path.basename(eml_file))[0]
+    att_dir = os.path.join(base_dir, f"{stem}_attachments")
+    saved_attachments = []
+
+    def save_attachment(part):
+        filename = part.get_filename()
+        if not filename:
+            ext = part.get_content_subtype() or "bin"
+            filename = f"attachment_{len(saved_attachments) + 1}.{ext}"
+        filename = os.path.basename(filename)
+        os.makedirs(att_dir, exist_ok=True)
+        dest = os.path.join(att_dir, filename)
+        base, ext = os.path.splitext(dest)
+        i = 1
+        while os.path.exists(dest):
+            dest = f"{base}_{i}{ext}"
+            i += 1
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            return
+        with open(dest, "wb") as af:
+            af.write(payload)
+        saved_attachments.append(dest)
+
     # Extract body content
     if msg.is_multipart():
         for part in msg.walk():
+            if part.is_multipart():
+                continue
             content_type = part.get_content_type()
+            disposition = (part.get("Content-Disposition") or "").lower()
+            is_attachment = "attachment" in disposition or (
+                "inline" in disposition and part.get_filename()
+            )
+            if is_attachment or content_type not in ("text/plain", "text/html"):
+                save_attachment(part)
+                continue
             if content_type == "text/plain":
                 body = part.get_content()
                 if body:
@@ -55,6 +91,13 @@ def eml_to_text(eml_file, output_file=None):
             h.ignore_images = True
             body = h.handle(body)
         output_lines.append(body.strip())
+
+    if saved_attachments:
+        output_lines.append("")
+        output_lines.append("-" * 60)
+        output_lines.append(f"Attachments saved to {att_dir}:")
+        for p in saved_attachments:
+            output_lines.append(f"  {os.path.basename(p)}")
 
     # Join all lines
     result = "\n".join(output_lines)

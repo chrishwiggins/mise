@@ -1,17 +1,118 @@
 #!/bin/bash
 
-# Usage: chrome-profile-open [profile_number] [url]
-# Opens Chrome with specified profile (0 or empty = Default, N = Profile N)
+# Usage: chrome-profile-open [profile_number_or_slug] [url]
+# Opens Chrome with specified profile.
+#   0 or empty -> Default
+#   N (digits) -> Profile N
+#   slug       -> resolved against Local State (see -h for the list)
+#
+#        chrome-profile-open -h
+# Lists all Chrome profiles with a unique slug for each.
+
+_resolve_profile() {
+    # Args: MODE [SLUG]
+    # MODE=list  -> prints table of slugs/directories
+    # MODE=slug  -> prints matching directory for SLUG (exit 1 if unknown)
+    MODE="$1" QUERY="$2" python3 - <<'PY'
+import json, re, os, sys
+from collections import defaultdict
+
+mode = os.environ.get("MODE", "list")
+query = os.environ.get("QUERY", "")
+
+path = os.path.expanduser(
+    "~/Library/Application Support/Google/Chrome/Local State"
+)
+try:
+    data = json.load(open(path))
+except Exception as e:
+    print(f"error reading {path}: {e}", file=sys.stderr)
+    sys.exit(2)
+
+cache = data.get("profile", {}).get("info_cache", {})
+
+def slugify(s):
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s or "profile"
+
+def sort_key(directory):
+    # Default first, then numeric "Profile N", then the rest alphabetically
+    if directory == "Default":
+        return (0, 0, "")
+    m = re.match(r"Profile (\d+)$", directory)
+    if m:
+        return (1, int(m.group(1)), "")
+    return (2, 0, directory)
+
+rows = []
+for directory, meta in cache.items():
+    name = meta.get("name", "") or ""
+    email = meta.get("user_name", "") or ""
+    rows.append((directory, name, email))
+rows.sort(key=lambda r: sort_key(r[0]))
+
+# Assign unique slugs: base = slugify(name). If collision, append email
+# local-part, then the profile directory slug, until unique.
+base_counts = defaultdict(int)
+for _, name, _ in rows:
+    base_counts[slugify(name)] += 1
+
+used = set()
+slugs = []
+for directory, name, email in rows:
+    base = slugify(name)
+    if base_counts[base] == 1 and base not in used:
+        slug = base
+    else:
+        local = email.split("@", 1)[0] if email else ""
+        candidate = f"{base}-{slugify(local)}" if local else base
+        if candidate in used or not local:
+            candidate = f"{base}-{slugify(directory)}"
+        slug = candidate
+        n = 2
+        while slug in used:
+            slug = f"{candidate}-{n}"
+            n += 1
+    used.add(slug)
+    slugs.append(slug)
+
+if mode == "slug":
+    target = slugify(query)
+    for slug, (directory, _, _) in zip(slugs, rows):
+        if slug == target:
+            print(directory)
+            sys.exit(0)
+    print(f"no profile with slug: {query}", file=sys.stderr)
+    sys.exit(1)
+
+# mode == list
+w_slug = max(len(s) for s in slugs) if slugs else 4
+w_dir = max(len(r[0]) for r in rows) if rows else 9
+w_name = max(len(r[1]) for r in rows) if rows else 4
+
+print(f"{'SLUG':<{w_slug}}  {'DIRECTORY':<{w_dir}}  {'NAME':<{w_name}}  EMAIL")
+for slug, (directory, name, email) in zip(slugs, rows):
+    print(f"{slug:<{w_slug}}  {directory:<{w_dir}}  {name:<{w_name}}  {email}")
+PY
+}
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    _resolve_profile list
+    exit 0
+fi
 
 # Parse arguments
-PROFILE_NUM="${1:-0}"
+ARG="${1:-0}"
 URL="${2:-about:blank}"
 
 # Determine profile directory
-if [[ "$PROFILE_NUM" == "0" ]] || [[ -z "$PROFILE_NUM" ]]; then
+if [[ -z "$ARG" || "$ARG" == "0" ]]; then
     PROFILE_DIRECTORY="Default"
+elif [[ "$ARG" =~ ^[0-9]+$ ]]; then
+    PROFILE_DIRECTORY="Profile ${ARG}"
 else
-    PROFILE_DIRECTORY="Profile ${PROFILE_NUM}"
+    PROFILE_DIRECTORY="$(_resolve_profile slug "$ARG")" || exit 1
 fi
 
 # Setup logging
@@ -23,4 +124,3 @@ exec /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
     --profile-directory="$PROFILE_DIRECTORY" \
     "$URL" \
     2>"${LOG_DIR}/$$" &
-
