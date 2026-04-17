@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import shutil
 import subprocess
 import argparse
 from datetime import datetime
@@ -25,11 +26,13 @@ OPTIONS
     -c, --claude
         Start an interactive Claude session. If a prompt is provided,
         it becomes Claude's first message. Without a prompt, Claude
-        starts with an empty session.
+        starts with an empty session. If claude(1) is not on PATH,
+        runs agent(1) instead.
 
     -p, --print
         Run Claude in print mode (non-interactive). Claude processes
-        the prompt and exits. Requires a prompt.
+        the prompt and exits. Requires a prompt. Uses agent if claude
+        is not on PATH.
 
     -t, --title <name>
         Explicitly set the directory suffix. Use with -c/-p when you
@@ -81,9 +84,19 @@ FILES
     /tmp/YYMMDDHHMMSS[_suffix]/
 
 SEE ALSO
-    claude(1)
+    claude(1), agent(1)
 
 """
+
+def _ai_cli():
+    """Prefer claude; if not on PATH, use agent (e.g. Cursor Agent CLI)."""
+    if shutil.which("claude"):
+        return "claude"
+    if shutil.which("agent"):
+        return "agent"
+    print("Error: neither 'claude' nor 'agent' found in PATH", file=sys.stderr)
+    sys.exit(127)
+
 
 def main():
     parser = argparse.ArgumentParser(add_help=False)
@@ -122,17 +135,19 @@ def main():
     os.makedirs(dir_path, exist_ok=True)
     print(dir_path)
 
-    # Run claude if requested
+    # Run claude (or agent if claude unavailable) if requested
     if args.claude:
         os.chdir(dir_path)
+        cmd = _ai_cli()
         if prompt_text:
-            subprocess.run(["claude", prompt_text])
+            subprocess.run([cmd, prompt_text])
         else:
-            subprocess.run(["claude"])
+            subprocess.run([cmd])
     elif args.print_mode:
         os.chdir(dir_path)
+        cmd = _ai_cli()
         if prompt_text:
-            subprocess.run(["claude", "-p", prompt_text])
+            subprocess.run([cmd, "-p", prompt_text])
         else:
             print("Error: -p (print mode) requires a prompt", file=sys.stderr)
             sys.exit(1)
