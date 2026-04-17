@@ -5,25 +5,29 @@ from datetime import datetime
 import argparse
 
 
-def get_weather_forecast(latitude, longitude):
-    # Base URL for the National Weather Service API
-    base_url = "https://api.weather.gov/points"
+def get_point_data(latitude, longitude):
+    url = f"https://api.weather.gov/points/{latitude},{longitude}"
+    response = requests.get(url)
+    return response.json()
 
-    # Construct the URL with provided latitude and longitude
-    url = f"{base_url}/{latitude},{longitude}"
 
-    # Send a GET request to obtain location-specific data
-    location_response = requests.get(url)
-    location_data = location_response.json()
-
-    # Extract the forecast URL from the location data
-    forecast_url = location_data["properties"]["forecast"]
-
-    # Request the weather forecast using the extracted URL
+def get_weather_forecast(point_data):
+    forecast_url = point_data["properties"]["forecast"]
     forecast_response = requests.get(forecast_url)
-    forecast_data = forecast_response.json()
+    return forecast_response.json()
 
-    return forecast_data
+
+def get_current_temp(point_data, use_celsius=False):
+    stations_url = point_data["properties"]["observationStations"]
+    stations = requests.get(stations_url).json()
+    station = stations["features"][0]["id"]
+    obs = requests.get(f"{station}/observations/latest").json()
+    temp_c = obs["properties"]["temperature"]["value"]
+    if temp_c is None:
+        return None
+    if use_celsius:
+        return int(round(temp_c))
+    return int(round(temp_c * 9.0 / 5.0 + 32))
 
 
 def format_temperature(temp):
@@ -163,7 +167,14 @@ def main():
         # Default to NYC coordinates if no arguments are provided
         latitude, longitude = default_latitude, default_longitude
 
-    weather_forecast = get_weather_forecast(latitude, longitude)
+    point_data = get_point_data(latitude, longitude)
+
+    temp_unit = "°C" if args.celsius else "°F"
+    current = get_current_temp(point_data, args.celsius)
+    if current is not None:
+        print(f"Now: {format_temperature(current)}{temp_unit}")
+
+    weather_forecast = get_weather_forecast(point_data)
     print_daily_forecast(weather_forecast, args.days, args.celsius)
 
 

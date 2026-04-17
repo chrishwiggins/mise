@@ -93,7 +93,7 @@ alias 1010 "open 'http://69.28.176.133:80/infinity_wins-am?MSWMExt=.asf'"
 
 
 
-# meta (aliases to help make aliases) 
+# meta (aliases to help make aliases)
 alias palias 'echo "alias \!*" >> $paliases ; learn '
 # alias learn "source $cwpaliases"
 alias pteach "vi + $cwpaliases"
@@ -141,7 +141,7 @@ alias similar "gsearch related:\!:*"
 # alias repo "mkdir git/ dat/ doc/ doc/backups fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; wget -O README.md --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md; wget -O doc/makefile  --quiet --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; wget -O doc/writeup.sed --no-check-certificate https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb"
 alias repo "mkdir git/ dat/ doc/ doc/backups fig/ log/ ref/ src/ out/ aux/ lit/ www/ eml/ nul/; curl -o README.md --silent  https://gist.githubusercontent.com/chrishwiggins/e31c6d0129365d8100f20f97750f49b7/raw/7527ef00dde566c7cfe57d6bee6136482faa5330/repo-structure.md; curl -o doc/makefile  --silent  https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; curl -o doc/writeup.sed  https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb"
 alias g-writeup "mkdir writeup/ writeup/backups ;curl -o writeup/makefile  --silent  https://gist.githubusercontent.com/chrishwiggins/ccd26e1c07ccb20644c808c7e1aed376/raw/a7a0ebdaede5f9d19a82a2903b5e473b78cb4e60/makefile-2017-01-18c; curl -o writeup/writeup.sed  https://gist.githubusercontent.com/chrishwiggins/804c317cfde389bc16ba7b2bfa5a2126/raw/ee67df7025ae2cb15f0c8ec8c9f4c3889b9e87a8/a.rb;cd writeup"
-alias rewind "ls -t $ndir | xargs -I % more $ndir/%" 
+alias rewind "ls -t $ndir | xargs -I % more $ndir/%"
 alias http "open http://\!*"
 alias clean-browser 'open /Applications/Camino.app \!*'
 alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
@@ -162,7 +162,7 @@ alias tend "clear;date;qtend;cd ~;brew link openssl --force;  softwareupdate --a
 alias qtend "brew-tend;pip3-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias qqtend "q-brew-tend;pip-tend;brews;cabal-tend;gem-tend;gc-tend;mas upgrade"
 alias gc-tend "gcloud components update -q"
-# 2019-01-27 this needs sudo sadly: 
+# 2019-01-27 this needs sudo sadly:
 alias gem-tend "gem cleanup;gem update"
 alias sudo-gem-tend "sudo gem cleanup;sudo gem update"
 # ":" is read as "%" or "/" and is bad for makefile variables:
@@ -352,7 +352,7 @@ alias refine open /Applications/OpenRefine.app/
 # aliases for PPF class
 alias des "echo Alain Desrosières"
 alias pbdes "echo Desrosières|pbcopy"
-alias ppf-server open http://104.196.215.242:8000 
+alias ppf-server open http://104.196.215.242:8000
 alias ppf-server open http://data-ppf.dsi.columbia.edu:8000
 
 # misc google fu

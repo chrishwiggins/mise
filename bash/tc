@@ -146,7 +146,7 @@ case "$1" in
       echo "Usage: tc save <name> <r> <g> <b>" >&2
       exit 1
     fi
-    name="$2" r="$3" g="$4" b="$5"
+    name="$2" r="${3//,/}" g="${4//,/}" b="${5//,/}"
     cf=~/.tc-colors
     # Remove existing entry for this name, then append
     if [[ -f "$cf" ]]; then
@@ -177,7 +177,7 @@ print(colors[0]['name'] if colors else '')
   rgb)
     # tc rgb 255 128 0
     if [[ -n "$2" && -n "$3" && -n "$4" ]]; then
-      output_seq "$(make_seq "$2" "$3" "$4")"
+      output_seq "$(make_seq "${2//,/}" "${3//,/}" "${4//,/}")"
     else
       echo "Usage: tc rgb <r> <g> <b>  (0-255)" >&2
     fi

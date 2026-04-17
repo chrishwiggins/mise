@@ -119,10 +119,16 @@ C_HELP = 6
 def init_colors():
     curses.start_color()
     curses.use_default_colors()
-    curses.init_pair(C_HEADER, curses.COLOR_WHITE, curses.COLOR_BLUE)
-    curses.init_pair(C_STATUS, curses.COLOR_WHITE, curses.COLOR_BLUE)
-    curses.init_pair(C_HIGHLIGHT, curses.COLOR_WHITE, curses.COLOR_BLUE)
-    curses.init_pair(C_UNREAD, curses.COLOR_CYAN, -1)
+
+    # Use 256-color palette for dark navy blues if supported
+    # 18 is a dark navy blue, 21 is a brighter blue for unread
+    dark_blue = 18 if curses.COLORS >= 256 else curses.COLOR_BLUE
+    bright_blue = 21 if curses.COLORS >= 256 else curses.COLOR_BLUE
+
+    curses.init_pair(C_HEADER, curses.COLOR_WHITE, dark_blue)
+    curses.init_pair(C_STATUS, curses.COLOR_WHITE, dark_blue)
+    curses.init_pair(C_HIGHLIGHT, curses.COLOR_WHITE, dark_blue)
+    curses.init_pair(C_UNREAD, bright_blue, -1)
     curses.init_pair(C_DELETED, curses.COLOR_RED, -1)
     curses.init_pair(C_HELP, curses.COLOR_YELLOW, -1)
 
