@@ -61,7 +61,7 @@ set path = ( $path ~/google-cloud-sdk/bin )
 
 
 ## learn my aliases
-echo 'sourcing $paliases'
+echo "Sourcing $paliases"
 source $paliases
 
 # remap capslock to esc:
