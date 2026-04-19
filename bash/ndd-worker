@@ -1,0 +1,31 @@
+#!/bin/bash
+# ndd-worker: creates dir via ndir, saves clipboard, builds .claude_input
+# Outputs dir path for alias to capture (like ndir does)
+# Usage: ndd-worker <prompt words...>
+# All arguments are the Claude prompt. Directory title is auto-sanitized.
+
+prompt="$*"
+
+# Sanitize prompt for directory name (alphanumeric + hyphens, max 50 chars)
+if [ -n "$prompt" ]; then
+    sanitized=$(printf '%s' "$prompt" | tr -cs 'a-zA-Z0-9' '-' | cut -c1-50 | sed 's/^-//;s/-$//')
+    dirpath=$(ndir "$sanitized")
+else
+    dirpath=$(ndir)
+fi
+
+# Save clipboard
+pbpaste > "${dirpath}/paste.txt"
+
+# Build .claude_input (clipboard + optional prompt)
+if [ -n "$prompt" ]; then
+    { cat "${dirpath}/paste.txt"; printf '\n\n%s' "$prompt"; } > "${dirpath}/.claude_input"
+else
+    cp "${dirpath}/paste.txt" "${dirpath}/.claude_input"
+fi
+
+# Write path to temp file for tcsh alias (avoids backtick word-splitting)
+printf '%s' "$dirpath" > /tmp/.ndd_lastdir
+
+# Output dir path (like ndir does)
+echo "$dirpath"
