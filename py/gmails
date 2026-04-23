@@ -48,6 +48,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import random
 import webbrowser
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
@@ -57,6 +59,31 @@ from pathlib import Path
 
 from google_auth import get_credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+
+def _retry_api_call(func, max_retries=3, base_delay=1.0):
+    """Execute API call with exponential backoff on quota/rate limit errors."""
+    for attempt in range(max_retries + 1):
+        try:
+            return func()
+        except HttpError as e:
+            if e.resp.status in (403, 429, 500, 502, 503, 504):
+                if attempt == max_retries:
+                    print(f"API call failed after {max_retries + 1} attempts: {e}", file=sys.stderr)
+                    raise
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                print(f"API quota/rate limit hit, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries + 1})", file=sys.stderr)
+                time.sleep(delay)
+            else:
+                raise
+        except Exception as e:
+            if attempt == max_retries:
+                print(f"API call failed after {max_retries + 1} attempts: {e}", file=sys.stderr)
+                raise
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            print(f"API error, retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries + 1}): {e}", file=sys.stderr)
+            time.sleep(delay)
 
 
 # ---------------------------------------------------------------------------
@@ -868,7 +895,7 @@ def _resolve_message_id(service, index, count, query, account=None,
     return messages[index - 1]["id"]
 
 
-def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None, grab=False):
+def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None, grab=False, headers_only=False):
     """Download a message by its 1-based index."""
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
@@ -876,6 +903,21 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
         userId="me", id=msg_id, format="raw"
     ).execute()
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+
+    # -x flag: print essential headers only (no routing/authentication spam)
+    if headers_only:
+        try:
+            msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+            # Only the headers you actually care about
+            essential_headers = ["From", "To", "Cc", "Bcc", "Subject", "Date", "Message-ID"]
+            for header_name in essential_headers:
+                header_value = msg.get(header_name)
+                if header_value:
+                    print(f"{header_name}: {header_value}")
+        except Exception as e:
+            print(f"Error parsing headers: {e}", file=sys.stderr)
+            return
+        return
 
     # -t flag: extract and print text body (with HTML fallback)
     if text_view:
@@ -1660,6 +1702,7 @@ def parse_list_get_args(argv):
     parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
     parser.add_argument("-S", "--stdout", action="store_true", help="Write raw message to stdout (for piping)")
     parser.add_argument("-t", "--text", action="store_true", help="Print text body to stdout (inline view)")
+    parser.add_argument("-x", "--headers", action="store_true", help="Print email headers only (no body content)")
     parser.add_argument("-c", "--just-count", action="store_true", help="Print message count only (for scripting)")
     parser.add_argument("-Q", "--show-account", action="store_true", help="Show active account and exit")
     parser.add_argument("--draft", action="store_true", help="Save reply/fwd as draft instead of sending")
@@ -1733,6 +1776,7 @@ Download message(s):
   gmails 3 -S                           Raw message to stdout (for piping)
   gmails 3 -S | grep Subject            Pipe to other tools
   gmails 3 -t                           Print text body inline (quick read)
+  gmails 3 -x                           Print headers only (no messy body)
   gmails 3 -peek                        Save and copy "/peek {path}" to clipboard
   gmails -q "from:alice" 3 -peek        Works with any flag combo
 
@@ -1821,6 +1865,7 @@ Common options:
   -Q, --show-account    Show which account would be used, then exit
   -S, --stdout          Write raw message to stdout instead of saving to file
   -t, --text            Print text body inline (headers to stderr, body to stdout)
+  -x, --headers         Print email headers only (no body content)
   -p, -peek             Copy "/peek {path}" to clipboard after saving (for Claude Code)
   -c, --just-count      Print message count only (for scripting)
   --all                 Reply-all: include original To and Cc recipients
@@ -1875,29 +1920,62 @@ def parse_team_file(path):
 
     Looks for H2 headings as names and '- Email:' lines as addresses.
     Also catches bare email-shaped strings on any line as fallback.
+    Validates email format and provides clear error messages.
     """
     team = []
     current_name = None
     seen_emails = set()
     email_re = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+    errors = []
+    line_num = 0
+
+    def _validate_email(addr, line_num, context=""):
+        """Validate email address and return True if valid."""
+        if not addr:
+            errors.append(f"Line {line_num}: Empty email address{context}")
+            return False
+        if not re.match(r"^[\w.+-]+@[\w.-]+\.\w+$", addr):
+            errors.append(f"Line {line_num}: Invalid email format '{addr}'{context}")
+            return False
+        if "@" not in addr or addr.count("@") != 1:
+            errors.append(f"Line {line_num}: Email must contain exactly one '@' symbol '{addr}'{context}")
+            return False
+        local, domain = addr.split("@")
+        if not local or not domain:
+            errors.append(f"Line {line_num}: Email missing local part or domain '{addr}'{context}")
+            return False
+        if "." not in domain:
+            errors.append(f"Line {line_num}: Email domain must contain a dot '{addr}'{context}")
+            return False
+        return True
 
     with open(path) as f:
         for line in f:
+            line_num += 1
             line = line.strip()
             if line.startswith("## "):
                 current_name = line[3:].strip()
             elif line.lower().startswith("- email:"):
                 addr = line.split(":", 1)[1].strip()
-                if addr and addr.lower() not in seen_emails:
+                context = f" (under '{current_name}')" if current_name else ""
+                if _validate_email(addr, line_num, context) and addr.lower() not in seen_emails:
                     seen_emails.add(addr.lower())
                     team.append((current_name or addr.split("@")[0], addr))
             else:
                 # Fallback: bare email on any line
                 for m in email_re.finditer(line):
                     addr = m.group()
-                    if addr.lower() not in seen_emails:
+                    context = f" (under '{current_name}')" if current_name else ""
+                    if _validate_email(addr, line_num, context) and addr.lower() not in seen_emails:
                         seen_emails.add(addr.lower())
                         team.append((current_name or addr.split("@")[0], addr))
+
+    if errors:
+        print(f"Team file validation errors in {path}:", file=sys.stderr)
+        for error in errors:
+            print(f"  {error}", file=sys.stderr)
+        sys.exit(1)
+
     return team
 
 
@@ -1934,14 +2012,68 @@ def parse_inbox_args(argv):
     parser.add_argument("-F", "--config", default=None, help="Muttrc config for account isolation")
     parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
     parser.add_argument("-Q", "--show-account", action="store_true", help="Show active account and exit")
+    parser.add_argument("--resume", action="store_true", help="Resume interrupted download from checkpoint")
     return parser.parse_args(argv)
 
 
-def do_inbox(service, team, days, output_dir, dry_run=False, account=None):
+def _save_inbox_checkpoint(output_path, completed_gmail_ids, team, days):
+    """Save progress checkpoint for inbox download."""
+    checkpoint_file = output_path / ".inbox_checkpoint.json"
+    checkpoint = {
+        "completed_gmail_ids": list(completed_gmail_ids),
+        "team": team,
+        "days": days,
+        "timestamp": time.time()
+    }
+    with open(checkpoint_file, "w") as f:
+        json.dump(checkpoint, f)
+
+
+def _load_inbox_checkpoint(output_path):
+    """Load progress checkpoint for inbox download."""
+    checkpoint_file = output_path / ".inbox_checkpoint.json"
+    if not checkpoint_file.exists():
+        return None
+    try:
+        with open(checkpoint_file) as f:
+            checkpoint = json.load(f)
+        # Checkpoint expires after 24 hours
+        if time.time() - checkpoint["timestamp"] > 86400:
+            checkpoint_file.unlink()
+            return None
+        return checkpoint
+    except Exception:
+        # Invalid checkpoint, remove it
+        try:
+            checkpoint_file.unlink()
+        except Exception:
+            pass
+        return None
+
+
+def _cleanup_inbox_checkpoint(output_path):
+    """Remove checkpoint file after successful completion."""
+    checkpoint_file = output_path / ".inbox_checkpoint.json"
+    try:
+        checkpoint_file.unlink()
+    except Exception:
+        pass
+
+
+def do_inbox(service, team, days, output_dir, dry_run=False, account=None, resume=False):
     """Batch-fetch emails for team members. Returns manifest dict."""
     output_path = Path(output_dir)
     if not dry_run:
         output_path.mkdir(parents=True, exist_ok=True)
+
+    # Check for existing checkpoint
+    checkpoint = None
+    completed_gmail_ids = set()
+    if resume:
+        checkpoint = _load_inbox_checkpoint(output_path)
+        if checkpoint:
+            print(f"Resuming from checkpoint with {len(checkpoint['completed_gmail_ids'])} completed downloads", file=sys.stderr)
+            completed_gmail_ids = set(checkpoint['completed_gmail_ids'])
 
     # Collect existing Message-IDs for dedup
     existing_ids = _existing_message_ids(output_path)
@@ -1949,13 +2081,14 @@ def do_inbox(service, team, days, output_dir, dry_run=False, account=None):
 
     # Phase 1: Search for each team member, collect unique Gmail message IDs
     all_gmail_ids = {}  # gmail_id -> {metadata, team_members: []}
-    for name, addr in team:
-        query = f"(from:{addr} OR to:{addr}) newer_than:{days}d"
-        print(f"Searching: {name} <{addr}> ...", file=sys.stderr, end=" ")
+    total_members = len(team)
+    for member_idx, (name, addr) in enumerate(team, 1):
+        query = f"(from:{addr} OR to:{addr}) newer_than:{days}d -from:chris.wiggins@gmail.com -from:chris.wiggins.code@gmail.com"
+        print(f"[{member_idx}/{total_members}] Searching: {name} <{addr}> ...", file=sys.stderr, end=" ")
         try:
-            result = service.users().messages().list(
+            result = _retry_api_call(lambda: service.users().messages().list(
                 userId="me", maxResults=100, q=query
-            ).execute()
+            ).execute())
         except Exception as e:
             print(f"error: {e}", file=sys.stderr)
             continue
@@ -1988,7 +2121,9 @@ def do_inbox(service, team, days, output_dir, dry_run=False, account=None):
         return _cb
 
     # Batch in chunks of 100 (Gmail API limit)
-    for chunk_start in range(0, len(gmail_ids), 100):
+    total_chunks = (len(gmail_ids) + 99) // 100  # ceiling division
+    for chunk_idx, chunk_start in enumerate(range(0, len(gmail_ids), 100), 1):
+        print(f"Fetching metadata batch {chunk_idx}/{total_chunks} ({chunk_start + 1}-{min(chunk_start + 100, len(gmail_ids))} of {len(gmail_ids)})", file=sys.stderr)
         batch = service.new_batch_http_request()
         chunk = gmail_ids[chunk_start:chunk_start + 100]
         for i, gid in enumerate(chunk):
@@ -1999,7 +2134,7 @@ def do_inbox(service, team, days, output_dir, dry_run=False, account=None):
                 ),
                 callback=_make_cb(chunk_start + i),
             )
-        batch.execute()
+        _retry_api_call(lambda: batch.execute())
 
     # Phase 3: Filter out already-downloaded messages, build manifest
     manifest_messages = []
@@ -2062,23 +2197,41 @@ def do_inbox(service, team, days, output_dir, dry_run=False, account=None):
         return manifest
 
     # Phase 4: Download new messages
-    for entry in manifest_messages:
+    total_downloads = len(manifest_messages)
+    for download_idx, entry in enumerate(manifest_messages, 1):
         gid = entry["gmail_id"]
+
+        # Skip if already completed in previous run
+        if gid in completed_gmail_ids:
+            print(f"  [{download_idx}/{total_downloads}] Skipping completed: {entry['subject'][:50]}...", file=sys.stderr)
+            entry["path"] = "(already downloaded)"
+            continue
+
         try:
-            raw_msg = service.users().messages().get(
+            raw_msg = _retry_api_call(lambda: service.users().messages().get(
                 userId="me", id=gid, format="raw"
-            ).execute()
+            ).execute())
             raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
             fname = generate_filename(raw_bytes)
             out_file = versioned_path(output_path / fname)
             out_file.write_bytes(raw_bytes)
             entry["path"] = str(out_file)
             save_attachments(raw_bytes, output_path)
-            print(f"  Saved: {out_file}", file=sys.stderr)
+            completed_gmail_ids.add(gid)
+
+            # Save checkpoint every 5 downloads
+            if download_idx % 5 == 0:
+                _save_inbox_checkpoint(output_path, completed_gmail_ids, team, days)
+
+            print(f"  [{download_idx}/{total_downloads}] Saved: {out_file}", file=sys.stderr)
         except Exception as e:
             entry["path"] = None
             entry["error"] = str(e)
             print(f"  Error downloading {entry['subject']}: {e}", file=sys.stderr)
+
+    # Clean up checkpoint on successful completion
+    if not dry_run:
+        _cleanup_inbox_checkpoint(output_path)
 
     manifest = {
         "fetched": sum(1 for m in manifest_messages if m.get("path")),
@@ -2304,7 +2457,7 @@ def main():
                                 token_name=token_name, login_hint=login_hint)
         service = build("gmail", "v1", credentials=creds)
         do_inbox(service, team, args.days, args.output, dry_run=args.dry_run,
-                 account=login_hint)
+                 account=login_hint, resume=args.resume)
     elif mode in ("trash", "archive", "open", "thread", "read", "unread"):
         mode_rest = [a for a in rest if a != mode]
         indices, filtered_rest = collect_indices(mode_rest)
@@ -2384,7 +2537,8 @@ def main():
             for idx in indices:
                 result = do_get(service, idx, args.count, query, args.output,
                                 stdout=args.stdout, text_view=args.text,
-                                account=login_hint, grab=grab_mode)
+                                account=login_hint, grab=grab_mode,
+                                headers_only=args.headers)
                 if result:
                     peek_paths.append(result)
             if peek_paths:
