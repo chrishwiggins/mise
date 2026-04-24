@@ -141,12 +141,28 @@ case "$1" in
     ;;
 
   set)
-    # tc save puke 142 58 203
-    if [[ -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
-      echo "Usage: tc save <name> <r> <g> <b>" >&2
+    # tc set puke 142 58 203  OR  tc set puke 142,58,203  OR  tc set puke "142, 58, 203"
+    if [[ -z "$2" ]]; then
+      echo "Usage: tc set <name> <r> <g> <b>" >&2
       exit 1
     fi
-    name="$2" r="${3//,/}" g="${4//,/}" b="${5//,/}"
+    name="$2"
+    shift 2  # Remove 'set' and name, leaving color values
+
+    # Join all remaining args and parse as comma/space separated values
+    color_str="$*"
+    # Replace commas with spaces, then normalize multiple spaces
+    color_str=$(echo "$color_str" | tr ',' ' ' | tr -s ' ')
+    # Extract first 3 numbers
+    read -r r g b <<< "$color_str"
+
+    if [[ -z "$r" || -z "$g" || -z "$b" ]]; then
+      echo "Usage: tc set <name> <r> <g> <b>" >&2
+      echo "Examples: tc set mycolor 177 109 82" >&2
+      echo "          tc set mycolor 177,109,82" >&2
+      echo "          tc set mycolor \"177, 109, 82\"" >&2
+      exit 1
+    fi
     cf=~/.tc-colors
     # Remove existing entry for this name, then append
     if [[ -f "$cf" ]]; then
@@ -175,11 +191,21 @@ print(colors[0]['name'] if colors else '')
     ;;
 
   rgb)
-    # tc rgb 255 128 0
-    if [[ -n "$2" && -n "$3" && -n "$4" ]]; then
-      output_seq "$(make_seq "${2//,/}" "${3//,/}" "${4//,/}")"
+    # tc rgb 255 128 0  OR  tc rgb 255,128,0  OR  tc rgb "255, 128, 0"
+    shift  # Remove 'rgb'
+    color_str="$*"
+    # Replace commas with spaces, then normalize multiple spaces
+    color_str=$(echo "$color_str" | tr ',' ' ' | tr -s ' ')
+    # Extract first 3 numbers
+    read -r r g b <<< "$color_str"
+
+    if [[ -n "$r" && -n "$g" && -n "$b" ]]; then
+      output_seq "$(make_seq "$r" "$g" "$b")"
     else
       echo "Usage: tc rgb <r> <g> <b>  (0-255)" >&2
+      echo "Examples: tc rgb 255 128 0" >&2
+      echo "          tc rgb 255,128,0" >&2
+      echo "          tc rgb \"255, 128, 0\"" >&2
     fi
     ;;
 
