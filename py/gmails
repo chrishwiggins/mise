@@ -396,6 +396,12 @@ def _cache_path(account=None):
     return CACHE_DIR / f".gmails-last-list-{slug}.json"
 
 
+def _listing_cache_path(account=None):
+    """Return per-account rendered-listing cache (text)."""
+    slug = (account or "default").replace("@", "-at-").replace(".", "-")
+    return CACHE_DIR / f".gmails-last-listing-{slug}.txt"
+
+
 
 def _cache_message_ids(messages, count, query, account=None):
     """Save message list to per-account cache for !! workflow safety."""
@@ -806,10 +812,17 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
         keywords = _summarize_snippets(raw_snippets)
         print("                  ", file=sys.stderr, end="\r")
 
+    # Tee printed output to a buffer so we can cache the rendered listing.
+    # Only the default inbox shape is cached (see condition below).
+    cache_buf = []
+    def emit(line=""):
+        print(line)
+        cache_buf.append(line)
+
     unread_count = 0
     for i, msg in enumerate(fetched, 1):
         if msg is None:
-            print(f"{i:>{idx_width}}.  (fetch error)")
+            emit(f"{i:>{idx_width}}.  (fetch error)")
             continue
 
         headers = msg.get("payload", {}).get("headers", [])
@@ -829,21 +842,41 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
             subject = subject[: subj_width - 1] + "\u2026"
 
         marker = "*" if unread else " "
-        print(f"{i:>{idx_width}}.{marker}{date_str}  {person:<{from_width}}  {subject}")
+        emit(f"{i:>{idx_width}}.{marker}{date_str}  {person:<{from_width}}  {subject}")
 
         if summary and keywords and i in keywords:
-            print(f"{'':{idx_width + 3}}{keywords[i]}")
+            emit(f"{'':{idx_width + 3}}{keywords[i]}")
         elif verbose:
             snippet = html_mod.unescape(msg.get("snippet", ""))
             if snippet:
                 snippet_width = term_width - idx_width - 3
                 if len(snippet) > snippet_width:
                     snippet = snippet[: snippet_width - 3] + "..."
-                print(f"{'':{idx_width + 3}}{snippet}")
+                emit(f"{'':{idx_width + 3}}{snippet}")
 
-    # Enhancement 5: summary line
+    # Enhancement 5: summary line (stderr; not cached so warm replays don't lie)
     if unread_count:
         print(f"  ({unread_count} unread / {len(messages)} shown)", file=sys.stderr)
+
+    # Cache the rendered listing for the default inbox shape only.
+    # m's bash dispatcher reads this and skips the round-trip when fresh.
+    is_default_shape = (
+        not sent
+        and not verbose
+        and not summary
+        and not json_output
+        and count == 20
+        and (query is None or query == "in:inbox")
+    )
+    if is_default_shape:
+        try:
+            CACHE_DIR.mkdir(exist_ok=True)
+            path = _listing_cache_path(account)
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text("\n".join(cache_buf) + ("\n" if cache_buf else ""))
+            os.replace(tmp, path)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -1188,6 +1221,8 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
     orig_subject = orig.get("Subject", "")
     orig_from = orig.get("From", "")
     orig_date = orig.get("Date", "")
+    orig_to = orig.get("To", "")
+    orig_cc = orig.get("Cc", "")
     orig_msg_id = orig.get("Message-ID", "")
 
     # -t flag: show message text inline and exit (recipient not required)
@@ -1203,7 +1238,13 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
 
     # Extract original text body for inline quote
     orig_body = extract_text_body(raw_bytes)
-    fwd_header = f"---------- Forwarded message ----------\nFrom: {orig_from}\nDate: {orig_date}\nSubject: {orig_subject}\n\n"
+    # Include original To and Cc in forward headers for complete context
+    fwd_header = f"---------- Forwarded message ----------\nFrom: {orig_from}\n"
+    if orig_to:
+        fwd_header += f"To: {orig_to}\n"
+    if orig_cc:
+        fwd_header += f"Cc: {orig_cc}\n"
+    fwd_header += f"Date: {orig_date}\nSubject: {orig_subject}\n\n"
     template = f"\n\n{fwd_header}{orig_body}\n"
     fwd_cc = ""
 
