@@ -1,0 +1,14 @@
+#!/bin/bash
+# clean-shell: Start a clean tcsh session without startup messages
+
+# Temporarily disable startup verbosity
+export QUIET_STARTUP=1
+export M_LIST_CACHE_TTL=0  # Disable caching for cleaner output
+
+exec tcsh -c "
+    # Quick, silent setup
+    setenv QUIET_STARTUP 1
+    source ~/.tcshrc > /dev/null 2>&1
+    unsetenv QUIET_STARTUP
+    exec tcsh
+"

@@ -1,5 +1,11 @@
 # SET VARIABLES
 
+# Quick exit if in quiet startup mode
+if ( $?QUIET_STARTUP ) then
+    # Skip verbose startup messages when sourced during login
+    goto skip_verbose_startup
+endif
+
 ## DIRECTORIES
 set cwhome=$home
 set mise=$cwhome/mise/
@@ -560,3 +566,6 @@ alias hideme-stop 'scutil --nc stop "hide.me VPN (Wireguard)"'
 alias hideme-status 'scutil --nc status "hide.me VPN (Wireguard)"'
 alias hideme-check 'scutil --nc status "hide.me VPN (Wireguard)" | head -1'
 alias claw 'ssh -i ~/.ssh/google_compute_engine root@23.95.164.201'
+
+# End of aliases - quiet startup skip point
+skip_verbose_startup:
