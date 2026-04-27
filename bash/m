@@ -1455,12 +1455,22 @@ case "$action" in
             send_args=()
             i=0
 
-            for arg in "${rest[@]+"${rest[@]}"}"; do
+            # Smart argument reordering: if we find "recipient -s subject", reorder to "-s subject recipient"
+            reordered_args=()
+            skip_next=0
+
+            for ((i=0; i<${#rest[@]}; i++)); do
+                if (( skip_next )); then
+                    skip_next=0
+                    continue
+                fi
+
+                arg="${rest[i]}"
                 case "$arg" in
                     -T|--template)
                         if [[ $((i+1)) -lt ${#rest[@]} ]]; then
                             use_template="${rest[$((i+1))]}"
-                            ((i++))  # Skip template name
+                            skip_next=1
                         else
                             echo "m: -T requires template name" >&2
                             exit 1
@@ -1471,19 +1481,39 @@ case "$action" in
                         template_vars+=("$arg")
                         ;;
                     --*)
-                        # Template variable (--var value)
-                        template_vars+=("$arg")
-                        if [[ $((i+1)) -lt ${#rest[@]} ]] && [[ "${rest[$((i+1))]}" != -* ]]; then
-                            ((i++))
-                            template_vars+=("${rest[$i]}")
+                        # Template variable (--var value) or other flags
+                        if [[ "$arg" == "-s" ]] && [[ $((i+1)) -lt ${#rest[@]} ]]; then
+                            # -s subject flag - always include with subject
+                            reordered_args+=("$arg" "${rest[$((i+1))]}")
+                            skip_next=1
+                        else
+                            template_vars+=("$arg")
+                            if [[ $((i+1)) -lt ${#rest[@]} ]] && [[ "${rest[$((i+1))]}" != -* ]]; then
+                                template_vars+=("${rest[$((i+1))]}")
+                                skip_next=1
+                            fi
                         fi
                         ;;
                     *)
-                        send_args+=("$arg")
+                        # Check if this looks like an email address and next arg is -s
+                        if [[ "$arg" =~ @.*\. ]] && [[ $((i+1)) -lt ${#rest[@]} ]] && [[ "${rest[$((i+1))]}" == "-s" ]]; then
+                            # Found "recipient -s subject" pattern - reorder to put -s first
+                            if [[ $((i+2)) -lt ${#rest[@]} ]]; then
+                                reordered_args+=("-s" "${rest[$((i+2))]}" "$arg")
+                                i=$((i+2))  # Skip the -s and subject
+                            else
+                                # -s without subject, let send handle the error
+                                reordered_args+=("$arg" "-s")
+                                i=$((i+1))
+                            fi
+                        else
+                            reordered_args+=("$arg")
+                        fi
                         ;;
                 esac
-                ((i++))
             done
+
+            send_args=("${reordered_args[@]}")
 
             if [[ -n "$use_template" ]]; then
                 echo "m: composing from template '$use_template'" >&2
