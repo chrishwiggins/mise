@@ -1167,8 +1167,9 @@ case "$action" in
         # Check if last arg is a number or range (message index/range)
         if [[ ${#query_args[@]} -gt 0 ]]; then
             last_arg="${query_args[-1]}"
-            if [[ "$last_arg" =~ ^[0-9]+$ ]]; then
-                # Last arg is a single number - treat as message index
+            if [[ "$last_arg" =~ ^[0-9]+$ ]] && [[ $last_arg -le 9999 ]]; then
+                # Last arg is a reasonable message index (≤9999) - treat as message index
+                # Large numbers like Gmail message IDs should be treated as search terms
                 msg_index="$last_arg"
                 unset 'query_args[-1]'  # Remove the number from query
             elif [[ "$last_arg" =~ ^[0-9]+-[0-9]+$ ]]; then
