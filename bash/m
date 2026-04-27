@@ -940,7 +940,7 @@ case "$action" in
                 [[ "$arg" =~ ^- ]] && continue
                 # Check if arg looks like an invalid message index (contains letters)
                 if [[ "$arg" =~ [a-zA-Z] ]] && ! [[ "$arg" =~ ^[0-9,-]+$ ]]; then
-                    echo "m: '$arg' is not a valid message index. Did you mean 'm q $arg' (search)?" >&2
+                    echo "⚠️  m: '$arg' is not a valid message index. Did you mean 'm q $arg' (search)?" >&2
                     exit 1
                 fi
             done
