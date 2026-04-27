@@ -1476,6 +1476,11 @@ case "$action" in
                             exit 1
                         fi
                         ;;
+                    -d|--done)
+                        # -d done flag: send email then copy "/peek {sent-file}" to clipboard
+                        # This enables quick workflow: send, then immediately review what was sent
+                        reordered_args+=("$arg")
+                        ;;
                     --*=*)
                         # Template variable (--var=value)
                         template_vars+=("$arg")
@@ -1486,6 +1491,9 @@ case "$action" in
                             # -s subject flag - always include with subject
                             reordered_args+=("$arg" "${rest[$((i+1))]}")
                             skip_next=1
+                        elif [[ "$arg" == "-d" || "$arg" == "--done" ]]; then
+                            # -d done flag - pass through to send script (copy peek command to clipboard)
+                            reordered_args+=("$arg")
                         else
                             template_vars+=("$arg")
                             if [[ $((i+1)) -lt ${#rest[@]} ]] && [[ "${rest[$((i+1))]}" != -* ]]; then
