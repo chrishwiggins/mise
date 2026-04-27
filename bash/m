@@ -1,0 +1,1659 @@
+#!/opt/homebrew/bin/bash
+
+# ============================================================================
+# m - Multi-Account Email Dispatcher
+# ============================================================================
+#
+# ARCHITECTURAL OVERVIEW FOR FUTURE CLAUDE INSTANCES:
+#
+# This is the central dispatcher for a multi-account email system. It provides
+# a unified interface across 6+ email accounts while routing to appropriate
+# backends (Gmail API vs SMTP) based on account configuration.
+#
+# KEY DESIGN PRINCIPLES:
+# 1. **Account Abstraction**: Users think in account letters (g,j,u,l,h,n,z)
+#    not email addresses. This script maps letters to emails via JSON config.
+# 2. **Transport Agnostic**: Automatically routes to Gmail API or SMTP based
+#    on account config (muttrc: "/dev/null" = API, real path = SMTP)
+# 3. **Mode Consistency**: All actions support -save/-v/default(more) modes
+# 4. **Web/CLI Duality**: Every action works in both web browser and CLI
+# 5. **PII-Free**: No hardcoded email addresses; all config external
+#
+# CRITICAL EXTERNAL DEPENDENCIES:
+# - ~/.config/mail-tools/accounts.json (account config, created by setup)
+# - gmails / gmail-api-rw (Gmail API client, handles OAuth, caching, etc)
+# - gmail-smtp-w / mutt wrapper (SMTP sending for non-API accounts)
+# - send script (smart routing layer that chooses API vs SMTP per account)
+#
+# DATA FLOW ARCHITECTURE:
+#   User Input → Argument Parser → Account Resolution → Action Router
+#       ↓
+#   [WEB PATH]           [CLI PATH]
+#   gmail_web browser ←→ gmails/gmail-api-rw (with caching)
+#       ↓                    ↓
+#   Gmail Web UI        Local .eml files + more pager
+#
+# ARGUMENT PARSING STRATEGY:
+# The parser is designed for email workflow ergonomics:
+# - Position-independent: "m j i" = "m i j" (account + action in any order)
+# - Smart defaults: "m" = "m i g" (inbox, default account)
+# - Query shortcuts: "m -q term" = "m q -q term" (search syntax sugar)
+# - Action chaining: "m -q term reply" = search then reply to msg #1
+#
+# ACCOUNT CONFIGURATION SYSTEM:
+# Accounts map single letters to full email configs:
+# {
+#   "accounts": {
+#     "g": {"email": "user@gmail.com", "muttrc": "/path/to/muttrc"},
+#     "u": {"email": "user@columbia.edu", "muttrc": "/dev/null"}  ← API-only
+#   },
+#   "default_account": "g"
+# }
+#
+# CACHING AND PERFORMANCE:
+# - gmails has 30s TTL cache for message listings (prevents API thrashing)
+# - Cache files in /tmp/spool/*.txt keyed by account email slug
+# - Cache bypass via -N flag for force refresh
+#
+# ERROR HANDLING PHILOSOPHY:
+# - Fast-fail validation: catch obvious user errors before calling gmails
+# - Health check integration: m-doctor provides recovery suggestions
+# - Graceful degradation: CLI fallbacks when web fails, etc.
+# - User-friendly messages: "Did you mean 'm q term'?" not raw errors
+#
+# SECURITY MODEL:
+# - No PII in code: all emails/names in external config only
+# - OAuth tokens managed by gmails, not exposed here
+# - Web URLs use authuser= param for multi-account Google switching
+#
+# Usage: m [action] [account] [-w] [extra args...]
+#
+# Core Actions:
+#   i (inbox)     List recent messages (default action)
+#   sent          List sent messages
+#   q (search)    Search messages with query
+#   d (drafts)    List draft messages
+#   x (spam)      List spam messages
+#   send/c        Compose and send (routes through 'send' script)
+#   urls          Extract/open URLs from messages
+#
+# Interactive Actions (pass-through to gmails):
+#   reply, reply-all, fwd, draft, open, trash, archive
+#   These default to message #1 if no number specified
+#
+# Accounts (configured in ~/.config/mail-tools/accounts.json):
+#   Mapped dynamically from config - no hardcoded emails
+#
+# Modes:
+#   -w/--web      Force web interface (opens Gmail in browser)
+#   -save         Download message to .eml file
+#   -v            Show full content without paging
+#   (default)     Display with 'more' pager
+#
+# Examples:
+#   m                          Default account inbox, CLI
+#   m u                        Columbia account inbox
+#   m -q Ahmad reply           Search "Ahmad", reply to first result
+#   m sent 4                   Read sent message #4 (with paging)
+#   m sent 4 -save             Download sent message #4 to file
+#   m j urls 3                 Read msg #3 from joint account, extract URLs
+#   m j 1 -save                save message #1 to file without displaying
+#   m sent l                   lake sent, CLI
+#   m q g "from:alice"         search gmail, CLI
+#   m q g "from:alice" 2       read message #2 with more paging (NEW DEFAULT)
+#   m q g "from:alice" 2 -save save message #2 to file without displaying
+#   m q g "from:alice" 2 -v    show message #2 full content without paging
+#   m send u file.eml          send from columbia (routes via send script)
+#   m send l -s "hi" user@x    compose and send from lake
+#   m reply g 3                reply to msg #3 on gmail
+#   m c h                      compose on hackny
+#   m -w                       gmail inbox, web
+#   m ?                        show this help
+#
+# Reading routes to gmails; sending routes to send; web routes to gmail_web.
+
+set -euo pipefail
+
+# Load user configuration if available
+if [[ -f "$HOME/.config/m/config" ]]; then
+    source "$HOME/.config/m/config"
+elif [[ -f "$(dirname "$0")/m-config.bash" ]]; then
+    source "$(dirname "$0")/m-config.bash"
+fi
+
+# Validate configuration
+if [[ -n "${M_DEFAULT_ACCOUNT:-}" ]]; then
+    case "${M_DEFAULT_ACCOUNT}" in
+        g|j|u|l|h|n|z) ;;
+        *)
+            echo "m: invalid M_DEFAULT_ACCOUNT='${M_DEFAULT_ACCOUNT}'. Valid: g,j,u,l,h,n,z" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+if [[ "${M_RANGE_WARNING_LIMIT:-50}" -lt 1 ]]; then
+    echo "m: M_RANGE_WARNING_LIMIT must be positive, got '${M_RANGE_WARNING_LIMIT}'" >&2
+    exit 1
+fi
+
+if [[ "${M_RANGE_HARD_LIMIT:-100}" -lt "${M_RANGE_WARNING_LIMIT:-50}" ]]; then
+    echo "m: M_RANGE_HARD_LIMIT (${M_RANGE_HARD_LIMIT}) must be >= M_RANGE_WARNING_LIMIT (${M_RANGE_WARNING_LIMIT})" >&2
+    exit 1
+fi
+
+if [[ "${M_QUIET_MODE:-0}" != "0" && "${M_QUIET_MODE:-0}" != "1" ]]; then
+    echo "m: M_QUIET_MODE must be 0 or 1, got '${M_QUIET_MODE}'" >&2
+    exit 1
+fi
+
+# Check for completion availability (only in interactive shells)
+if [[ $- == *i* ]] && [[ ${M_QUIET_MODE:-0} -eq 0 ]]; then
+    if ! complete -p m &>/dev/null && [[ -f "$(dirname "$0")/m-completion.bash" ]]; then
+        if [[ ${M_COMPLETION_HINT_SHOWN:-0} -eq 0 ]]; then
+            echo "Hint: Enable tab completion with: source $(dirname "$0")/m-completion.bash" >&2
+            export M_COMPLETION_HINT_SHOWN=1
+        fi
+    fi
+fi
+
+# Logging functions for user feedback
+log_warn() { echo -e "\033[0;33m⚠️\033[0m $*" >&2; }
+log_ok() { echo -e "\033[0;32m✅\033[0m $*" >&2; }
+log_error() { echo -e "\033[0;31m❌\033[0m $*" >&2; }
+log_info() { echo -e "\033[0;34mℹ\033[0m $*" >&2; }
+
+# Millisecond epoch helper: BSD date on macOS has no %N, so use gdate if present.
+# Falls back to seconds*1000, which is fine for coarse timing.
+_ms_epoch() {
+    if command -v gdate >/dev/null 2>&1; then
+        gdate +%s%3N
+    else
+        echo $(( $(date +%s) * 1000 ))
+    fi
+}
+
+# Analytics logging function
+log_command() {
+    # Only log if analytics is available and enabled
+    if command -v m-analytics >/dev/null 2>&1; then
+        local start_time="${M_COMMAND_START:-$(_ms_epoch)}"
+        local end_time=$(_ms_epoch)
+        local duration=$((end_time - start_time))
+        local full_cmd="m $*"
+
+        # Log in background to avoid slowing down the command
+        (m-analytics log "$full_cmd" "$duration" &) 2>/dev/null || true
+    fi
+}
+
+# Record command start time for performance tracking
+M_COMMAND_START=$(_ms_epoch)
+
+# Health check and recovery suggestions
+check_health_and_suggest_fixes() {
+    local operation="$1"
+    local exit_code="${2:-1}"
+
+    # Only run health checks if tools are available
+    if ! command -v m-doctor >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Quick health check for common issues
+    log_warn "$operation failed, checking system health..."
+
+    # Run quick diagnostic
+    if ! m-doctor --quick >/dev/null 2>&1; then
+        log_info "Health issues detected. Suggested fixes:"
+
+        # Check for specific common problems
+        local retry_state="$HOME/.cache/m/retry-state.json"
+        if [[ -f "$retry_state" ]]; then
+            local cb_state=$(jq -r '.circuit_breaker.state // "closed"' "$retry_state" 2>/dev/null || echo "closed")
+            if [[ "$cb_state" == "open" ]]; then
+                echo "  • Circuit breaker is open - run: m-reset circuit-breaker"
+            fi
+        fi
+
+        # Check authentication
+        if ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
+            echo "  • Authentication expired - run: gcloud auth application-default login"
+        fi
+
+        # Check network connectivity
+        if ! curl -s --max-time 3 "https://gmail.googleapis.com/" >/dev/null 2>&1; then
+            echo "  • Network/API issues - check connection or try: m-fallback check"
+        fi
+
+        echo
+        log_info "For complete diagnostics run: m-doctor"
+        log_info "For automatic fixes run: m-doctor --fix"
+    fi
+}
+
+# Smart send function with queue fallback
+smart_send() {
+    local send_args=("$@")
+
+    # Try to send normally first
+    if send "${send_args[@]}"; then
+        # Success - no queueing needed
+        return 0
+    else
+        local send_exit=$?
+
+        # Check if queue system is available
+        if command -v m-queue >/dev/null 2>&1; then
+            log_warn "Send failed, attempting to queue message for later delivery"
+
+            # Extract recipient and subject from args for queueing
+            local recipient=""
+            local subject=""
+            local email_file=""
+            local body=""
+            local account="${account:-g}"
+
+            # Parse send arguments
+            local i=0
+            while [[ $i -lt ${#send_args[@]} ]]; do
+                case "${send_args[$i]}" in
+                    -e)
+                        # Skip gmails flag
+                        i=$((i + 2))
+                        ;;
+                    -s)
+                        # Subject flag
+                        i=$((i + 1))
+                        if [[ $i -lt ${#send_args[@]} ]]; then
+                            subject="${send_args[$i]}"
+                            i=$((i + 1))
+                        fi
+                        ;;
+                    -H)
+                        # Email file flag
+                        i=$((i + 1))
+                        if [[ $i -lt ${#send_args[@]} ]]; then
+                            email_file="${send_args[$i]}"
+                            i=$((i + 1))
+                        fi
+                        ;;
+                    -*)
+                        # Skip other flags
+                        i=$((i + 1))
+                        ;;
+                    *)
+                        # First non-flag argument is usually the recipient
+                        if [[ -z "$recipient" ]]; then
+                            recipient="${send_args[$i]}"
+                        elif [[ -z "$body" ]]; then
+                            body="${send_args[$i]}"
+                        fi
+                        i=$((i + 1))
+                        ;;
+                esac
+            done
+
+            # Queue the message
+            if [[ -n "$email_file" ]]; then
+                # Queue from email file
+                if m-queue add "$email_file" --account "$account"; then
+                    log_ok "Message queued for delivery when network/API is available"
+                    log_info "Check queue status with: m-queue status"
+                    return 0
+                fi
+            elif [[ -n "$recipient" ]]; then
+                # Queue constructed message
+                local queue_subject="${subject:-"(No subject)"}"
+                local queue_body="${body:-"(No body)"}"
+
+                if m-queue send "$recipient" "$queue_subject" "$queue_body" --account "$account"; then
+                    log_ok "Message queued for delivery when network/API is available"
+                    log_info "Check queue status with: m-queue status"
+                    return 0
+                fi
+            fi
+
+            log_error "Send failed and could not queue message"
+        else
+            log_error "Send failed and queue system not available"
+        fi
+
+        # Run health diagnostics to suggest fixes
+        check_health_and_suggest_fixes "send" $send_exit
+
+        return $send_exit
+    fi
+}
+
+# --- accounts table: slug -> gmails_flag:chrome_profile ---
+# gmails_flag empty = default account; "!" = web-only (no CLI)
+declare -A ACCTS=()
+
+# ============================================================================
+# ACCOUNT CONFIGURATION SYSTEM
+# ============================================================================
+#
+# CONFIGURATION ARCHITECTURE FOR FUTURE CLAUDE INSTANCES:
+#
+# This system loads account mappings from external JSON config to keep PII
+# out of the codebase. The config supports:
+#
+# 1. **Multi-format Support**: JSON (preferred) + legacy format compatibility
+# 2. **Account Mapping**: Single letters (g,j,u) → full email addresses
+# 3. **Transport Routing**: muttrc paths determine API vs SMTP routing
+# 4. **Chrome Profiles**: Multi-account browser session management
+# 5. **Web Integration**: authuser params for Gmail web interface
+#
+# CRITICAL DATA STRUCTURES POPULATED:
+# - EMAILS[]: Maps account letter to email address (g → chris.wiggins@gmail.com)
+# - ACCTS[]: Maps account letter to gmails flags (g → ":Default", u → "cu:CU")
+#
+# CONFIGURATION FILE FORMAT (~/.config/mail-tools/accounts.json):
+# {
+#   "accounts": {
+#     "g": {
+#       "email": "user@gmail.com",
+#       "muttrc": "/path/to/muttrc",
+#       "chrome_profile": "Default"
+#     },
+#     "u": {
+#       "email": "user@university.edu",
+#       "muttrc": "/dev/null",    ← Signals API-only account
+#       "chrome_profile": "Work"
+#     }
+#   },
+#   "default_account": "g"
+# }
+#
+# WHY THIS DESIGN:
+# - PII Isolation: Email addresses only in config files, never in code
+# - Transport Abstraction: muttrc path determines routing without hardcoding
+# - Profile Management: Chrome profiles enable clean multi-account switching
+# - Scalability: Easy to add new accounts without code changes
+#
+# Function to load account configuration from external files
+load_mail_config() {
+    local config_file="${MAIL_TOOLS_CONFIG:-$HOME/.config/mail-tools/accounts.json}"
+    local legacy_file="$HOME/.config/gmails/accounts"
+
+    # Try new JSON config first
+    if [[ -f "$config_file" ]] && command -v jq >/dev/null 2>&1; then
+        local accounts
+        accounts=$(jq -r '.accounts | to_entries[] | "\(.key)|\(.value.email)|\(.value.chrome_profile)"' "$config_file" 2>/dev/null)
+        if [[ -n "$accounts" ]]; then
+            while IFS='|' read -r alias email chrome_profile; do
+                EMAILS["$alias"]="$email"
+                # Format chrome_profile for ACCTS (gmails_flag:chrome_profile)
+                if [[ "$alias" == "g" ]]; then
+                    ACCTS["$alias"]=":$chrome_profile"
+                else
+                    # Extract short name for gmails_flag from email domain or alias
+                    local short_name
+                    case "$alias" in
+                        j) short_name="joint" ;;
+                        u) short_name="cu" ;;
+                        l) short_name="lake" ;;
+                        h) short_name="hNY" ;;
+                        n) short_name="!" ;;
+                        z) short_name="z" ;;
+                        *) short_name="$alias" ;;
+                    esac
+                    ACCTS["$alias"]="$short_name:$chrome_profile"
+                fi
+            done <<< "$accounts"
+            return 0
+        fi
+    fi
+
+    # ERROR: Configuration required - no hardcoded fallback for PII-free operation
+    echo "m: ERROR - No email configuration found!" >&2
+    echo "m: Please create ~/.config/mail-tools/accounts.json or ~/.config/gmails/accounts" >&2
+    echo "m: See SETUP.md for configuration instructions" >&2
+    exit 1
+}
+
+# Initialize configuration
+declare -A EMAILS=()
+load_mail_config
+
+ACTIONS_SHORT="i sent q d x urls"
+ACTIONS_SEND="send c"
+ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive thread read unread sfwd sreply sreply-all"
+
+usage() {
+    local topic="${1:-basic}"
+
+    case "$topic" in
+        basic|"")
+            cat <<'EOF'
+m - unified mail dispatcher
+
+USAGE
+    m [action] [account] [flags] [args...]
+    m --help=TOPIC    Show detailed help for specific topic
+
+BASIC ACTIONS
+    m                 Gmail inbox (default)
+    m sent            Sent messages
+    m u               Columbia inbox
+    m q "from:alice"  Search messages
+    m reply 3         Reply to message #3
+    m fwd 3 user@ex   Forward message #3
+
+FLAGS
+    -w, --web         Force browser instead of CLI
+    -N, --no-cache    Bypass listing cache; force fresh fetch
+    --quiet           Suppress progress messages
+    --dry-run         Preview destructive actions
+    -h, --help        This help
+
+NOTE: -q is used for search queries, not --quiet (use full --quiet)
+      Inbox/sent listings are cached for M_LIST_CACHE_TTL seconds (default 30).
+      Use -N or M_LIST_CACHE_TTL=0 to disable.
+
+HELP TOPICS
+    --help=actions    All available actions
+    --help=accounts   Account configuration
+    --help=search     Advanced search syntax
+    --help=config     Configuration options
+EOF
+            ;;
+        actions)
+            cat <<'EOF'
+ACTIONS - Complete Reference
+
+READING
+    i         inbox (default)        List recent messages
+    sent                             List sent messages
+    q         search                 Search with Gmail query syntax
+    d         drafts                 View drafts (web only)
+    x         spam                   Check spam folder
+
+COMPOSING
+    send      Send .eml file or compose (routes to send script)
+    c         Same as send (compose shorthand)
+    draft     Save message to drafts
+
+MESSAGE ACTIONS
+    reply INDEX                      Reply to message
+    reply-all INDEX                  Reply-all (includes To and Cc)
+    fwd INDEX RECIPIENT             Forward message
+    open INDEX                      Open in Gmail web UI
+    trash INDEX                     Move to trash
+    archive INDEX                   Archive message
+    read/unread INDEX               Mark read/unread
+
+SENT MESSAGE ACTIONS
+    sfwd INDEX RECIPIENT            Forward a SENT message
+    sreply INDEX                    Reply to a SENT message
+    sreply-all INDEX                Reply-all to a SENT message
+EOF
+            ;;
+        accounts)
+            echo "ACCOUNTS"
+            echo ""
+            echo "CONFIGURED ACCOUNTS"
+            # Dynamically show configured accounts from loaded config
+            for acct in "${!EMAILS[@]}"; do
+                email="${EMAILS[$acct]}"
+                desc="${ACCTS[$acct]:-}"
+                if [[ -n "$email" ]]; then
+                    printf "    %-4s %-30s %s\n" "$acct" "$email" "($desc)"
+                else
+                    printf "    %-4s %-30s %s\n" "$acct" "(web-only)" "($desc)"
+                fi
+            done | sort
+            echo ""
+            echo "USAGE"
+            echo "    m [action] [account]               Use specific account"
+            # Show example using first configured account
+            first_acct=$(printf '%s\n' "${!EMAILS[@]}" | sort | head -1)
+            if [[ -n "$first_acct" ]]; then
+                echo "    m i $first_acct                             ${ACCTS[$first_acct]:-} inbox"
+            fi
+    m sent j                          Joint sent messages
+    m q l "subject:invoice"           Search lake account
+
+Chrome profiles: 0=gmail, 1=columbia, 2=nyt, 4=lake, 6=joint, 9=hackny
+EOF
+            ;;
+        search)
+            cat <<'EOF'
+SEARCH SYNTAX
+
+BASIC SEARCH
+    m q "from:alice"                  Search by sender
+    m -q "subject:urgent"             Alternative syntax
+
+ADVANCED SEARCH
+    m -q "QUERY" INDEX                Read message INDEX from results
+    m -q "QUERY" INDEX ACTION         Perform ACTION on message INDEX
+    m -q "QUERY" 1-5                  Read messages 1-5 from results
+    m -q "QUERY" 1-5 -p               Save messages 1-5, combined /peek
+
+GMAIL SEARCH OPERATORS
+    from:alice                        From specific sender
+    to:bob                            To specific recipient
+    subject:urgent                    Subject contains text
+    is:unread                         Unread messages
+    is:read                           Read messages
+    has:attachment                    Has attachments
+    before:2026/04/01                 Before date
+    after:2026/03/01                  After date
+
+EXAMPLES
+    m u -q "from:rohm" 2 fwd user@ex  Search, forward message #2
+    m -q "is:unread" 1-10 -p          Peek at first 10 unread
+EOF
+            ;;
+        config)
+            cat <<'EOF'
+CONFIGURATION
+
+CONFIG FILES
+    ~/.config/m/config                User config (preferred)
+    bash/m-config.bash                Default config file
+
+ENVIRONMENT VARIABLES
+    M_DEFAULT_ACCOUNT=g               Default account (g,j,u,l,h,n,z)
+    M_RANGE_WARNING_LIMIT=50          Warn on ranges larger than this
+    M_RANGE_HARD_LIMIT=100            Hard limit for range size
+    M_QUIET_MODE=0                    Suppress progress messages (0/1)
+    M_AUTO_DRY_RUN=0                  Auto dry-run destructive actions (0/1)
+
+TAB COMPLETION
+    source bash/m-completion.bash     Enable bash completion
+
+    Auto-detect: if completion is not working, run:
+    source $(dirname $(which m))/m-completion.bash
+
+EXAMPLES
+    export M_DEFAULT_ACCOUNT=u        Use Columbia as default
+    export M_QUIET_MODE=1             Suppress status messages
+EOF
+            ;;
+        *)
+            echo "Unknown help topic: $topic" >&2
+            echo "Available topics: actions, accounts, search, config" >&2
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+# --- parse args: extract -w flag, action, account, and rest ---
+web=0
+dry_run=0
+urls_flag=0
+cal_flag=0
+no_cache=0
+# ============================================================================
+# ARGUMENT PARSING SECTION
+# ============================================================================
+#
+# PARSING STRATEGY FOR FUTURE CLAUDE INSTANCES:
+#
+# This parser is optimized for email workflow ergonomics, not standard CLI
+# conventions. Key design decisions:
+#
+# 1. **Position Independence**: Account and action can appear in any order
+#    "m j i" = "m i j" both mean "inbox for joint account"
+#
+# 2. **Smart Defaults**: Missing parts get sensible defaults
+#    "m" → "m i g" (inbox, default account)
+#    "m j" → "m i j" (inbox, joint account)
+#
+# 3. **Query Shortcuts**: -q is syntactic sugar for the q action
+#    "m -q term" → "m q -q term" (search shortcut)
+#
+# 4. **Action Chaining**: Search + action = act on first result
+#    "m -q Ahmad reply" → search Ahmad, reply to message #1
+#
+# 5. **Flag Locality**: Flags affect the action they're near
+#    "m sent 4 -save" → save sent message #4
+#    "m -w j" → joint account in web mode
+#
+# The parser fills these variables:
+# - action: what to do (i/sent/q/etc, defaults to "i")
+# - account: which account (g/j/u/etc, defaults from config)
+# - rest[]: remaining args passed to the action handler
+# - web: boolean for web vs CLI mode
+# - Various flags: dry_run, urls_flag, cal_flag, no_cache, etc.
+
+action=""
+account=""
+rest=()
+i=0
+args=("$@")
+
+# MAIN ARGUMENT PARSING LOOP
+# Processes each argument and classifies it as action/account/flag/passthrough
+while (( i < ${#args[@]} )); do
+    arg="${args[i]}"
+    if [[ "$arg" == "-w" || "$arg" == "--web" ]]; then
+        web=1
+    elif [[ "$arg" == "--dry-run" ]]; then
+        dry_run=1
+    elif [[ "$arg" == "--urls" ]]; then
+        urls_flag=1
+    elif [[ "$arg" == "--cal" ]]; then
+        cal_flag=1
+    elif [[ "$arg" == "-N" || "$arg" == "--no-cache" ]]; then
+        no_cache=1
+    elif [[ "$arg" == "--quiet" ]]; then
+        M_QUIET_MODE=1
+    elif [[ "$arg" == "-h" || "$arg" == "--help" || "$arg" == "?" ]]; then
+        usage
+    elif [[ "$arg" =~ ^--help= ]]; then
+        topic="${arg#--help=}"
+        usage "$topic"
+    elif [[ "$arg" == "-q" ]]; then
+        # Special handling for -q flag: it implies action=q and consumes next arg as query
+        action="q"
+        rest+=("$arg")
+        if (( i+1 < ${#args[@]} )) && [[ "${args[i+1]}" != -* ]]; then
+            # Next arg is the query, add it to rest
+            i=$((i + 1))
+            rest+=("${args[i]}")
+        fi
+    elif [[ -z "$action" ]] && [[ " $ACTIONS_SHORT $ACTIONS_SEND $ACTIONS_PASSTHRU " == *" $arg "* ]]; then
+        action="$arg"
+    elif [[ -z "$account" ]] && [[ -n "${ACCTS[$arg]:-}" ]]; then
+        account="$arg"
+    elif [[ -z "$account" ]] && [[ ${#arg} -eq 1 ]] && [[ "$arg" =~ ^[a-z]$ ]]; then
+        # Single lowercase letter that's not a valid account - likely invalid account attempt
+        echo "m: unknown account '$arg'" >&2
+        echo "Valid accounts: g (gmail), j (joint), u (columbia), l (lake), h (hackny), n (nyt), z (taizo)" >&2
+        exit 1
+    else
+        rest+=("$arg")
+    fi
+    i=$((i + 1))
+done
+
+
+# --- migration guard: "s" was renamed to "sent" ---
+for r in "${rest[@]+"${rest[@]}"}"; do
+    if [[ "$r" == "s" ]]; then
+        echo "m: 's' is ambiguous. Use 'm sent' (list sent mail) or 'm send' (send mail)." >&2
+        exit 1
+    fi
+done
+
+# --- catch common mistakes: flags that only make sense with a passthru action ---
+has_dashS=0; has_dashH=0
+for r in "${rest[@]+"${rest[@]}"}"; do
+    [[ "$r" == "-s" ]] && has_dashS=1
+    [[ "$r" == "-H" ]] && has_dashH=1
+done
+no_passthru=0
+if [[ -z "$action" || " $ACTIONS_SHORT " == *" ${action:-} "* ]]; then
+    no_passthru=1
+fi
+if (( has_dashS && no_passthru )); then
+    echo "m: use 'm sent' to list sent mail; -s is only valid as subject flag with 'send'" >&2
+    exit 1
+fi
+if (( has_dashH && no_passthru )); then
+    echo "m: use 'm send -H file.eml' to send from a file" >&2
+    exit 1
+fi
+
+
+# defaults
+action="${action:-i}"
+account="${account:-${M_DEFAULT_ACCOUNT:-g}}"
+
+# look up account
+IFS=: read -r gmails_flag chrome_profile <<< "${ACCTS[$account]}"
+
+# web-only account forces web mode
+if [[ "$gmails_flag" == "!" ]]; then
+    web=1
+    gmails_flag=""
+fi
+
+# build gmails -e flag (empty for default account)
+gmails_acct=()
+if [[ -n "$gmails_flag" ]]; then
+    gmails_acct=(-e "$gmails_flag")
+fi
+
+# export authuser email for gmail_web URL routing
+export GMAIL_WEB_AUTHUSER="${EMAILS[$account]:-}"
+
+# --urls flag: same destination as the `urls` action. If a numeric index was
+# given (e.g. `m 1 --urls`, `m j 3 --urls`), spool that message first so the
+# menu reflects what you'd be reading.
+if (( urls_flag )); then
+    msg_idx=""
+    for r in "${rest[@]+"${rest[@]}"}"; do
+        if [[ "$r" =~ ^[0-9]+$ ]]; then msg_idx="$r"; break; fi
+    done
+    if [[ -n "$msg_idx" ]]; then
+        log_command "$@"
+        gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "$msg_idx" >/dev/null
+    fi
+    exec m-urls
+fi
+
+# --cal flag: extract calendar events from email content using pbcal
+if (( cal_flag )); then
+    msg_idx=""
+    for r in "${rest[@]+"${rest[@]}"}"; do
+        if [[ "$r" =~ ^[0-9]+$ ]]; then msg_idx="$r"; break; fi
+    done
+    if [[ -n "$msg_idx" ]]; then
+        log_command "$@"
+        # Build gmails command with query context if we're in query mode
+        if [[ "$action" == "q" ]]; then
+            # Build query from remaining args (excluding the message index and --cal)
+            query_parts=()
+            for r in "${rest[@]+"${rest[@]}"}"; do
+                if [[ "$r" != "$msg_idx" && "$r" != "--cal" ]]; then
+                    query_parts+=("$r")
+                fi
+            done
+            query_string="${query_parts[*]+"${query_parts[*]}"}"
+            # Get email content with query context and pipe to pbcal
+            gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$query_string" "$msg_idx" -t | pbcal
+        else
+            # Direct message access (no query)
+            gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "$msg_idx" -t | pbcal
+        fi
+    else
+        echo "m: --cal requires a message number (e.g., 'm j 1 --cal' or 'm q ken 1 --cal')" >&2
+        exit 1
+    fi
+    exit 0
+fi
+
+# --- dispatch ---
+
+# Helper: open web folder
+open_web() {
+    local folder="$1"
+    shift
+    log_command "$@"
+    exec gmail_web "$chrome_profile" "$folder" "$@"
+}
+
+# ============================================================================
+# MAIN ACTION ROUTING SECTION
+# ============================================================================
+#
+# ACTION ROUTING ARCHITECTURE FOR FUTURE CLAUDE INSTANCES:
+#
+# This is the heart of the dispatcher. Each action (i, sent, q, etc.) has its
+# own handler that implements specific email workflows. Key patterns:
+#
+# 1. **Mode Processing**: All actions support -save/-v/default(more) modes
+#    - Default: Display with 'more' pager (user-friendly)
+#    - -save: Download to .eml file (automation-friendly)
+#    - -v: Verbose output without paging (debugging-friendly)
+#
+# 2. **!!-Style Forwarding**: Actions can route to other actions
+#    "m i 2 fwd email" → "m fwd 2 email" (ergonomic shortcuts)
+#
+# 3. **Web/CLI Duality**: Each action checks (( web )) flag first
+#    - Web: Routes to gmail_web function (opens browser)
+#    - CLI: Routes to gmails/gmail-api-rw (terminal interface)
+#
+# 4. **Interactive Action Detection**: reply/fwd/draft need special handling
+#    - They open $EDITOR, so need real terminal stdin
+#    - Never wrapped in -t/more (would break editor)
+#    - Default to message #1 if no number specified
+#
+# 5. **Error Handling**: Fast-fail validation before calling gmails
+#    - Catch obvious mistakes ("m sia" → suggest "m q sia")
+#    - Provide helpful suggestions, not raw error dumps
+#
+# 6. **Caching Integration**: Listings use 30s TTL cache
+#    - Cache files: /tmp/spool/.gmails-last-listing-{account}.txt
+#    - Bypass with -N flag for force refresh
+#    - Only for read operations, never for state changes
+#
+# CRITICAL INTEGRATION POINTS:
+# - gmails: Gmail API client (handles OAuth, caching, formatting)
+# - gmail_web: Browser interface (handles multi-account switching)
+# - send script: Smart SMTP/API routing for outbound messages
+#
+case "$action" in
+    i)  # INBOX ACTION: List recent messages (default action)
+        # Check for !!-style forwarding: "i N fwd email" -> route to fwd
+        if [[ ${#rest[@]} -ge 3 ]] && [[ "${rest[0]}" =~ ^[0-9]+$ ]] && [[ "${rest[1]}" == "fwd" ]]; then
+            # Convert "m i 2 fwd email" to "m fwd 2 email"
+            exec "$0" "$account" fwd "${rest[0]}" "${rest[@]:2}"
+        fi
+        # Check for !!-style replying: "i N reply" -> route to reply
+        if [[ ${#rest[@]} -ge 2 ]] && [[ "${rest[0]}" =~ ^[0-9]+$ ]] && [[ "${rest[1]}" =~ ^reply(-all)?$ ]]; then
+            # Convert "m i 2 reply" to "m reply 2"
+            exec "$0" "$account" "${rest[1]}" "${rest[0]}" "${rest[@]:2}"
+        fi
+
+        # "m i N" or "m i N-M": read and display message(s), don't just save.
+        # Mode flags: -p (peek: silent save + clipboard), -save (download silently),
+        # -v (full content, no pager), default = render body and pipe through `more`.
+        if (( ! web )) && [[ ${#rest[@]} -ge 1 ]] && [[ "${rest[0]}" =~ ^[0-9]+(-[0-9]+)?$ ]]; then
+            msg_spec="${rest[0]}"
+            extra=("${rest[@]:1}")
+            save_mode=0
+            verbose_mode=0
+            peek_mode=0
+            kept=()
+            for f in "${extra[@]+"${extra[@]}"}"; do
+                case "$f" in
+                    -p)    peek_mode=1 ;;
+                    -save) save_mode=1 ;;
+                    -v)    verbose_mode=1 ;;
+                    *)     kept+=("$f") ;;
+                esac
+            done
+
+            log_command "$@"
+            if (( peek_mode )); then
+                # Silent save. For a single index use gmails -p (which sets the
+                # clipboard itself). For a range, save each silently then build
+                # one combined "/peek a.eml b.eml ..." clipboard line.
+                if [[ "$msg_spec" =~ ^[0-9]+$ ]]; then
+                    peek_out=$(gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "$msg_spec" -p "${kept[@]+"${kept[@]}"}" 2>&1 >/dev/null)
+                    peek_path=$(printf '%s\n' "$peek_out" | sed -nE 's|.*/peek (/[^ ]+\.eml).*|\1|p' | tail -1)
+                    if [[ -n "$peek_path" ]]; then
+                        echo "✅ /peek $peek_path is on your clipboard" >&2
+                    else
+                        printf '%s\n' "$peek_out" >&2
+                    fi
+                    exit 0
+                else
+                    IFS='-' read -r s_idx e_idx <<< "$msg_spec"
+                    peek_files=()
+                    for ((p=s_idx; p<=e_idx; p++)); do
+                        out=$(gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "$p" "${kept[@]+"${kept[@]}"}" 2>&1)
+                        if [[ "$out" =~ Saved:\ ([^\ ]+\.eml) ]]; then
+                            peek_files+=("${BASH_REMATCH[1]}")
+                        fi
+                    done
+                    if [[ ${#peek_files[@]} -gt 0 ]]; then
+                        combined="/peek ${peek_files[*]}"
+                        printf '%s' "$combined" | pbcopy
+                        echo "✅ $combined is on your clipboard" >&2
+                    else
+                        echo "m: peek saved no files" >&2
+                        exit 1
+                    fi
+                    exit 0
+                fi
+            elif (( save_mode )); then
+                exec gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "$msg_spec" "${kept[@]+"${kept[@]}"}"
+            elif (( verbose_mode )); then
+                exec gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "$msg_spec" -t "${kept[@]+"${kept[@]}"}"
+            else
+                if [[ -t 1 ]]; then
+                    gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "$msg_spec" -t "${kept[@]+"${kept[@]}"}" | more
+                    exit ${PIPESTATUS[0]}
+                else
+                    exec gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "$msg_spec" -t "${kept[@]+"${kept[@]}"}"
+                fi
+            fi
+        fi
+
+        if (( web )); then
+            for r in "${rest[@]+"${rest[@]}"}"; do
+                if [[ "$r" == "-q" ]]; then
+                    echo "m: -q is a gmails flag, not a search action. Use 'm q <account> -w \"query\"' instead." >&2
+                    exit 1
+                fi
+            done
+            open_web inbox "${rest[@]+"${rest[@]}"}"
+        else
+            # Cache replay: if no extras and the rendered listing is fresh, cat it and exit.
+            if (( ! no_cache )) && [[ ${#rest[@]} -eq 0 ]]; then
+                # Slug must match what gmails uses (email.replace('@','-at-').replace('.','-')).
+                # For the default account (no -e flag), gmails caches under "default".
+                if [[ -n "$gmails_flag" ]]; then
+                    email="${EMAILS[$account]:-}"
+                    if [[ -n "$email" ]]; then
+                        slug="${email//@/-at-}"
+                        slug="${slug//./-}"
+                    else
+                        slug="default"
+                    fi
+                else
+                    slug="default"
+                fi
+                cache_file="/tmp/spool/.gmails-last-listing-${slug}.txt"
+                ttl="${M_LIST_CACHE_TTL:-30}"
+                if [[ -f "$cache_file" ]] && (( ttl > 0 )); then
+                    mtime=$(stat -f %m "$cache_file" 2>/dev/null || echo 0)
+                    now=$(date +%s)
+                    age=$(( now - mtime ))
+                    if (( age <= ttl )); then
+                        cat "$cache_file"
+                        exit 0
+                    fi
+                fi
+            fi
+            # Fast validation: check for obvious user errors before calling gmails
+            for arg in "${rest[@]+"${rest[@]}"}"; do
+                # Skip flags
+                [[ "$arg" =~ ^- ]] && continue
+                # Check if arg looks like an invalid message index (contains letters)
+                if [[ "$arg" =~ [a-zA-Z] ]] && ! [[ "$arg" =~ ^[0-9,-]+$ ]]; then
+                    echo "m: '$arg' is not a valid message index. Did you mean 'm q $arg' (search)?" >&2
+                    exit 1
+                fi
+            done
+
+            # No retry wrapper for inbox listing - it's pure overhead on the happy path.
+            # If gmails fails, fall back as before.
+            if ! gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "${rest[@]+"${rest[@]}"}"; then
+                [[ ${M_QUIET_MODE:-0} -eq 0 ]] && echo "m: gmails failed, trying fallback..." >&2
+                exec m-support fallback "m $account i ${rest[*]+"${rest[*]}"}"
+            fi
+        fi
+        ;;
+    sent)
+        # Check for common action mistakes with dashes
+        for arg in "${rest[@]+"${rest[@]}"}"; do
+            case "$arg" in
+                -reply|-reply-all|-fwd|-forward|-draft|-trash|-archive)
+                    corrected="${arg#-}"  # Remove leading dash
+                    # Reconstruct the command for the suggestion
+                    original_cmd="$0"
+                    if [[ -n "$account" ]]; then
+                        original_cmd+=" $account"
+                    fi
+                    original_cmd+=" $action"
+                    # Add args, replacing the mistake with correction
+                    for rest_arg in "${rest[@]+"${rest[@]}"}"; do
+                        if [[ "$rest_arg" == "$arg" ]]; then
+                            original_cmd+=" $corrected"
+                        else
+                            original_cmd+=" $rest_arg"
+                        fi
+                    done
+                    echo "⚠️  did you mean: $original_cmd" >&2
+                    exit 1
+                    ;;
+            esac
+        done
+
+        # Check for !!-style forwarding: "sent N fwd email" -> route to sfwd
+        if [[ ${#rest[@]} -ge 3 ]] && [[ "${rest[0]}" =~ ^[0-9]+$ ]] && [[ "${rest[1]}" == "fwd" ]]; then
+            # Convert "m sent 2 fwd email" to "m sfwd 2 email"
+            exec "$0" "$account" sfwd "${rest[0]}" "${rest[@]:2}"
+        fi
+        # Check for !!-style replying: "sent N reply" -> route to sreply
+        if [[ ${#rest[@]} -ge 2 ]] && [[ "${rest[0]}" =~ ^[0-9]+$ ]] && [[ "${rest[1]}" =~ ^reply(-all)?$ ]]; then
+            reply_action="sreply"
+            if [[ "${rest[1]}" == "reply-all" ]]; then
+                reply_action="sreply-all"
+            fi
+            # Convert "m sent 2 reply" to "m sreply 2"
+            exec "$0" "$account" "$reply_action" "${rest[0]}" "${rest[@]:2}"
+        fi
+
+        if (( web )); then
+            open_web sent "${rest[@]+"${rest[@]}"}"
+        else
+            # Check if we have a message number and apply mode processing like other actions
+            save_mode=0
+            verbose_mode=0
+            has_message_number=0
+            filtered_rest=()
+
+            # Parse mode flags and detect message numbers
+            for arg in "${rest[@]+"${rest[@]}"}"; do
+                case "$arg" in
+                    -save)
+                        save_mode=1
+                        ;;
+                    -v)
+                        verbose_mode=1
+                        ;;
+                    [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
+                        has_message_number=1
+                        filtered_rest+=("$arg")
+                        ;;
+                    *)
+                        filtered_rest+=("$arg")
+                        ;;
+                esac
+            done
+
+            log_command "$@"
+
+            if (( has_message_number && save_mode )); then
+                # Save mode - download message to file without displaying content
+                if ! gmails sent "${gmails_acct[@]+"${gmails_acct[@]}"}" "${filtered_rest[@]+"${filtered_rest[@]}"}"; then
+                    gmails_exit=$?
+                    check_health_and_suggest_fixes "gmails sent" $gmails_exit
+                    exit $gmails_exit
+                fi
+            elif (( has_message_number && verbose_mode )); then
+                # Verbose mode - show full content without paging
+                if ! gmails sent "${gmails_acct[@]+"${gmails_acct[@]}"}" "${filtered_rest[@]+"${filtered_rest[@]}"}" -t; then
+                    gmails_exit=$?
+                    check_health_and_suggest_fixes "gmails sent" $gmails_exit
+                    exit $gmails_exit
+                fi
+            elif (( has_message_number )); then
+                # Default mode - read and display with more paging (NEW DEFAULT)
+                if [[ -t 1 ]]; then
+                    # Interactive terminal - use more pager by default
+                    if ! gmails sent "${gmails_acct[@]+"${gmails_acct[@]}"}" "${filtered_rest[@]+"${filtered_rest[@]}"}" -t | more; then
+                        gmails_exit=${PIPESTATUS[0]}
+                        check_health_and_suggest_fixes "gmails sent" $gmails_exit
+                        exit $gmails_exit
+                    fi
+                else
+                    # Non-interactive - show content without paging
+                    if ! gmails sent "${gmails_acct[@]+"${gmails_acct[@]}"}" "${filtered_rest[@]+"${filtered_rest[@]}"}" -t; then
+                        gmails_exit=$?
+                        check_health_and_suggest_fixes "gmails sent" $gmails_exit
+                        exit $gmails_exit
+                    fi
+                fi
+            else
+                # No message number - list messages (unchanged behavior)
+                if ! gmails sent "${gmails_acct[@]+"${gmails_acct[@]}"}" "${rest[@]+"${rest[@]}"}"; then
+                    [[ ${M_QUIET_MODE:-0} -eq 0 ]] && echo "m: gmails failed, trying fallback..." >&2
+                    exec m-support fallback "m $account sent ${rest[*]+"${rest[*]}"}"
+                fi
+            fi
+        fi
+        ;;
+    c)
+        if (( web )); then
+            open_web compose "${rest[@]+"${rest[@]}"}"
+        else
+            echo "m: compose via ${gmails_flag:-gmail (default)}" >&2
+            log_command "$@"
+            smart_send ${gmails_flag:+-e "$gmails_flag"} "${rest[@]+"${rest[@]}"}"
+            exit $?
+        fi
+        ;;
+    q)
+        # Extract query from rest: for `m q g PSA`, PSA is in rest directly
+        # For `m u -q PSA`, both -q and PSA are in rest, so skip the -q
+        msg_index=""
+        msg_range=""
+        query_args=()
+        skip_next=0
+
+        i=0
+        while (( i < ${#rest[@]} )); do
+            arg="${rest[i]}"
+            if [[ "$arg" == "-q" ]]; then
+                # Skip -q flag, but include the next argument as part of query
+                if (( i+1 < ${#rest[@]} )); then
+                    i=$((i + 1))
+                    query_args+=("${rest[i]}")
+                fi
+            else
+                query_args+=("$arg")
+            fi
+            i=$((i + 1))
+        done
+
+        # Separate flags from query args - flags start with dash, numbers are indices, actions are special
+        pure_query_args=()
+        other_flags=()
+        post_index_action=""
+        post_index_action_args=()
+        found_action_index=-1
+
+        # Find the action position first
+        for i in "${!query_args[@]}"; do
+            if [[ " $ACTIONS_PASSTHRU " == *" ${query_args[i]} "* ]]; then
+                post_index_action="${query_args[i]}"
+                found_action_index=$i
+                break
+            fi
+        done
+
+        # Check for common action mistakes before processing
+        for i in "${!query_args[@]}"; do
+            arg="${query_args[i]}"
+            # Detect common action mistakes with dashes
+            case "$arg" in
+                -reply|-reply-all|-fwd|-forward|-draft|-trash|-archive)
+                    corrected="${arg#-}"  # Remove leading dash
+                    # Reconstruct the command for the suggestion
+                    original_cmd="$0"
+                    if [[ -n "$account" ]]; then
+                        original_cmd+=" $account"
+                    fi
+                    if [[ "$action" == "q" ]]; then
+                        original_cmd+=" -q"
+                    fi
+                    # Add query args up to this point
+                    for ((j=0; j<i; j++)); do
+                        original_cmd+=" ${query_args[j]}"
+                    done
+                    original_cmd+=" $corrected"
+                    # Add remaining args
+                    for ((j=i+1; j<${#query_args[@]}; j++)); do
+                        original_cmd+=" ${query_args[j]}"
+                    done
+                    echo "⚠️  did you mean: $original_cmd" >&2
+                    exit 1
+                    ;;
+            esac
+        done
+
+        # Now process all args, treating everything after action as action args
+        for i in "${!query_args[@]}"; do
+            arg="${query_args[i]}"
+            if [[ $i -eq $found_action_index ]]; then
+                # Skip the action itself - already captured
+                continue
+            elif [[ $found_action_index -ge 0 && $i -gt $found_action_index ]]; then
+                # Everything after the action becomes action arguments
+                post_index_action_args+=("$arg")
+            elif [[ "$arg" =~ ^-[a-zA-Z] ]]; then
+                # This is a flag like -t, -p
+                other_flags+=("$arg")
+            else
+                # This is a query term or number
+                pure_query_args+=("$arg")
+            fi
+        done
+
+        # Now work with the separated query args
+        query_args=("${pure_query_args[@]+"${pure_query_args[@]}"}")
+
+        # Check if last arg is a number or range (message index/range)
+        if [[ ${#query_args[@]} -gt 0 ]]; then
+            last_arg="${query_args[-1]}"
+            if [[ "$last_arg" =~ ^[0-9]+$ ]]; then
+                # Last arg is a single number - treat as message index
+                msg_index="$last_arg"
+                unset 'query_args[-1]'  # Remove the number from query
+            elif [[ "$last_arg" =~ ^[0-9]+-[0-9]+$ ]]; then
+                # Last arg is a range like "1-6" - treat as message range
+                msg_range="$last_arg"
+                # Validate range
+                IFS='-' read -r range_start range_end <<< "$msg_range"
+                if [[ $range_start -gt $range_end ]]; then
+                    echo "m: invalid range '$msg_range' - start ($range_start) greater than end ($range_end)" >&2
+                    exit 1
+                elif [[ $range_start -lt 1 ]]; then
+                    echo "m: invalid range '$msg_range' - message numbers must be positive" >&2
+                    exit 1
+                elif [[ $range_end -gt ${M_RANGE_HARD_LIMIT:-100} ]]; then
+                    echo "m: range '$msg_range' too large - end ($range_end) exceeds limit (${M_RANGE_HARD_LIMIT:-100})" >&2
+                    echo "Consider smaller ranges to avoid API limits and timeouts" >&2
+                    exit 1
+                elif [[ $range_end -gt ${M_RANGE_WARNING_LIMIT:-50} ]]; then
+                    [[ ${M_QUIET_MODE:-0} -eq 0 ]] && echo "m: warning - large range '$msg_range' may be slow and hit API limits" >&2
+                fi
+                unset 'query_args[-1]'  # Remove the range from query
+            fi
+        fi
+
+        # Join remaining args as query string
+        _query="${query_args[*]+"${query_args[*]}"}"
+
+        # Validate query if present
+        if [[ "$action" == "q" && -n "$_query" ]]; then
+            # Check for obviously malformed queries
+            if [[ "$_query" =~ ^[[:space:]]*$ ]]; then
+                echo "m: empty search query" >&2
+                exit 1
+            fi
+        fi
+
+        # If we have a post-index action, switch to that action (default to msg 1 if no index specified)
+        if [[ -n "$post_index_action" ]]; then
+            # Default to message 1 if no explicit message index/range provided
+            if [[ -z "$msg_index" && -z "$msg_range" ]]; then
+                msg_index="1"
+            fi
+            # We found a pattern like "m u -q xu 2 reply" - switch to the post-index action
+            case "$post_index_action" in
+                draft|reply|reply-all|fwd|trash|archive|thread|read|unread|sfwd|sreply|sreply-all)
+                    # Show which account for actions that modify state
+                    case "$post_index_action" in
+                        draft|reply|fwd|trash|archive)
+                            if [[ ${M_QUIET_MODE:-0} -eq 0 ]]; then
+                                if [[ -n "$gmails_flag" ]]; then
+                                    echo "m: $post_index_action via -e $gmails_flag" >&2
+                                else
+                                    echo "m: $post_index_action via gmail (default)" >&2
+                                fi
+                            fi
+                            ;;
+                    esac
+                    # Execute or preview the action
+                    if (( dry_run )) && [[ "$post_index_action" =~ ^(trash|archive|fwd)$ ]]; then
+                        # Preview destructive actions
+                        echo "DRY RUN: Would $post_index_action message #$msg_index from query '$_query'" >&2
+                        if [[ "$post_index_action" == "fwd" ]] && [[ ${#post_index_action_args[@]} -gt 0 ]]; then
+                            echo "         Forward to: ${post_index_action_args[*]}" >&2
+                        fi
+                        # Show the message that would be affected
+                        gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$msg_index" -t | head -10
+                        echo "Run without --dry-run to execute" >&2
+                    else
+                        # Execute the action with the search context - ensure terminal connection for interactive actions
+                        case "$post_index_action" in
+                            reply|fwd|draft)
+                                # For interactive actions, don't use exec to preserve terminal stdin
+                                gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$msg_index" "$post_index_action" "${post_index_action_args[@]+"${post_index_action_args[@]}"}" "${other_flags[@]+"${other_flags[@]}"}"
+                                exit 0  # Exit after successful interactive action
+                                ;;
+                            *)
+                                # For non-interactive actions, use exec as before
+                                exec gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$msg_index" "$post_index_action" "${post_index_action_args[@]+"${post_index_action_args[@]}"}" "${other_flags[@]+"${other_flags[@]}"}"
+                                ;;
+                        esac
+                    fi
+                    ;;
+                *)
+                    echo "m: unknown action '$post_index_action'" >&2
+                    exit 1
+                    ;;
+            esac
+        fi
+
+        if (( web )); then
+            # Web mode: if msg_index or range, can't handle it (web doesn't support direct message access)
+            if [[ -n "$msg_index" || -n "$msg_range" ]]; then
+                echo "m: web mode doesn't support reading specific messages from search. Use CLI or 'm open j $msg_index'" >&2
+                exit 1
+            fi
+            # Open Gmail search URL directly (no -q needed for web)
+            _encoded=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$_query" 2>/dev/null || echo "$_query")
+            log_command "$@"
+            exec gmail_web "$chrome_profile" "search/$_encoded"
+        else
+            # CLI mode: handle single message, range, or list
+            if [[ -n "$msg_index" ]]; then
+                # Check for interactive flags and mode flags
+                has_interactive=0
+                save_mode=0
+                verbose_mode=0
+                peek_mode=0
+                filtered_flags=()
+
+                for flag in "${other_flags[@]+"${other_flags[@]}"}"; do
+                    case "$flag" in
+                        reply|fwd|draft)
+                            has_interactive=1
+                            filtered_flags+=("$flag")
+                            ;;
+                        -save)
+                            save_mode=1
+                            ;;
+                        -v)
+                            verbose_mode=1
+                            ;;
+                        -p)
+                            peek_mode=1
+                            ;;
+                        *)
+                            filtered_flags+=("$flag")
+                            ;;
+                    esac
+                done
+
+                if (( has_interactive )); then
+                    # Interactive actions like reply/forward
+                    gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$msg_index" "${filtered_flags[@]+"${filtered_flags[@]}"}"
+                elif (( peek_mode )); then
+                    # Peek mode - save .eml, put /peek {path} on clipboard, cheeky one-liner
+                    log_command "$@"
+                    peek_out=$(gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$msg_index" -p "${filtered_flags[@]+"${filtered_flags[@]}"}" 2>&1 >/dev/null)
+                    peek_path=$(printf '%s\n' "$peek_out" | sed -nE 's|.*/peek (/[^ ]+\.eml).*|\1|p' | tail -1)
+                    if [[ -n "$peek_path" ]]; then
+                        echo "✅ /peek $peek_path is on your clipboard" >&2
+                    else
+                        printf '%s\n' "$peek_out" >&2
+                    fi
+                    exit 0
+                elif (( save_mode )); then
+                    # Save mode - download to file without displaying
+                    log_command "$@"
+                    exec gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$msg_index" "${filtered_flags[@]+"${filtered_flags[@]}"}"
+                elif (( verbose_mode )); then
+                    # Verbose mode - show full content without paging
+                    log_command "$@"
+                    exec gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$msg_index" "${filtered_flags[@]+"${filtered_flags[@]}"}" -t
+                else
+                    # Default mode - read and display with more paging
+                    log_command "$@"
+                    if [[ -t 1 ]]; then
+                        # Interactive terminal - use more pager by default
+                        gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$msg_index" "${filtered_flags[@]+"${filtered_flags[@]}"}" -t | more
+                    else
+                        # Non-interactive - show content without paging
+                        exec gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$msg_index" "${filtered_flags[@]+"${filtered_flags[@]}"}" -t
+                    fi
+                fi
+            elif [[ -n "$msg_range" ]]; then
+                # Parse range and read multiple messages
+                IFS='-' read -r start_idx end_idx <<< "$msg_range"
+                # Parse mode flags: -p (peek), -save (save to file), -v (verbose no pager)
+                peek_mode=0
+                save_mode=0
+                verbose_mode=0
+                filtered_flags=()
+
+                for arg in "${other_flags[@]+"${other_flags[@]}"}"; do
+                    case "$arg" in
+                        -p)
+                            peek_mode=1
+                            ;;
+                        -save)
+                            save_mode=1
+                            ;;
+                        -v)
+                            verbose_mode=1
+                            ;;
+                        *)
+                            filtered_flags+=("$arg")
+                            ;;
+                    esac
+                done
+
+                if (( peek_mode )); then
+                    # Peek mode - save all messages and collect paths for combined /peek command
+                    peek_files=()
+                    for ((i=start_idx; i<=end_idx; i++)); do
+                        echo "=== Message $i ==="
+                        # Save without -p flag to avoid individual clipboard copies
+                        output=$(gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$i" "${filtered_flags[@]+"${filtered_flags[@]}"}" 2>&1)
+                        echo "$output"
+                        # Extract file path from gmails output (format: "Saved: /path/to/file.eml ...")
+                        if [[ "$output" =~ Saved:\ ([^\ ]+\.eml) ]]; then
+                            peek_files+=("${BASH_REMATCH[1]}")
+                        fi
+                        echo
+                    done
+
+                    # Create combined /peek command and copy to clipboard
+                    if [[ ${#peek_files[@]} -gt 0 ]]; then
+                        combined_peek="/peek ${peek_files[*]}"
+                        echo "$combined_peek" | pbcopy
+                        [[ ${M_QUIET_MODE:-0} -eq 0 ]] && echo "Copied to clipboard: $combined_peek" >&2
+                    fi
+                elif (( save_mode )); then
+                    # Save mode - download messages to files without displaying content
+                    for ((i=start_idx; i<=end_idx; i++)); do
+                        echo "=== Saving Message $i ==="
+                        gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$i" "${filtered_flags[@]+"${filtered_flags[@]}"}"
+                        echo
+                    done
+                elif (( verbose_mode )); then
+                    # Verbose mode - show full content without paging
+                    for ((i=start_idx; i<=end_idx; i++)); do
+                        echo "=== Message $i ==="
+                        gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$i" -t "${filtered_flags[@]+"${filtered_flags[@]}"}"
+                        echo
+                    done
+                else
+                    # Default mode - read and display with paging (new default behavior)
+                    for ((i=start_idx; i<=end_idx; i++)); do
+                        echo "=== Message $i ==="
+                        if [[ -t 1 ]]; then
+                            # Interactive terminal - use more pager by default
+                            gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$i" -t "${filtered_flags[@]+"${filtered_flags[@]}"}" | more
+                        else
+                            # Non-interactive - show content without paging
+                            gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "$i" -t "${filtered_flags[@]+"${filtered_flags[@]}"}"
+                        fi
+                        echo
+                    done
+                fi
+            else
+                # Try gmails with retry and fallback on failure
+                if ! m-retry -- gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "$_query" "${other_flags[@]+"${other_flags[@]}"}"; then
+                    [[ ${M_QUIET_MODE:-0} -eq 0 ]] && echo "m: gmails failed after retries, trying fallback..." >&2
+                    exec m-support fallback "m $account q $_query ${other_flags[*]+"${other_flags[*]}"}"
+                fi
+            fi
+        fi
+        ;;
+    d)
+        # drafts: web only (gmails doesn't list drafts)
+        open_web drafts "${rest[@]+"${rest[@]}"}"
+        ;;
+    x)
+        # spam: check spam folder
+        if (( web )); then
+            open_web spam "${rest[@]+"${rest[@]}"}"
+        else
+            exec gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" -q "in:spam" "${rest[@]+"${rest[@]}"}"
+        fi
+        ;;
+    urls)
+        # urls: enumerate URLs in the most recently spooled .eml and prompt to open one.
+        # If a number is given (e.g. 'm urls 3' or 'm j urls 3'), spool that message
+        # first so the menu reflects what you'd be reading.
+        if [[ ${#rest[@]} -ge 1 ]] && [[ "${rest[0]}" =~ ^[0-9]+$ ]]; then
+            log_command "$@"
+            gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" "${rest[0]}" >/dev/null
+        fi
+        exec m-urls
+        ;;
+    open)
+        # open is inherently a web action; pass Chrome profile so gmails
+        # can route through gmail_web for correct multi-account handling
+        export GMAILS_CHROME_PROFILE="$chrome_profile"
+        exec gmails "${gmails_acct[@]+"${gmails_acct[@]}"}" open "${rest[@]+"${rest[@]}"}"
+        ;;
+    send)
+        if (( web )); then
+            open_web compose "${rest[@]+"${rest[@]}"}"
+        else
+            # Check for template flag (-T)
+            use_template=""
+            template_vars=()
+            send_args=()
+            i=0
+
+            for arg in "${rest[@]+"${rest[@]}"}"; do
+                case "$arg" in
+                    -T|--template)
+                        if [[ $((i+1)) -lt ${#rest[@]} ]]; then
+                            use_template="${rest[$((i+1))]}"
+                            ((i++))  # Skip template name
+                        else
+                            echo "m: -T requires template name" >&2
+                            exit 1
+                        fi
+                        ;;
+                    --*=*)
+                        # Template variable (--var=value)
+                        template_vars+=("$arg")
+                        ;;
+                    --*)
+                        # Template variable (--var value)
+                        template_vars+=("$arg")
+                        if [[ $((i+1)) -lt ${#rest[@]} ]] && [[ "${rest[$((i+1))]}" != -* ]]; then
+                            ((i++))
+                            template_vars+=("${rest[$i]}")
+                        fi
+                        ;;
+                    *)
+                        send_args+=("$arg")
+                        ;;
+                esac
+                ((i++))
+            done
+
+            if [[ -n "$use_template" ]]; then
+                echo "m: composing from template '$use_template'" >&2
+
+                # Generate email from template
+                temp_email=$(mktemp --suffix=.eml)
+                if ! m-template use "$use_template" --account "$account" "${template_vars[@]+"${template_vars[@]}"}" > "$temp_email"; then
+                    echo "m: template generation failed" >&2
+                    rm -f "$temp_email"
+                    exit 1
+                fi
+
+                # Send using generated template
+                echo "m: send via ${gmails_flag:-gmail (default)} using template" >&2
+                send ${gmails_flag:+-e "$gmails_flag"} -H "$temp_email" "${send_args[@]+"${send_args[@]}"}"
+                send_exit=$?
+
+                # Clean up
+                rm -f "$temp_email"
+                exit $send_exit
+            else
+                echo "m: send via ${gmails_flag:-gmail (default)}" >&2
+                log_command "$@"
+                smart_send ${gmails_flag:+-e "$gmails_flag"} "${rest[@]+"${rest[@]}"}"
+                exit $?
+            fi
+        fi
+        ;;
+    draft|reply|reply-all|fwd|trash|archive|thread|read|unread|sfwd|sreply|sreply-all)
+        if (( web )); then
+            echo "m: '$action' not available in web mode" >&2
+            exit 1
+        fi
+        # sfwd/sreply = forward/reply from sent mail (adds -s so index resolves against sent)
+        # reply-all/sreply-all = reply with --all flag
+        sent_flag=()
+        all_flag=()
+        case "$action" in
+            sfwd)       action=fwd;   sent_flag=(sent) ;;
+            sreply)     action=reply; sent_flag=(sent) ;;
+            sreply-all) action=reply; sent_flag=(sent); all_flag=(--all) ;;
+            reply-all)  action=reply; all_flag=(--all) ;;
+        esac
+        # Show which account for actions that modify state
+        if [[ ${M_QUIET_MODE:-0} -eq 0 ]]; then
+            case "$action" in
+                draft|reply|fwd|trash|archive)
+                    if [[ -n "$gmails_flag" ]]; then
+                        echo "m: $action via -e $gmails_flag" >&2
+                    else
+                        echo "m: $action via gmail (default)" >&2
+                    fi
+                    ;;
+            esac
+        fi
+
+        # Handle dry-run for destructive actions
+        if (( dry_run )) && [[ "$action" =~ ^(trash|archive|fwd)$ ]]; then
+            echo "DRY RUN: Would $action with args: ${rest[*]}" >&2
+            if [[ ${#rest[@]} -gt 0 ]]; then
+                if [[ "${rest[0]}" =~ ^[0-9]+$ ]]; then
+                    echo "         Would affect message #${rest[0]}" >&2
+                    # Show preview of the message
+                    gmails "${sent_flag[@]+"${sent_flag[@]}"}" "${gmails_acct[@]+"${gmails_acct[@]}"}" "${rest[0]}" -t | head -5
+                elif [[ "${rest[0]}" =~ ^[0-9]+-[0-9]+$ ]]; then
+                    echo "         Would affect message range ${rest[0]}" >&2
+                    # Parse range and show preview of affected messages
+                    IFS='-' read -r start_idx end_idx <<< "${rest[0]}"
+                    echo "         Previewing messages $start_idx to $end_idx:" >&2
+                    for ((i=start_idx; i<=end_idx && i<=start_idx+2; i++)); do
+                        echo "         === Message $i ===" >&2
+                        gmails "${sent_flag[@]+"${sent_flag[@]}"}" "${gmails_acct[@]+"${gmails_acct[@]}"}" "$i" -t | head -3
+                    done
+                    if [[ $end_idx -gt $((start_idx + 2)) ]]; then
+                        echo "         ... and $((end_idx - start_idx - 2)) more messages" >&2
+                    fi
+                fi
+            fi
+            echo "Run without --dry-run to execute" >&2
+        else
+            log_command "$@"
+
+            # Detect mode based on flags and message number presence
+            save_mode=0
+            verbose_mode=0
+            has_message_number=0
+            filtered_rest=()
+
+            # Check if any argument is a message number and parse mode flags
+            for arg in "${rest[@]+"${rest[@]}"}"; do
+                case "$arg" in
+                    -save)
+                        save_mode=1
+                        ;;
+                    -v)
+                        verbose_mode=1
+                        ;;
+                    [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
+                        has_message_number=1
+                        filtered_rest+=("$arg")
+                        ;;
+                    *)
+                        filtered_rest+=("$arg")
+                        ;;
+                esac
+            done
+
+            # Interactive composing actions need a real terminal for $EDITOR;
+            # never wrap them in -t/more (that just dumps the message and exits).
+            is_interactive_action=0
+            case "$action" in
+                reply|fwd|draft) is_interactive_action=1 ;;
+            esac
+
+            # Apply new default behavior
+            if (( is_interactive_action )); then
+                # If no explicit message number provided for interactive actions, default to 1
+                if (( ! has_message_number )); then
+                    filtered_rest=("1" "${filtered_rest[@]}")
+                fi
+                if ! gmails "${sent_flag[@]+"${sent_flag[@]}"}" "${gmails_acct[@]+"${gmails_acct[@]}"}" "$action" "${all_flag[@]+"${all_flag[@]}"}" "${filtered_rest[@]+"${filtered_rest[@]}"}"; then
+                    gmails_exit=$?
+                    check_health_and_suggest_fixes "gmails $action" $gmails_exit
+                    exit $gmails_exit
+                fi
+                # Interactive action completed successfully - exit without showing message content
+                exit 0
+            elif (( has_message_number && save_mode )); then
+                # Save mode - download message to file without displaying content
+                if ! gmails "${sent_flag[@]+"${sent_flag[@]}"}" "${gmails_acct[@]+"${gmails_acct[@]}"}" "$action" "${all_flag[@]+"${all_flag[@]}"}" "${filtered_rest[@]+"${filtered_rest[@]}"}"; then
+                    gmails_exit=$?
+                    check_health_and_suggest_fixes "gmails $action" $gmails_exit
+                    exit $gmails_exit
+                fi
+            elif (( has_message_number && verbose_mode )); then
+                # Verbose mode - show full content without paging
+                if ! gmails "${sent_flag[@]+"${sent_flag[@]}"}" "${gmails_acct[@]+"${gmails_acct[@]}"}" "$action" "${all_flag[@]+"${all_flag[@]}"}" "${filtered_rest[@]+"${filtered_rest[@]}"}" -t; then
+                    gmails_exit=$?
+                    check_health_and_suggest_fixes "gmails $action" $gmails_exit
+                    exit $gmails_exit
+                fi
+            elif (( has_message_number )); then
+                # Default mode - read and display with more paging
+                if [[ -t 1 ]]; then
+                    # Interactive terminal - use more pager by default
+                    if ! gmails "${sent_flag[@]+"${sent_flag[@]}"}" "${gmails_acct[@]+"${gmails_acct[@]}"}" "$action" "${all_flag[@]+"${all_flag[@]}"}" "${filtered_rest[@]+"${filtered_rest[@]}"}" -t | more; then
+                        gmails_exit=${PIPESTATUS[0]}
+                        check_health_and_suggest_fixes "gmails $action" $gmails_exit
+                        exit $gmails_exit
+                    fi
+                else
+                    # Non-interactive - show content without paging
+                    if ! gmails "${sent_flag[@]+"${sent_flag[@]}"}" "${gmails_acct[@]+"${gmails_acct[@]}"}" "$action" "${all_flag[@]+"${all_flag[@]}"}" "${filtered_rest[@]+"${filtered_rest[@]}"}" -t; then
+                        gmails_exit=$?
+                        check_health_and_suggest_fixes "gmails $action" $gmails_exit
+                        exit $gmails_exit
+                    fi
+                fi
+            else
+                # No message number - original behavior (list messages, etc.)
+                if ! gmails "${sent_flag[@]+"${sent_flag[@]}"}" "${gmails_acct[@]+"${gmails_acct[@]}"}" "$action" "${all_flag[@]+"${all_flag[@]}"}" "${rest[@]+"${rest[@]}"}"; then
+                    gmails_exit=$?
+                    check_health_and_suggest_fixes "gmails $action" $gmails_exit
+                    exit $gmails_exit
+                fi
+            fi
+        fi
+        ;;
+    *)
+        echo "m: unknown action '$action'" >&2
+        echo "Try: m ?" >&2
+        exit 1
+        ;;
+esac
