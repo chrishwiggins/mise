@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# First unzip the file if needed
+unzip -o 150308_term_assistant_professor_in_applied_p_1734046737_h.zip
+
+# Main directory rename
+SOURCE_DIR="Term Assistant Professor in Applied Physics and Applied Mathematics"
+TARGET_DIR="Term_Assistant_Professor_in_Applied_Physics_and_Applied_Mathematics"
+
+# Check if source directory exists
+if [ ! -d "$SOURCE_DIR" ]; then
+    echo "Source directory not found!"
+    exit 1
+fi
+
+# Create target directory
+mkdir -p "$TARGET_DIR"
+
+# Find all files and process them
+find "$SOURCE_DIR" -type f | while IFS= read -r file; do
+    # Get the relative path
+    rel_path="${file#$SOURCE_DIR/}"
+    
+    # Create target path with underscores instead of spaces
+    target_file="$TARGET_DIR/${rel_path// /_}"
+    
+    # Create target directory if it doesn't exist
+    target_dir=$(dirname "$target_file")
+    mkdir -p "$target_dir"
+    
+    # Copy file to new location (using cp instead of mv for safety)
+    cp "$file" "$target_file"
+done
+
+# If everything was successful, remove the original directory
+if [ $? -eq 0 ]; then
+    rm -rf "$SOURCE_DIR"
+    echo "Rename completed successfully!"
+else
+    echo "Error during rename process!"
+fi

@@ -1,0 +1,103 @@
+#!/usr/bin/python3
+import numpy as np
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem import PorterStemmer
+import math
+import sys
+
+# Ensure NLTK resources are downloaded
+nltk.download("punkt")
+nltk.download("stopwords")
+
+
+def preprocess(text):
+    """Preprocess the text: tokenize, remove stopwords and stem."""
+    # Tokenize
+    tokens = word_tokenize(text.lower())
+
+    # Remove stopwords
+    stop_words = set(stopwords.words("english"))
+    filtered_tokens = [word for word in tokens if word not in stop_words]
+
+    # Stemming
+    stemmer = PorterStemmer()
+    stemmed_tokens = [stemmer.stem(word) for word in filtered_tokens]
+
+    return stemmed_tokens
+
+
+def compute_tf(text):
+    """Compute term frequency for each term in the text."""
+    tf_dict = {}
+    for word in text:
+        tf_dict[word] = tf_dict.get(word, 0) + 1
+    return tf_dict
+
+
+def compute_idf(doc_list):
+    """Compute inverse document frequency for each term."""
+    idf_dict = {}
+    N = len(doc_list)
+
+    # Count the number of documents that contain a word w
+    for doc in doc_list:
+        for word in set(doc):
+            idf_dict[word] = idf_dict.get(word, 0) + 1
+
+    # Compute IDF
+    for word in idf_dict:
+        idf_dict[word] = math.log(N / float(idf_dict[word]))
+
+    return idf_dict
+
+
+def compute_tfidf(tf, idf):
+    """Compute TF-IDF score for each word."""
+    tfidf = {}
+    for word, val in tf.items():
+        tfidf[word] = val * idf.get(word, 0)
+    return tfidf
+
+
+def main(fileA, fileB):
+    # Read files
+    with open(fileA, "r") as file:
+        textA = file.read()
+    with open(fileB, "r") as file:
+        textB = file.read()
+
+    # Preprocess texts
+    preprocessed_textA = preprocess(textA)
+    preprocessed_textB = preprocess(textB)
+
+    # Compute TF for each document
+    tfA = compute_tf(preprocessed_textA)
+    tfB = compute_tf(preprocessed_textB)
+
+    # Compute IDF
+    idf = compute_idf([preprocessed_textA, preprocessed_textB])
+
+    # Compute TF-IDF
+    tfidfA = compute_tfidf(tfA, idf)
+    tfidfB = compute_tfidf(tfB, idf)
+
+    # Display results
+    print("TF-IDF for File A:")
+    for word, score in tfidfA.items():
+        print(f"{word}: {score}")
+
+    print("\nTF-IDF for File B:")
+    for word, score in tfidfB.items():
+        print(f"{word}: {score}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("Usage: python tfidf_script.py <fileA> <fileB>")
+        sys.exit(1)
+
+    fileA = sys.argv[1]
+    fileB = sys.argv[2]
+    main(fileA, fileB)

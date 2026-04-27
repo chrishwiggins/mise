@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""
+When2Meet Results Parser and Analyzer
+
+Downloads a Google Sheet created by when2meet.py and analyzes time slot availability.
+Shows which time slots have the most overlap/availability among respondents.
+
+Usage:
+    python when2meet-parse <sheet_url_or_id>
+    python when2meet-parse 1upXCnV0P4_CIWcL4vNpgnyNX-Pj0pQVDHbXe8AEARdo
+    python when2meet-parse "https://docs.google.com/spreadsheets/d/1upXCnV0P4_CIWcL4vNpgnyNX-Pj0pQVDHbXe8AEARdo/edit"
+"""
+
+import sys
+import re
+import os
+import pickle
+from collections import Counter, defaultdict
+from typing import List, Dict, Tuple
+import gspread
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+
+
+def get_credentials():
+    """Get OAuth credentials, using token cache if available."""
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+
+    # Use the same token path as gsheet-get
+    token_path = os.path.expanduser("~/.0/token.pickle")
+    creds_path = os.path.expanduser("~/.0/credentials.json")
+
+    # Check if credentials file exists
+    if not os.path.exists(creds_path):
+        # Try current directory
+        if os.path.exists("credentials.json"):
+            creds_path = "credentials.json"
+        else:
+            print("Error: credentials.json not found in ~/.0/ or current directory")
+            sys.exit(1)
+
+    creds = None
+
+    if os.path.exists(token_path):
+        with open(token_path, "rb") as token:
+            creds = pickle.load(token)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
+            creds = flow.run_local_server(port=0)
+
+        # Save token to the .0 directory
+        os.makedirs(os.path.expanduser("~/.0"), exist_ok=True)
+        with open(token_path, "wb") as token:
+            pickle.dump(creds, token)
+
+    return creds
+
+
+def extract_sheet_id(input_string):
+    """Extract Google Sheet ID from URL or return the input if it's already an ID."""
+    # Remove any whitespace
+    input_string = input_string.strip()
+
+    # Check if it's a URL
+    if input_string.startswith("https://"):
+        # Extract ID from various Google Sheets URL formats
+        patterns = [
+            r"/spreadsheets/d/([a-zA-Z0-9-_]+)",  # Regular sheets
+            r"/forms/d/([a-zA-Z0-9-_]+)",  # Forms
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, input_string)
+            if match:
+                return match.group(1)
+
+        raise ValueError(f"Could not extract sheet ID from URL: {input_string}")
+
+    # If it's not a URL, assume it's already a sheet ID
+    return input_string
+
+
+def parse_time_slots(slots_string: str) -> List[str]:
+    """Parse a comma-separated list of time slots into individual slots."""
+    if not slots_string or slots_string.strip() == "":
+        return []
+
+    # Split by comma and clean up each slot
+    slots = []
+    for slot in slots_string.split(","):
+        slot = slot.strip()
+        if slot:
+            slots.append(slot)
+
+    return slots
+
+
+def analyze_availability(sheet_data: List[Dict]) -> Dict:
+    """
+    Analyze the availability data from the sheet.
+
+    Returns a dictionary with analysis results.
+    """
+    # Count availability for each time slot
+    slot_counter = Counter()
+    person_slots = {}
+    all_people = []
+
+    for row in sheet_data:
+        # Get person name (handle different column names)
+        name = row.get("Your Name", row.get("Name", ""))
+        if not name or name.strip() == "":
+            continue
+
+        all_people.append(name)
+
+        # Get time slots (handle different column names)
+        slots_str = row.get("Available Time Slots", row.get("Time Slots", ""))
+        slots = parse_time_slots(slots_str)
+
+        person_slots[name] = slots
+
+        # Count each slot
+        for slot in slots:
+            slot_counter[slot] += 1
+
+    # Group slots by number of people available
+    availability_groups = defaultdict(list)
+    for slot, count in slot_counter.items():
+        availability_groups[count].append(slot)
+
+    # Sort slots by day/time for better readability
+    def sort_slot_key(slot):
+        # Extract day and time for sorting
+        parts = slot.lower().split()
+        day_order = {
+            "mon": 0,
+            "tue": 1,
+            "wed": 2,
+            "thu": 3,
+            "fri": 4,
+            "sat": 5,
+            "sun": 6,
+        }
+
+        day_val = 7  # Default for unknown days
+        for day, val in day_order.items():
+            if day in slot.lower():
+                day_val = val
+                break
+
+        # Extract time (assumes format like "09:00-09:30")
+        time_match = re.search(r"(\d{2}):(\d{2})", slot)
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2))
+            time_val = hour * 60 + minute
+        else:
+            time_val = 0
+
+        return (day_val, time_val)
+
+    # Sort slots in each availability group
+    for count in availability_groups:
+        availability_groups[count].sort(key=sort_slot_key)
+
+    return {
+        "total_respondents": len(all_people),
+        "respondents": all_people,
+        "slot_counts": slot_counter,
+        "availability_groups": dict(availability_groups),
+        "person_slots": person_slots,
+    }
+
+
+def print_analysis(analysis: Dict):
+    """Print the analysis results in a readable format."""
+    print("\n" + "=" * 70)
+    print("WHEN2MEET ANALYSIS RESULTS")
+    print("=" * 70)
+
+    print(f"\nTotal respondents: {analysis['total_respondents']}")
+    print("\nRespondents:")
+    for name in analysis["respondents"]:
+        print(f"  • {name}")
+
+    print("\n" + "-" * 70)
+    print("TIME SLOT AVAILABILITY (sorted by number of people available)")
+    print("-" * 70)
+
+    # Sort availability groups by count (descending)
+    groups = analysis["availability_groups"]
+    for count in sorted(groups.keys(), reverse=True):
+        slots = groups[count]
+
+        if count == analysis["total_respondents"]:
+            print(
+                f"\n🌟 EVERYONE IS AVAILABLE ({count}/{analysis['total_respondents']} people):"
+            )
+        elif count >= analysis["total_respondents"] * 0.75:
+            print(
+                f"\n✅ HIGH AVAILABILITY ({count}/{analysis['total_respondents']} people):"
+            )
+        elif count >= analysis["total_respondents"] * 0.5:
+            print(
+                f"\n🔵 MODERATE AVAILABILITY ({count}/{analysis['total_respondents']} people):"
+            )
+        else:
+            print(
+                f"\n⚪ LOW AVAILABILITY ({count}/{analysis['total_respondents']} people):"
+            )
+
+        for slot in slots:
+            # Find who is available
+            available_people = [
+                name
+                for name, person_slots in analysis["person_slots"].items()
+                if slot in person_slots
+            ]
+            people_str = ", ".join(available_people)
+            print(f"  • {slot}")
+            print(f"    Available: {people_str}")
+
+    # Print top recommendations
+    print("\n" + "=" * 70)
+    print("TOP RECOMMENDATIONS")
+    print("=" * 70)
+
+    if groups:
+        max_count = max(groups.keys())
+        top_slots = groups[max_count][:5]  # Get top 5 slots with most availability
+
+        print(
+            f"\nBest time slots with {max_count}/{analysis['total_respondents']} people available:"
+        )
+        for slot in top_slots:
+            print(f"  ★ {slot}")
+
+    # Show who hasn't responded if less than expected
+    if analysis["total_respondents"] < 10:  # Adjust this threshold as needed
+        print(
+            f"\nNote: Only {analysis['total_respondents']} people have responded so far."
+        )
+
+
+def download_and_analyze(sheet_input: str):
+    """Download the Google Sheet and analyze the availability data."""
+    # Extract sheet ID
+    sheet_id = extract_sheet_id(sheet_input)
+    print(f"Accessing sheet: {sheet_id}")
+
+    # Get credentials and connect
+    creds = get_credentials()
+    gc = gspread.authorize(creds)
+
+    # Open the spreadsheet
+    try:
+        spreadsheet = gc.open_by_key(sheet_id)
+    except gspread.exceptions.SpreadsheetNotFound:
+        # If it's a form ID, try to find the responses spreadsheet
+        print(f"Note: {sheet_id} appears to be a Google Form ID, not a spreadsheet.")
+        print("To access form responses, you need to:")
+        print("1. Open the form in Google Forms")
+        print("2. Click the 'Responses' tab")
+        print("3. Click the green Sheets icon to view/create the response spreadsheet")
+        print("4. Copy the spreadsheet URL and use that instead")
+        print("\nAlternatively, if you know the response sheet ID, use that directly.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error accessing spreadsheet: {e}")
+        sys.exit(1)
+
+    # Get the first worksheet
+    worksheet = spreadsheet.get_worksheet(0)
+
+    # Get all records as dictionaries
+    sheet_data = worksheet.get_all_records()
+
+    if not sheet_data:
+        print("No data found in the spreadsheet")
+        return
+
+    # Analyze the data
+    print(f"Found {len(sheet_data)} responses")
+    analysis = analyze_availability(sheet_data)
+
+    # Print results
+    print_analysis(analysis)
+
+    # Also save raw data to TSV for reference
+    import csv
+
+    output_file = "when2meet_data.tsv"
+    if sheet_data:
+        with open(output_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=sheet_data[0].keys(), delimiter="\t")
+            writer.writeheader()
+            writer.writerows(sheet_data)
+        print(f"\nRaw data saved to: {output_file}")
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python when2meet-parse <sheet_url_or_id>")
+        print("\nExamples:")
+        print(
+            '  python when2meet-parse "https://docs.google.com/spreadsheets/d/1abc123/edit"'
+        )
+        print("  python when2meet-parse 1abc123")
+        sys.exit(1)
+
+    sheet_input = sys.argv[1]
+    download_and_analyze(sheet_input)
+
+
+if __name__ == "__main__":
+    main()

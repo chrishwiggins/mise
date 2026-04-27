@@ -1,0 +1,203 @@
+#!/bin/bash
+# webping - HTTP-based connectivity test with timing stats
+# Usage: hping [url] [interval]   # z-score mode (default, requires prior data)
+#        hping -raw [url] [interval]  # raw timing values
+#        hping -log    # view the log file
+#        hping -stats  # show quartiles for each column (non-zero values only)
+
+LOGFILE="$HOME/Library/Logs/hping.log"
+
+# Handle -log option
+if [[ "$1" == "-log" ]]; then
+    if [[ -f "$LOGFILE" ]]; then
+        less "$LOGFILE"
+    else
+        echo "No log file found at $LOGFILE"
+    fi
+    exit 0
+fi
+
+# Handle -stats option
+if [[ "$1" == "-stats" ]]; then
+    if [[ ! -f "$LOGFILE" ]]; then
+        echo "No log file found at $LOGFILE"
+        exit 1
+    fi
+    awk '
+    function quartile(n, q,    idx, lower, upper, frac) {
+        if (n == 0) return 0
+        idx = 1 + (n - 1) * q
+        lower = int(idx)
+        upper = lower + 1
+        frac = idx - lower
+        if (upper > n) return sorted[lower]
+        return sorted[lower] + frac * (sorted[upper] - sorted[lower])
+    }
+    /^[0-9]{4}-[0-9]{2}-[0-9]{2}/ {
+        n = split($0, parts, "|")
+        if (n >= 3) {
+            gsub(/^[ \t]+|[ \t]+$/, "", parts[3])
+            split(parts[3], vals, /[ \t]+/)
+            for (i = 1; i <= 4; i++) {
+                v = vals[i] + 0
+                if (v > 0) {
+                    count[i]++
+                    data[i,count[i]] = v
+                }
+            }
+        }
+    }
+    END {
+        labels[1] = "DNS"; labels[2] = "Connect"; labels[3] = "TTFB"; labels[4] = "Total"
+        printf "%-10s %12s %12s %12s %12s\n", "", "Q1", "Median", "Q3", "N"
+        for (col = 1; col <= 4; col++) {
+            n = count[col] + 0
+            if (n == 0) {
+                printf "%-10s %12s %12s %12s %12d\n", labels[col], "-", "-", "-", 0
+                continue
+            }
+            for (i = 1; i <= n; i++) sorted[i] = data[col,i]
+            for (i = 1; i <= n; i++) {
+                for (j = i + 1; j <= n; j++) {
+                    if (sorted[i] > sorted[j]) {
+                        tmp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = tmp
+                    }
+                }
+            }
+            q1 = quartile(n, 0.25)
+            q2 = quartile(n, 0.50)
+            q3 = quartile(n, 0.75)
+            printf "%-10s %12.6f %12.6f %12.6f %12d\n", labels[col], q1, q2, q3, n
+        }
+    }
+    ' "$LOGFILE"
+    exit 0
+fi
+
+# Handle -raw option (raw timing values, the old default)
+if [[ "$1" == "-raw" ]]; then
+    URL="${2:-https://google.com}"
+    INTERVAL="${3:-2}"
+
+    HOST=$(echo "$URL" | sed -E 's|https?://||' | sed -E 's|/.*||')
+    RESOLVED_IP=$(dig +short "$HOST" | head -1)
+
+    mkdir -p "$(dirname "$LOGFILE")"
+    {
+        echo "--- hping session started: $(date '+%Y-%m-%d %H:%M:%S') ---"
+        echo "URL: $URL | Host: $HOST | IP: ${RESOLVED_IP:-unresolved}"
+    } >> "$LOGFILE"
+
+    printf "DNS\t\tConnect\t\tTTFB\t\tTotal\n"
+    while true; do
+        TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+        OUTPUT=$(curl -o /dev/null -s -w "%{time_namelookup}\t\t%{time_connect}\t\t%{time_starttransfer}\t\t%{time_total}" "$URL")
+        echo "$OUTPUT"
+        echo "$TIMESTAMP | $HOST ($RESOLVED_IP) | $OUTPUT" >> "$LOGFILE"
+        sleep "$INTERVAL"
+    done
+    exit 0
+fi
+
+# Default mode: z-score output
+URL="${1:-https://google.com}"
+INTERVAL="${2:-2}"
+
+if [[ ! -f "$LOGFILE" ]]; then
+    echo "No log data yet. Run 'hping -raw' first to collect baseline data."
+    exit 1
+fi
+
+# Get quartiles from log file (machine-readable format)
+QUARTILES=$(awk '
+function quartile(n, q,    idx, lower, upper, frac) {
+    if (n == 0) return 0
+    idx = 1 + (n - 1) * q
+    lower = int(idx)
+    upper = lower + 1
+    frac = idx - lower
+    if (upper > n) return sorted[lower]
+    return sorted[lower] + frac * (sorted[upper] - sorted[lower])
+}
+/^[0-9]{4}-[0-9]{2}-[0-9]{2}/ {
+    n = split($0, parts, "|")
+    if (n >= 3) {
+        gsub(/^[ \t]+|[ \t]+$/, "", parts[3])
+        split(parts[3], vals, /[ \t]+/)
+        for (i = 1; i <= 4; i++) {
+            v = vals[i] + 0
+            if (v > 0) {
+                count[i]++
+                data[i,count[i]] = v
+            }
+        }
+    }
+}
+END {
+    for (col = 1; col <= 4; col++) {
+        n = count[col] + 0
+        if (n == 0) {
+            printf "0 0 0 "
+            continue
+        }
+        for (i = 1; i <= n; i++) sorted[i] = data[col,i]
+        for (i = 1; i <= n; i++) {
+            for (j = i + 1; j <= n; j++) {
+                if (sorted[i] > sorted[j]) {
+                    tmp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = tmp
+                }
+            }
+        }
+        printf "%.9f %.9f %.9f ", quartile(n, 0.25), quartile(n, 0.50), quartile(n, 0.75)
+    }
+}
+' "$LOGFILE")
+
+# Parse quartiles into variables
+read Q1_DNS MED_DNS Q3_DNS Q1_CON MED_CON Q3_CON Q1_TTFB MED_TTFB Q3_TTFB Q1_TOT MED_TOT Q3_TOT <<< "$QUARTILES"
+
+# Check we have valid data
+if [[ "$MED_DNS" == "0" && "$MED_CON" == "0" && "$MED_TTFB" == "0" && "$MED_TOT" == "0" ]]; then
+    echo "Insufficient log data. Run 'hping -raw' first to collect baseline data."
+    exit 1
+fi
+
+HOST=$(echo "$URL" | sed -E 's|https?://||' | sed -E 's|/.*||')
+RESOLVED_IP=$(dig +short "$HOST" | head -1)
+
+mkdir -p "$(dirname "$LOGFILE")"
+{
+    echo "--- hping session started: $(date '+%Y-%m-%d %H:%M:%S') ---"
+    echo "URL: $URL | Host: $HOST | IP: ${RESOLVED_IP:-unresolved}"
+} >> "$LOGFILE"
+
+printf "DNS\t\tConnect\t\tTTFB\t\tTotal\n"
+while true; do
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+    OUTPUT=$(curl -o /dev/null -s -w "%{time_namelookup} %{time_connect} %{time_starttransfer} %{time_total}" "$URL")
+
+    # Transform to z-scores: z = (median - value) * 2 / (Q3 - Q1)
+    # Maps: faster than median -> positive, slower -> negative
+    ZSCORES=$(echo "$OUTPUT" | awk -v q1_dns="$Q1_DNS" -v med_dns="$MED_DNS" -v q3_dns="$Q3_DNS" \
+                                   -v q1_con="$Q1_CON" -v med_con="$MED_CON" -v q3_con="$Q3_CON" \
+                                   -v q1_ttfb="$Q1_TTFB" -v med_ttfb="$MED_TTFB" -v q3_ttfb="$Q3_TTFB" \
+                                   -v q1_tot="$Q1_TOT" -v med_tot="$MED_TOT" -v q3_tot="$Q3_TOT" '
+    function zscore(val, q1, med, q3) {
+        iqr = q3 - q1
+        if (iqr == 0) return 0
+        return (med - val) * 2 / iqr
+    }
+    {
+        printf "%+.2f\t\t%+.2f\t\t%+.2f\t\t%+.2f\n", \
+            zscore($1, q1_dns, med_dns, q3_dns), \
+            zscore($2, q1_con, med_con, q3_con), \
+            zscore($3, q1_ttfb, med_ttfb, q3_ttfb), \
+            zscore($4, q1_tot, med_tot, q3_tot)
+    }')
+
+    echo "$ZSCORES"
+    # Log raw values (space-separated, convert to tab for consistency)
+    RAW_LOG=$(echo "$OUTPUT" | awk '{printf "%s\t\t%s\t\t%s\t\t%s", $1, $2, $3, $4}')
+    echo "$TIMESTAMP | $HOST ($RESOLVED_IP) | $RAW_LOG" >> "$LOGFILE"
+    sleep "$INTERVAL"
+done

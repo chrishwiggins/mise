@@ -1,0 +1,136 @@
+#!/usr/bin/python3
+"""Export slide images from a Google Slides presentation to a local directory.
+
+Uses the getThumbnail API to download high-res PNGs. Optionally pushes to a
+GitHub repo for use with createImage in other presentations.
+
+Usage:
+    gslides-export-images -i PRESENTATION_ID -o OUTPUT_DIR [-s START] [-e END] [-g REPO]
+
+Examples:
+    # Download slides 26-34 from a presentation:
+    gslides-export-images -i 1hNPIT...w -o ./slide-images -s 26 -e 34
+
+    # Download and push to GitHub:
+    gslides-export-images -i 1hNPIT...w -o ./slide-images -s 26 -e 34 -g chrishwiggins/pas-slide-images
+
+    # Download all slides:
+    gslides-export-images -i 1hNPIT...w -o ./slide-images
+"""
+
+import argparse
+import os
+import pickle
+import subprocess
+import sys
+
+import requests as req
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+
+
+def get_credentials():
+    token_path = os.path.expanduser(
+        '~/.config/gcloud/slides-automation-user-token.pickle'
+    )
+    with open(token_path, 'rb') as f:
+        creds = pickle.load(f)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(token_path, 'wb') as f:
+                pickle.dump(creds, f)
+    return creds
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Export Google Slides as PNG images'
+    )
+    parser.add_argument('-i', '--presentation-id', required=True,
+                        help='Google Slides presentation ID or URL')
+    parser.add_argument('-o', '--output-dir', required=True,
+                        help='Local directory for saved PNGs')
+    parser.add_argument('-s', '--start', type=int, default=1,
+                        help='First slide number to export (1-based, default: 1)')
+    parser.add_argument('-e', '--end', type=int, default=0,
+                        help='Last slide number to export (0 = last slide)')
+    parser.add_argument('-g', '--github-repo', default='',
+                        help='GitHub repo (owner/name) to push images to')
+    parser.add_argument('-p', '--prefix', default='slide',
+                        help='Filename prefix (default: slide)')
+    args = parser.parse_args()
+
+    # Extract ID from URL if needed
+    pres_id = args.presentation_id
+    if '/' in pres_id:
+        # Extract ID from Google Slides URL
+        parts = pres_id.split('/')
+        for j, p in enumerate(parts):
+            if p == 'd' and j + 1 < len(parts):
+                pres_id = parts[j + 1]
+                break
+
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    creds = get_credentials()
+    service = build('slides', 'v1', credentials=creds)
+    pres = service.presentations().get(presentationId=pres_id).execute()
+    slides = pres.get('slides', [])
+    total = len(slides)
+
+    start_idx = args.start - 1  # convert to 0-based
+    end_idx = args.end if args.end > 0 else total
+
+    print(f'Presentation: {pres.get("title", "(untitled)")} ({total} slides)')
+    print(f'Exporting slides {args.start}-{end_idx}')
+
+    files = []
+    for i in range(start_idx, end_idx):
+        slide_id = slides[i]['objectId']
+        thumb = service.presentations().pages().getThumbnail(
+            presentationId=pres_id,
+            pageObjectId=slide_id,
+            thumbnailProperties_mimeType='PNG',
+            thumbnailProperties_thumbnailSize='LARGE'
+        ).execute()
+
+        r = req.get(thumb['contentUrl'], timeout=30)
+        fname = f'{args.prefix}-{i+1:02d}.png'
+        fpath = os.path.join(args.output_dir, fname)
+        with open(fpath, 'wb') as f:
+            f.write(r.content)
+        files.append(fname)
+        print(f'  {fname}: {len(r.content)} bytes')
+
+    print(f'\n{len(files)} images saved to {args.output_dir}')
+
+    # Optionally push to GitHub
+    if args.github_repo:
+        print(f'\nPushing to GitHub: {args.github_repo}')
+        os.chdir(args.output_dir)
+
+        if not os.path.exists('.git'):
+            subprocess.run(['git', 'init'], check=True)
+            subprocess.run(
+                ['gh', 'repo', 'create', args.github_repo,
+                 '--public', '--source=.'],
+                check=True
+            )
+
+        subprocess.run(['git', 'add'] + files, check=True)
+        subprocess.run(
+            ['git', 'commit', '-m',
+             f'Export {len(files)} slide images'],
+            check=True
+        )
+        subprocess.run(['git', 'push', '-u', 'origin', 'main'], check=True)
+
+        base = f'https://raw.githubusercontent.com/{args.github_repo}/main'
+        print(f'\nGitHub raw URLs:')
+        for fname in files:
+            print(f'  {base}/{fname}')
+
+
+if __name__ == '__main__':
+    main()

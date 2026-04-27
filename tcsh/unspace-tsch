@@ -1,0 +1,38 @@
+#!/bin/tcsh
+
+# Source directory with spaces
+set SOURCE_DIR = "Term Assistant Professor in Applied Physics and Applied Mathematics"
+set TARGET_DIR = "Term_Assistant_Professor_in_Applied_Physics_and_Applied_Mathematics"
+
+# Check if source directory exists
+if (! -d "$SOURCE_DIR") then
+    echo "Source directory not found!"
+    exit 1
+endif
+
+# Create target directory
+mkdir -p "$TARGET_DIR"
+
+# Process all files using find
+find "$SOURCE_DIR" -type f | while read file
+    # Get the relative path
+    set rel_path = `echo $file | sed "s|$SOURCE_DIR/||"`
+    
+    # Create target path with underscores
+    set target_file = "$TARGET_DIR/`echo $rel_path | sed 's/ /_/g'`"
+    
+    # Create target directory
+    set target_dir = `dirname "$target_file"`
+    mkdir -p "$target_dir"
+    
+    # Copy file to new location
+    cp "$file" "$target_file"
+end
+
+# If everything was successful, remove the original directory
+if ($status == 0) then
+    rm -rf "$SOURCE_DIR"
+    echo "Rename completed successfully!"
+else
+    echo "Error during rename process!"
+endif
