@@ -39,6 +39,9 @@ temp_*
 *.tmp
 *.bak
 
+# Prompt and notes files
+*pmt*
+
 # Output artifacts
 output.*
 data.tsv
