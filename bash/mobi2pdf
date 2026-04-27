@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# MOBI to PDF converter script using Calibre's ebook-convert
+# Usage: ./convert-mobi.sh input.mobi [output.pdf]
+
+# Check if at least one argument is provided
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 input.mobi [output.pdf]"
+    echo "If output.pdf is not specified, it will use the same name as input"
+    exit 1
+fi
+
+# Input file
+INPUT="$1"
+
+# Check if input file exists
+if [ ! -f "$INPUT" ]; then
+    echo "Error: Input file '$INPUT' does not exist"
+    exit 1
+fi
+
+# Check if input is a MOBI file
+if [[ ! "$INPUT" =~ \.mobi$ ]] && [[ ! "$INPUT" =~ \.azw3?$ ]]; then
+    echo "Warning: Input file doesn't have .mobi/.azw/.azw3 extension"
+    read -p "Continue anyway? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+# Output file - if not specified, use input name with .pdf extension
+if [ $# -ge 2 ]; then
+    OUTPUT="$2"
+else
+    OUTPUT="${INPUT%.mobi}.pdf"
+    OUTPUT="${OUTPUT%.azw}.pdf"
+    OUTPUT="${OUTPUT%.azw3}.pdf"
+fi
+
+# Check if output file already exists
+if [ -f "$OUTPUT" ]; then
+    read -p "Output file '$OUTPUT' already exists. Overwrite? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+# Check if ebook-convert is installed
+if ! command -v ebook-convert &> /dev/null; then
+    echo "Error: ebook-convert not found. Please install Calibre first:"
+    echo "  brew install --cask calibre"
+    exit 1
+fi
+
+echo "Converting '$INPUT' to '$OUTPUT'..."
+echo
+
+# Convert with high-quality settings
+ebook-convert "$INPUT" "$OUTPUT" \
+    --enable-heuristics \
+    --paper-size a4 \
+    --pdf-page-margin-left 72 \
+    --pdf-page-margin-right 72 \
+    --pdf-page-margin-top 72 \
+    --pdf-page-margin-bottom 72 \
+    --pdf-serif-family "Georgia" \
+    --pdf-sans-family "Helvetica" \
+    --pdf-mono-family "Courier" \
+    --pdf-default-font-size 12 \
+    --pdf-mono-font-size 10 \
+    --preserve-cover-aspect-ratio \
+    --pretty-print \
+    --smarten-punctuation \
+    --unsmarten-punctuation \
+    --change-justification "left"
+
+# Check if conversion was successful
+if [ $? -eq 0 ]; then
+    echo
+    echo "✓ Conversion successful: $OUTPUT"
+    echo "File size: $(du -h "$OUTPUT" | cut -f1)"
+else
+    echo
+    echo "✗ Conversion failed"
+    exit 1
+fi

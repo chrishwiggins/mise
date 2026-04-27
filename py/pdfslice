@@ -1,0 +1,35 @@
+#!/usr/bin/python3
+import os
+import sys
+from PyPDF2 import PdfReader, PdfWriter
+
+
+def split_pdf(input_pdf_path, output_stem):
+    # Read the input PDF
+    with open(input_pdf_path, "rb") as input_pdf_file:
+        pdf_reader = PdfReader(input_pdf_file)
+        num_pages = len(pdf_reader.pages)
+
+        for page_num in range(num_pages):
+            pdf_writer = PdfWriter()
+            pdf_writer.add_page(pdf_reader.pages[page_num])
+
+            output_pdf_path = f"{output_stem}_page_{page_num + 1}.pdf"
+            with open(output_pdf_path, "wb") as output_pdf_file:
+                pdf_writer.write(output_pdf_file)
+            print(f"Saved {output_pdf_path}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print("Usage: pdfslice <input_pdf_path> [<output_stem>]")
+        sys.exit(1)
+
+    input_pdf_path = sys.argv[1]
+    output_stem = (
+        sys.argv[2]
+        if len(sys.argv) == 3
+        else os.path.splitext(os.path.basename(input_pdf_path))[0]
+    )
+
+    split_pdf(input_pdf_path, output_stem)

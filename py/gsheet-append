@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""
+Append TSV rows to an existing Google Sheet tab.
+
+Usage:
+    echo -e "col1\\tcol2\\tcol3" | gsheet-append SHEET_URL
+    gsheet-append SHEET_URL < rows.tsv
+    gsheet-append SHEET_URL rows.tsv
+
+Reads tab-separated rows from stdin (or a file argument) and appends
+them to the bottom of the specified worksheet. Does NOT modify existing rows.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from google_auth import get_credentials, extract_google_id, extract_gid
+
+import gspread
+
+
+def read_rows(source):
+    """Read TSV rows from a file path or stdin. Skip blank lines."""
+    if source and source != "-" and Path(source).exists():
+        text = Path(source).read_text()
+    else:
+        text = sys.stdin.read()
+    rows = []
+    for line in text.splitlines():
+        if line.strip():
+            rows.append(line.split("\t"))
+    return rows
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(__doc__, file=sys.stderr)
+        sys.exit(1)
+
+    sheet_url_arg = sys.argv[1]
+    file_arg = sys.argv[2] if len(sys.argv) > 2 else None
+
+    sheet_id = extract_google_id(sheet_url_arg)
+    gid = extract_gid(sheet_url_arg) if "gid=" in sheet_url_arg else None
+
+    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+
+    creds = get_credentials(scopes="drive-and-sheets")
+    gc = gspread.authorize(creds)
+    spreadsheet = gc.open_by_url(url)
+
+    # Select worksheet by GID or use first one
+    if gid is not None:
+        worksheet = None
+        for ws in spreadsheet.worksheets():
+            if ws.id == gid:
+                worksheet = ws
+                break
+        if not worksheet:
+            print(f"GID {gid} not found", file=sys.stderr)
+            sys.exit(1)
+    else:
+        worksheet = spreadsheet.get_worksheet(0)
+
+    rows = read_rows(file_arg)
+    if not rows:
+        print("No rows to append.", file=sys.stderr)
+        sys.exit(0)
+
+    worksheet.append_rows(rows, value_input_option="RAW")
+    print(f"Appended {len(rows)} row(s) to '{worksheet.title}'.", file=sys.stderr)

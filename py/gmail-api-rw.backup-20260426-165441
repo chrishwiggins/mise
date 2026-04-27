@@ -35,127 +35,31 @@ Designed for the !! workflow:
     % !! 3 reply.eml                    # expands to: gmail-api-rw -n 5 -q "from:alice" 3 reply.eml
 """
 
-
-# PERFORMANCE OPTIMIZATION: Lazy imports for 90% faster startup
-# Only core modules loaded initially - heavy modules loaded on demand
-
 import argparse
+import base64
+import configparser
+import email
+import html as html_mod
 import json
+import mimetypes
 import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
+import random
+import webbrowser
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr, formatdate, getaddresses, make_msgid, parseaddr, parsedate_to_datetime
 from pathlib import Path
 
-# Lazy import cache
-_lazy_modules = {}
-
-def _import_heavy_modules():
-    """Import heavy modules only when needed."""
-    if 'heavy' not in _lazy_modules:
-        import base64
-        import configparser
-        import email
-        import html as html_mod
-        import mimetypes
-        import re
-        import shutil
-        import subprocess
-        import tempfile
-        import random
-        import webbrowser
-        from email.mime.base import MIMEBase
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.text import MIMEText
-        from email.utils import formataddr, formatdate, getaddresses, make_msgid, parseaddr, parsedate_to_datetime
-        
-        _lazy_modules['heavy'] = {
-            'base64': base64,
-            'configparser': configparser,
-            'email': email,
-            'html_mod': html_mod,
-            'mimetypes': mimetypes,
-            're': re,
-            'shutil': shutil,
-            'subprocess': subprocess,
-            'tempfile': tempfile,
-            'random': random,
-            'webbrowser': webbrowser,
-            'MIMEBase': MIMEBase,
-            'MIMEMultipart': MIMEMultipart,
-            'MIMEText': MIMEText,
-            'formataddr': formataddr,
-            'formatdate': formatdate,
-            'getaddresses': getaddresses,
-            'make_msgid': make_msgid,
-            'parseaddr': parseaddr,
-            'parsedate_to_datetime': parsedate_to_datetime
-        }
-    return _lazy_modules['heavy']
-
-def _import_google_modules():
-    """Import Google API modules only when needed."""
-    if 'google' not in _lazy_modules:
-        from google_auth import get_credentials
-        from googleapiclient.discovery import build
-        from googleapiclient.errors import HttpError
-        
-        _lazy_modules['google'] = {
-            'get_credentials': get_credentials,
-            'build': build,
-            'HttpError': HttpError
-        }
-    return _lazy_modules['google']
-
-# Proxy functions that trigger lazy loading
-def get_credentials(*args, **kwargs):
-    return _import_google_modules()['get_credentials'](*args, **kwargs)
-
-def build(*args, **kwargs):
-    return _import_google_modules()['build'](*args, **kwargs)
-
-class HttpError:
-    def __new__(cls, *args, **kwargs):
-        return _import_google_modules()['HttpError'](*args, **kwargs)
-
-# Module-level imports that get replaced by lazy loading
-def _get_module(name):
-    heavy = _import_heavy_modules()
-    return heavy[name]
-
-# Replace heavy imports with getters
-import sys
-class LazyModule:
-    def __init__(self, name):
-        self.name = name
-    def __getattr__(self, attr):
-        return getattr(_get_module(self.name), attr)
-
-base64 = LazyModule('base64')
-configparser = LazyModule('configparser')
-email = LazyModule('email')
-html_mod = LazyModule('html_mod')
-mimetypes = LazyModule('mimetypes')
-re = LazyModule('re')
-shutil = LazyModule('shutil')
-subprocess = LazyModule('subprocess')
-tempfile = LazyModule('tempfile')
-random = LazyModule('random')
-webbrowser = LazyModule('webbrowser')
-
-# Import specific classes when accessed
-def _get_heavy():
-    return _import_heavy_modules()
-
-MIMEBase = lambda *a, **k: _get_heavy()['MIMEBase'](*a, **k)
-MIMEMultipart = lambda *a, **k: _get_heavy()['MIMEMultipart'](*a, **k)
-MIMEText = lambda *a, **k: _get_heavy()['MIMEText'](*a, **k)
-formataddr = lambda *a, **k: _get_heavy()['formataddr'](*a, **k)
-formatdate = lambda *a, **k: _get_heavy()['formatdate'](*a, **k)
-getaddresses = lambda *a, **k: _get_heavy()['getaddresses'](*a, **k)
-make_msgid = lambda *a, **k: _get_heavy()['make_msgid'](*a, **k)
-parseaddr = lambda *a, **k: _get_heavy()['parseaddr'](*a, **k)
-parsedate_to_datetime = lambda *a, **k: _get_heavy()['parsedate_to_datetime'](*a, **k)
-
+from google_auth import get_credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 
 def _retry_api_call(func, max_retries=3, base_delay=1.0):

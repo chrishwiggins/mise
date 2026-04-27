@@ -1,0 +1,5 @@
+#!/bin/bash
+# Set window title and color
+# Usage: label "Title" r g b
+printf "\033]0;%s\007" "$1"
+osascript -e "tell application \"Terminal\" to set background color of window 1 to {${2:-20000}, ${3:-20000}, ${4:-20000}}"

@@ -1,0 +1,18 @@
+#!/usr/bin/python3
+# Define the input and output file names
+input_file = "references.bib"
+output_file = "updated_references.bib"
+
+with open(input_file, "r") as file:
+    lines = file.readlines()
+
+import re
+
+with open(output_file, "w") as file:
+    for line in lines:
+        # Check if the line contains 'title' and replace braces
+        # if line.strip().startswith('title='):
+        # line = line.replace('{', '{{').replace('}', '}}')
+        if re.match(r"^\s*title\s*=", line, re.IGNORECASE):
+            line = line.replace("{", "{{").replace("}", "}}")
+        file.write(line)

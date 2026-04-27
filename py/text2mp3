@@ -1,0 +1,31 @@
+#!/usr/bin/python3
+import sys
+from gtts import gTTS
+import os
+
+
+def text_to_speech(input_file, output_file=None):
+    # Read the input file
+    with open(input_file, "r") as file:
+        text = file.read()
+
+    # If no output filename is provided, use the input filename and append '.mp3'
+    if output_file is None:
+        output_file = os.path.splitext(input_file)[0] + ".mp3"
+
+    # Convert text to speech
+    tts = gTTS(text)
+    tts.save(output_file)
+    print(f"Audio saved as {output_file}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python script.py <input_file> [<output_file>]")
+        sys.exit(1)
+
+    # Get the input file and optionally the output file from the command line arguments
+    input_file = sys.argv[1]
+    output_file = sys.argv[2] if len(sys.argv) > 2 else None
+
+    text_to_speech(input_file, output_file)

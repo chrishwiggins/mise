@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+
+import os
+import re
+
+
+def normalize(name):
+    # Remove trailing spaces
+    name = name.rstrip()
+
+    # Replace sequences of space/comma/underscore/dash with an underscore
+    # Replace single quotes with underscore
+    # Replace '(' and ')' with '-'
+    name = re.sub(r"[ ,_-]+", "_", name)
+    name = name.replace("'", "_")
+    name = name.replace("(", "-").replace(")", "-")
+
+    return name
+
+
+def main():
+    # Walk the directory tree from the bottom up
+    for root, dirs, files in os.walk(".", topdown=False):
+        # Rename files
+        for f in files:
+            old_path = os.path.join(root, f)
+            new_name = normalize(f)
+            if new_name != f:
+                new_path = os.path.join(root, new_name)
+                print(f"Renaming file: {old_path} -> {new_path}")
+                os.rename(old_path, new_path)
+
+        # Rename directories
+        for d in dirs:
+            old_path = os.path.join(root, d)
+            new_name = normalize(d)
+            if new_name != d:
+                new_path = os.path.join(root, new_name)
+                print(f"Renaming directory: {old_path} -> {new_path}")
+                os.rename(old_path, new_path)
+
+    print("Renaming complete.")
+
+
+if __name__ == "__main__":
+    main()

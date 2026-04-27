@@ -1,0 +1,12 @@
+#!/bin/bash
+# Clean pbpaste wrapper that removes bracketed paste mode escape sequences
+
+# Get clipboard content
+content=$(/usr/bin/pbpaste)
+
+# Remove bracketed paste mode sequences
+# e[?2004l (disable) and e[?2004h (enable)
+# Also remove 00~ and 01~ sequences
+cleaned=$(echo -n "$content" | sed -E 's/\x1b\[?2004[lh]//g; s/\x00~//g; s/\x01~//g; s/^[[:space:]]*//; s/[[:space:]]*$//')
+
+echo -n "$cleaned"

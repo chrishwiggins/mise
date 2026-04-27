@@ -1,0 +1,4 @@
+#!/bin/tcsh
+# Set window to red with optional title
+osascript -e 'tell application "Terminal" to set background color of window 1 to {30000, 10000, 10000}'
+if ($#argv > 0) printf "\033]0;%s\007" "$*"

@@ -1,0 +1,159 @@
+#!/bin/bash
+#
+# memwatch - Memory watchdog for macOS (alert only)
+# Monitors process memory and alerts when processes exceed threshold
+#
+# Usage:
+#   memwatch              # Run with defaults (8GB threshold)
+#   memwatch -t 4         # Set threshold to 4GB
+#   memwatch -i 10        # Check every 10 seconds
+#   memwatch -l           # List current memory hogs and exit
+#
+
+set -euo pipefail
+
+# Defaults
+THRESHOLD_GB=8
+INTERVAL=30
+LIST_ONLY=false
+IGNORE_PATTERN="kernel_task|WindowServer|mds_stores"
+
+# Colors
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+# File to track warned PIDs (bash 3.2 compatible - no associative arrays)
+WARNED_FILE="/tmp/memwatch_warned_$$"
+trap "rm -f $WARNED_FILE" EXIT
+
+usage() {
+    cat <<EOF
+memwatch - Memory watchdog for macOS
+
+Usage: memwatch [options]
+
+Options:
+  -t GB     Memory threshold in GB (default: 8)
+  -i SEC    Check interval in seconds (default: 30)
+  -l        List current memory hogs and exit
+  -h        Show this help
+
+Examples:
+  memwatch              # Monitor with 8GB threshold
+  memwatch -t 4 -i 10   # 4GB threshold, check every 10 seconds
+  memwatch -l           # Show current memory usage and exit
+
+EOF
+    exit 0
+}
+
+while getopts "t:i:lh" opt; do
+    case $opt in
+        t) THRESHOLD_GB="$OPTARG" ;;
+        i) INTERVAL="$OPTARG" ;;
+        l) LIST_ONLY=true ;;
+        h) usage ;;
+        *) usage ;;
+    esac
+done
+
+THRESHOLD_MB=$((THRESHOLD_GB * 1024))
+
+notify() {
+    local title="$1"
+    local message="$2"
+    osascript -e "display notification \"$message\" with title \"$title\" sound name \"Funk\"" 2>/dev/null || true
+}
+
+get_memory_hogs() {
+    ps -axo pid=,rss=,comm= | awk -v threshold="$THRESHOLD_MB" '
+    {
+        pid = $1
+        rss_kb = $2
+        rss_mb = rss_kb / 1024
+        n = split($3, parts, "/")
+        name = parts[n]
+        if (rss_mb > threshold) {
+            printf "%d %.0f %s\n", pid, rss_mb, name
+        }
+    }' | grep -vE "$IGNORE_PATTERN" | sort -k2 -nr || true
+}
+
+list_top_processes() {
+    echo -e "${YELLOW}Top memory consumers:${NC}"
+    echo "────────────────────────────────────────────────"
+    printf "%-8s %10s  %s\n" "PID" "MEMORY" "PROCESS"
+    echo "────────────────────────────────────────────────"
+    ps -axo pid=,rss=,comm= | sort -k2 -nr | head -15 | while read -r pid rss_kb comm; do
+        rss_mb=$((rss_kb / 1024))
+        name=$(basename "$comm")
+        if [ "$rss_mb" -gt "$THRESHOLD_MB" ]; then
+            printf "${RED}%-8s %8s MB  %s${NC}\n" "$pid" "$rss_mb" "$name"
+        elif [ "$rss_mb" -gt $((THRESHOLD_MB / 2)) ]; then
+            printf "${YELLOW}%-8s %8s MB  %s${NC}\n" "$pid" "$rss_mb" "$name"
+        else
+            printf "%-8s %8s MB  %s\n" "$pid" "$rss_mb" "$name"
+        fi
+    done
+    echo "────────────────────────────────────────────────"
+    echo -e "Threshold: ${YELLOW}${THRESHOLD_GB} GB${NC}"
+    echo ""
+    memory_pressure 2>/dev/null | grep -E "System-wide|Pages free" | head -2
+}
+
+was_warned() {
+    local pid="$1"
+    [ -f "$WARNED_FILE" ] && grep -q "^${pid}$" "$WARNED_FILE" 2>/dev/null
+}
+
+mark_warned() {
+    local pid="$1"
+    echo "$pid" >> "$WARNED_FILE"
+}
+
+cleanup_warned() {
+    [ ! -f "$WARNED_FILE" ] && return
+    local temp_file="${WARNED_FILE}.tmp"
+    : > "$temp_file"
+    while read -r pid; do
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "$pid" >> "$temp_file"
+        fi
+    done < "$WARNED_FILE"
+    mv "$temp_file" "$WARNED_FILE"
+}
+
+if [ "$LIST_ONLY" = true ]; then
+    list_top_processes
+    exit 0
+fi
+
+echo -e "${GREEN}memwatch started${NC}"
+echo "  Threshold: ${THRESHOLD_GB}GB"
+echo "  Interval:  ${INTERVAL}s"
+echo ""
+echo "Press Ctrl+C to stop"
+echo "────────────────────────────────────────────────"
+
+touch "$WARNED_FILE"
+
+while true; do
+    hogs=$(get_memory_hogs)
+
+    if [ -n "$hogs" ]; then
+        echo "$hogs" | while read -r pid mem_mb name; do
+            if ! was_warned "$pid"; then
+                mem_gb=$(echo "scale=1; $mem_mb / 1024" | bc)
+                timestamp=$(date '+%H:%M:%S')
+                echo -e "${RED}[$timestamp] WARNING: $name (PID $pid) using ${mem_gb}GB${NC}"
+                notify "Memory Warning" "$name is using ${mem_gb}GB - consider killing it"
+                mark_warned "$pid"
+            fi
+        done
+    fi
+
+    sleep "$INTERVAL"
+    cleanup_warned
+done

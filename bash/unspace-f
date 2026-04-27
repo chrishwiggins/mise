@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# This script recursively renames directories and files by replacing problematic characters:
+# - Replaces sequences of spaces, commas, underscores, and dashes with a single underscore
+# - Replaces single quotes with underscores
+# - Replaces parentheses with hyphens
+
+# Step 1: Rename directories from deepest to shallowest
+find . -depth -type d | while IFS= read -r dir; do
+    # Transform the directory name
+    newdir=$(echo "$dir" | sed -e 's/[ ,_-]\+/_/g' -e "s/'/_/g" | tr '()' '-')
+    if [ "$dir" != "$newdir" ]; then
+        mv -v "$dir" "$newdir"
+    fi
+done
+
+# Step 2: Rename files
+find . -type f | while IFS= read -r file; do
+    # Transform the file name
+    newfile=$(echo "$file" | sed -e 's/[ ,_-]\+/_/g' -e "s/'/_/g" | tr '()' '-')
+    if [ "$file" != "$newfile" ]; then
+        mv -v "$file" "$newfile"
+    fi
+done
+
+echo "Renaming complete."

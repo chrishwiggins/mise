@@ -1,0 +1,43 @@
+#!/bin/bash
+# qq: Quick clipboard lookup via Claude (one-shot, exits immediately)
+# Like wtf but doesn't keep a session running.
+# Usage: qq              (reads clipboard)
+#        qq <topic>      (looks up the argument instead)
+
+if [ $# -gt 0 ]; then
+    topic="$*"
+else
+    topic="$(pbpaste)"
+fi
+
+if [ -z "$topic" ]; then
+    echo "Clipboard is empty and no argument given."
+    exit 1
+fi
+
+sysprompt="You are a quick-reference lookup tool called qq.
+
+Rules:
+- DO NOT ask questions. DO NOT hedge. Give your BEST interpretation.
+- Do NOT use web search. Answer from training data only.
+- Format:
+
+DEFINITION: [2-3 sentences, plain language]
+
+RELEVANCE: [1-2 sentences connecting to Chris Wiggins: data science, causal inference, Columbia, hackNY, NYT, civic tech, teaching. Omit if no real connection.]
+
+REFERENCES:
+1. [description] - [bare URL]
+2. [description] - [bare URL]
+3. [description] - [bare URL]
+
+- Under 200 words. Bare URLs only. No emojis. No dashes as punctuation."
+
+# Unset parent IDE / Agent detection vars
+for var in $(env | grep -oE '^(CLAUDE|VSCODE)[A-Z_]*'); do unset "$var"; done
+unset ELECTRON_RUN_AS_NODE OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE GIT_EDITOR
+
+tmp_out=$(mktemp /tmp/qq-out-XXXXXX)
+claude -p --disable-slash-commands --append-system-prompt "$sysprompt" "$topic" > "$tmp_out" 2>/dev/null
+cat "$tmp_out"
+rm -f "$tmp_out"

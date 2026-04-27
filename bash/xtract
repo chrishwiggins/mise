@@ -1,0 +1,248 @@
+#!/bin/bash
+
+# xtract - Convert xcribe timestamped transcripts to other formats
+#
+# Input format (from xcribe):
+#   [0.00s -> 3.42s] The spoken text here.
+#   [3.42s -> 7.81s] More spoken text.
+#
+# Output formats:
+#   txt   - Plain text, one segment per line (no timestamps)
+#   flat  - Plain text, all segments joined into one paragraph
+#   srt   - SubRip subtitle format
+#   vtt   - WebVTT subtitle format
+#   tsv   - Tab-separated: start, end, text
+#   raw   - Pass through unchanged (default)
+
+set -euo pipefail
+
+usage() {
+    echo "Usage: xtract [options] <file>"
+    echo ""
+    echo "Convert xcribe timestamped transcripts to other formats."
+    echo ""
+    echo "Options:"
+    echo "  -f <format>   Output format (default: raw)"
+    echo "                Formats: txt, flat, srt, vtt, tsv, raw"
+    echo "  -o <file>     Write to file instead of stdout"
+    echo "  -h, -help     Show this help"
+    echo ""
+    echo "Formats:"
+    echo "  raw   Pass through unchanged (timestamped lines)"
+    echo "  txt   Plain text, one segment per line (timestamps stripped)"
+    echo "  flat  Plain text, all segments joined into one paragraph"
+    echo "  srt   SubRip subtitle format"
+    echo "  vtt   WebVTT subtitle format"
+    echo "  tsv   Tab-separated values: start_sec, end_sec, text"
+    echo ""
+    echo "Input can be an xcribe .md file (extracts the code block)"
+    echo "or a raw timestamped transcript file."
+    echo ""
+    echo "Examples:"
+    echo "  xtract -f txt memo.md              # Strip timestamps"
+    echo "  xtract -f srt memo.md -o memo.srt  # Convert to SRT"
+    echo "  xtract -f flat memo.md             # One big paragraph"
+    echo "  cat memo.md | xtract -f tsv        # Pipe mode"
+    exit 0
+}
+
+FORMAT="raw"
+OUTPUT=""
+INPUT=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: -f requires a format argument" >&2
+                exit 1
+            fi
+            FORMAT="$2"
+            shift 2
+            ;;
+        -o)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: -o requires a filename argument" >&2
+                exit 1
+            fi
+            OUTPUT="$2"
+            shift 2
+            ;;
+        -h|-help|--help)
+            usage
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+        *)
+            INPUT="$1"
+            shift
+            ;;
+    esac
+done
+
+# Validate format
+case "$FORMAT" in
+    raw|txt|flat|srt|vtt|tsv) ;;
+    *)
+        echo "Error: unknown format '$FORMAT'" >&2
+        echo "Valid formats: raw, txt, flat, srt, vtt, tsv" >&2
+        exit 1
+        ;;
+esac
+
+# Read input: file or stdin
+if [[ -n "$INPUT" ]]; then
+    if [[ ! -f "$INPUT" ]]; then
+        echo "Error: file not found: $INPUT" >&2
+        exit 1
+    fi
+    raw_input=$(cat "$INPUT")
+else
+    if [[ -t 0 ]]; then
+        echo "Error: no input file and nothing on stdin" >&2
+        echo "Run 'xtract -h' for usage" >&2
+        exit 1
+    fi
+    raw_input=$(cat)
+fi
+
+# Extract timestamped lines from input
+# If it's an xcribe .md file, pull lines from inside the code block
+# Otherwise, take all lines matching the timestamp pattern
+extract_segments() {
+    local input="$1"
+    local in_code_block=false
+
+    while IFS= read -r line; do
+        # Detect code block boundaries
+        if [[ "$line" == '```' ]] || [[ "$line" == '```'* ]]; then
+            if $in_code_block; then
+                in_code_block=false
+            else
+                in_code_block=true
+            fi
+            continue
+        fi
+
+        # If we're in a code block, or if there's no code block structure,
+        # grab lines that match the timestamp pattern
+        if [[ "$line" =~ ^\[([0-9]+\.[0-9]+)s\ -\>\ ([0-9]+\.[0-9]+)s\]\ (.*) ]]; then
+            echo "$line"
+        fi
+    done <<< "$input"
+}
+
+segments=$(extract_segments "$raw_input")
+
+if [[ -z "$segments" ]]; then
+    echo "Error: no timestamped segments found in input" >&2
+    echo "Expected format: [0.00s -> 3.42s] Text here" >&2
+    exit 1
+fi
+
+# Convert seconds (e.g., 125.30) to SRT timecode (00:02:05,300)
+secs_to_srt() {
+    local total="$1"
+    local h m s ms
+    h=$(echo "$total" | awk '{printf "%02d", int($1/3600)}')
+    m=$(echo "$total" | awk '{printf "%02d", int($1/60) % 60}')
+    s=$(echo "$total" | awk '{printf "%02d", int($1) % 60}')
+    ms=$(echo "$total" | awk '{printf "%03d", ($1 - int($1)) * 1000}')
+    echo "${h}:${m}:${s},${ms}"
+}
+
+# Convert seconds to VTT timecode (00:02:05.300)
+secs_to_vtt() {
+    local total="$1"
+    local h m s ms
+    h=$(echo "$total" | awk '{printf "%02d", int($1/3600)}')
+    m=$(echo "$total" | awk '{printf "%02d", int($1/60) % 60}')
+    s=$(echo "$total" | awk '{printf "%02d", int($1) % 60}')
+    ms=$(echo "$total" | awk '{printf "%03d", ($1 - int($1)) * 1000}')
+    echo "${h}:${m}:${s}.${ms}"
+}
+
+# Format output
+format_output() {
+    local fmt="$1"
+    local segs="$2"
+
+    case "$fmt" in
+        raw)
+            echo "$segs"
+            ;;
+
+        txt)
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^\[[0-9]+\.[0-9]+s\ -\>\ [0-9]+\.[0-9]+s\]\ (.*) ]]; then
+                    echo "${BASH_REMATCH[1]}"
+                fi
+            done <<< "$segs"
+            ;;
+
+        flat)
+            local result=""
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^\[[0-9]+\.[0-9]+s\ -\>\ [0-9]+\.[0-9]+s\]\ (.*) ]]; then
+                    if [[ -n "$result" ]]; then
+                        result="$result ${BASH_REMATCH[1]}"
+                    else
+                        result="${BASH_REMATCH[1]}"
+                    fi
+                fi
+            done <<< "$segs"
+            echo "$result"
+            ;;
+
+        srt)
+            local seq=1
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^\[([0-9]+\.[0-9]+)s\ -\>\ ([0-9]+\.[0-9]+)s\]\ (.*) ]]; then
+                    local start="${BASH_REMATCH[1]}"
+                    local end="${BASH_REMATCH[2]}"
+                    local text="${BASH_REMATCH[3]}"
+                    echo "$seq"
+                    echo "$(secs_to_srt "$start") --> $(secs_to_srt "$end")"
+                    echo "$text"
+                    echo ""
+                    seq=$((seq + 1))
+                fi
+            done <<< "$segs"
+            ;;
+
+        vtt)
+            echo "WEBVTT"
+            echo ""
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^\[([0-9]+\.[0-9]+)s\ -\>\ ([0-9]+\.[0-9]+)s\]\ (.*) ]]; then
+                    local start="${BASH_REMATCH[1]}"
+                    local end="${BASH_REMATCH[2]}"
+                    local text="${BASH_REMATCH[3]}"
+                    echo "$(secs_to_vtt "$start") --> $(secs_to_vtt "$end")"
+                    echo "$text"
+                    echo ""
+                fi
+            done <<< "$segs"
+            ;;
+
+        tsv)
+            echo -e "start\tend\ttext"
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^\[([0-9]+\.[0-9]+)s\ -\>\ ([0-9]+\.[0-9]+)s\]\ (.*) ]]; then
+                    echo -e "${BASH_REMATCH[1]}\t${BASH_REMATCH[2]}\t${BASH_REMATCH[3]}"
+                fi
+            done <<< "$segs"
+            ;;
+    esac
+}
+
+result=$(format_output "$FORMAT" "$segments")
+
+if [[ -n "$OUTPUT" ]]; then
+    echo "$result" > "$OUTPUT"
+    echo "Wrote $FORMAT output to $OUTPUT" >&2
+else
+    echo "$result"
+fi

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENV_FILE="$HOME/.config/restic/env"
+LOG_DIR="$HOME/gd/local"
+LOG_FILE="$LOG_DIR/backup-gd.log"
+LOCK_FILE="/tmp/backup-gd.lock"
+
+# Prevent concurrent runs
+if [ -f "$LOCK_FILE" ]; then
+    pid=$(cat "$LOCK_FILE" 2>/dev/null)
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') backup already running (pid $pid), skipping" >> "$LOG_FILE"
+        exit 0
+    fi
+    rm -f "$LOCK_FILE"
+fi
+echo $$ > "$LOCK_FILE"
+trap 'rm -f "$LOCK_FILE"' EXIT
+
+# Load credentials
+if [ ! -f "$ENV_FILE" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: $ENV_FILE not found" >> "$LOG_FILE"
+    exit 1
+fi
+source "$ENV_FILE"
+
+# Ensure log directory exists
+mkdir -p "$LOG_DIR"
+
+{
+    echo "=== backup started: $(date '+%Y-%m-%d %H:%M:%S') ==="
+
+    # Run backup
+    /opt/homebrew/bin/restic backup ~/gd \
+        --exclude-file="$HOME/.config/restic/excludes" \
+        --verbose
+
+    echo "--- pruning old snapshots ---"
+
+    # Retention: 7 daily, 4 weekly, 6 monthly
+    /opt/homebrew/bin/restic forget \
+        --keep-daily 7 \
+        --keep-weekly 4 \
+        --keep-monthly 6 \
+        --prune
+
+    echo "=== backup finished: $(date '+%Y-%m-%d %H:%M:%S') ==="
+} >> "$LOG_FILE" 2>&1

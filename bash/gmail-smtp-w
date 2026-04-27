@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# Simple SMTP wrapper - ROLLBACK VERSION without outbox switching
+# This version doesn't overwrite email content
+
+# Configuration files
+MAIL_TOOLS_CONFIG="${MAIL_TOOLS_CONFIG:-$HOME/.config/mail-tools/accounts.json}"
+
+# Function to get muttrc path for account
+get_muttrc_for_account() {
+    local account="$1"
+
+    # Try new JSON config first
+    if [[ -f "$MAIL_TOOLS_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+        local muttrc
+        if [[ -n "$account" ]]; then
+            muttrc=$(jq -r ".accounts[\"$account\"].muttrc // empty" "$MAIL_TOOLS_CONFIG" 2>/dev/null)
+        fi
+        if [[ -z "$muttrc" || "$muttrc" == "null" ]]; then
+            # Try default account
+            local default_account=$(jq -r ".default_account // empty" "$MAIL_TOOLS_CONFIG" 2>/dev/null)
+            if [[ -n "$default_account" ]]; then
+                muttrc=$(jq -r ".accounts[\"$default_account\"].muttrc // empty" "$MAIL_TOOLS_CONFIG" 2>/dev/null)
+            fi
+        fi
+        if [[ -n "$muttrc" && "$muttrc" != "null" && "$muttrc" != "empty" ]]; then
+            echo "$muttrc"
+            return 0
+        fi
+    fi
+
+    # Final fallback to hardcoded default
+    echo "/Users/wiggins/.0/gxsxwdkqtp"
+}
+
+# Get muttrc path for default or specified account
+MUTTRC=$(get_muttrc_for_account "${SMTP_ACCOUNT:-}")
+
+# Help
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+    cat <<'HELP'
+gmail-smtp-w - Simple Gmail SMTP sender (rollback version)
+
+Usage:
+  gmail-smtp-w [options] recipient          Compose and send
+
+Examples:
+  gmail-smtp-w user@example.com                          Compose and send
+  echo 'hello' | gmail-smtp-w -s "hi" user@example.com   Send with body and subject
+
+Environment:
+  SMTP_ACCOUNT    Account alias (e.g., 'g', 'u', 'h') for muttrc selection
+HELP
+    exit 0
+fi
+
+# Simple passthrough to neomutt - NO TEMPLATE OVERWRITING
+exec neomutt -e 'unset record' -F "$MUTTRC" "$@"

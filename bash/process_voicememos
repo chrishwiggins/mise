@@ -1,0 +1,99 @@
+#!/bin/bash
+
+# Configuration
+VOICEMEMO_DIR="$HOME/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"
+OUTPUT_DIR="$HOME/Documents/VoiceMemos"
+PROCESSED_LIST="$HOME/.voicememo_processed"
+LOG_FILE="$HOME/.voicememo_processing.log"
+
+# Create output directory if it doesn't exist
+mkdir -p "$OUTPUT_DIR"
+
+# Create processed list file if it doesn't exist
+touch "$PROCESSED_LIST"
+
+# Function to log messages
+log_message() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# Function to get topic from Gemini
+get_topic_from_gemini() {
+    local transcript="$1"
+    local topic
+
+    # Use Gemini to extract topic
+    topic=$(echo "$transcript" | gemini --model gemini-2.0-flash-exp prompt "Analyze this voice memo transcript and provide a single word or short phrase (max 3 words, no spaces, use underscores) that best describes the main topic. Only output the topic, nothing else: $transcript" 2>/dev/null | tr ' ' '_' | tr -cd '[:alnum:]_-')
+
+    # Default to "general" if Gemini fails or returns empty
+    if [ -z "$topic" ]; then
+        topic="general"
+    fi
+
+    echo "$topic"
+}
+
+# Process voice memos
+log_message "Starting voice memo processing"
+
+# Find all m4a files in voice memos directory, sorted by modification time (newest first)
+find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t | while read -r voice_file; do
+    # Get file basename and full path hash for tracking
+    file_basename=$(basename "$voice_file")
+    file_hash=$(echo "$voice_file" | md5)
+
+    # Check if already processed
+    if grep -q "$file_hash" "$PROCESSED_LIST"; then
+        log_message "Skipping already processed: $file_basename"
+        continue
+    fi
+
+    log_message "Processing: $file_basename"
+
+    # Generate timestamp
+    timestamp=$(date +%Y_%m_%dT%Hh%Mm%Ss)
+
+    # Create temporary file for transcript
+    temp_transcript="/tmp/voicememo_${timestamp}.txt"
+
+    # Run Whisper to transcribe
+    whisper "$voice_file" --model base --output_format txt --output_dir /tmp --language en >/dev/null 2>&1
+
+    # Find the generated transcript file (Whisper creates it with the original filename)
+    whisper_output="/tmp/${file_basename%.m4a}.txt"
+
+    if [ -f "$whisper_output" ]; then
+        # Read the transcript
+        transcript=$(cat "$whisper_output")
+
+        # Get topic from Gemini
+        topic=$(get_topic_from_gemini "$transcript")
+
+        # Create output filename
+        output_file="${OUTPUT_DIR}/${topic}_${timestamp}.md"
+
+        # Write to markdown file with metadata
+        {
+            echo "# Voice Memo: ${topic}"
+            echo ""
+            echo "**Date:** $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "**Original File:** ${file_basename}"
+            echo ""
+            echo "---"
+            echo ""
+            echo "${transcript}"
+        } > "$output_file"
+
+        # Add to processed list
+        echo "$file_hash" >> "$PROCESSED_LIST"
+
+        log_message "Saved as: ${output_file}"
+
+        # Clean up temporary transcript
+        rm -f "$whisper_output"
+    else
+        log_message "ERROR: Failed to transcribe $file_basename"
+    fi
+done
+
+log_message "Voice memo processing completed"

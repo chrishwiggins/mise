@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# Check if a regex is provided
+if [ -z "$1" ]; then
+    echo "Usage: grep-stash <regex>"
+    exit 1
+fi
+
+# Create a stash directory based on the current date and time, including the regex
+dir="stash_$(date +%Y-%m-%dT%Hh%Mm)_$1"
+mkdir -p "$dir"
+
+# Move files matching the regex into the stash directory
+grep -l "$1" * 2>/dev/null | while read file; do
+    mv -i "$file" "$dir"
+done
+
+echo "Files matching '$1' moved to $dir"

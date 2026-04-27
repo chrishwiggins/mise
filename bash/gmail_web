@@ -1,0 +1,40 @@
+#!/bin/bash
+# gmail_web - open Gmail folder in browser, optionally with search
+# Usage: gmail_web PROFILE_NUM FOLDER [SEARCH_TERMS...]
+#   PROFILE_NUM: Chrome profile number (0, 1, 2, 4, 6, 9)
+#   FOLDER: inbox, sent, drafts, etc.
+#   SEARCH_TERMS: optional Gmail search query (supports full Gmail syntax)
+#
+# Examples:
+#   gmail_web 6 inbox                     -> opens joint inbox
+#   gmail_web 6 sent                      -> opens joint sent
+#   gmail_web 6 inbox from:alice          -> searches joint inbox for from:alice
+#   gmail_web 6 sent before:2026/03/01    -> searches joint sent before date
+
+PROFILE_NUM=$1
+FOLDER=$2
+shift 2 2>/dev/null
+
+if [ "$PROFILE_NUM" = "0" ]; then
+    PROFILE_DIRECTORY="Default"
+else
+    PROFILE_DIRECTORY="Profile $PROFILE_NUM"
+fi
+
+# Use authuser=EMAIL when available (explicit account), else u/0 (first in profile)
+if [ -n "${GMAIL_WEB_AUTHUSER:-}" ]; then
+    BASE="https://mail.google.com/mail/?authuser=${GMAIL_WEB_AUTHUSER}"
+else
+    BASE="https://mail.google.com/mail/u/0/"
+fi
+
+if [ $# -eq 0 ]; then
+    URL="${BASE}#${FOLDER}"
+else
+    SEARCH="in:${FOLDER} $*"
+    SEARCH_ENCODED=$(echo "$SEARCH" | sed 's/"/%22/g' | sed 's/ /+/g')
+    URL="${BASE}#search/${SEARCH_ENCODED}"
+fi
+
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+    --profile-directory="$PROFILE_DIRECTORY" "$URL"

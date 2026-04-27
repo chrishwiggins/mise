@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# This script takes input from pbpaste, parses the content, and creates separate markdown (.md) and python (.py) files.
+
+# Input is captured from pbpaste
+input=$(pbpaste)
+
+# Split the input into lines and initialize counters
+IFS=$'\n'
+lines=($input)
+block_num=1
+current_block=""
+current_type=""
+
+# Loop through each line
+for line in "${lines[@]}"; do
+  # Check if the line starts a code block
+  if [[ "$line" == '```python' ]]; then
+    # If we have an existing block, save it
+    if [[ -n "$current_block" ]]; then
+      if [[ "$current_type" == "markdown" ]]; then
+        echo -e "$current_block" > "b${block_num}.md"
+      elif [[ "$current_type" == "python" ]]; then
+        echo -e "$current_block" > "b${block_num}.py"
+      fi
+      block_num=$((block_num + 1))
+    fi
+    # Start a new python block
+    current_block=""
+    current_type="python"
+  elif [[ "$line" == '```' ]]; then
+    # If we have reached the end of a code block
+    if [[ -n "$current_block" ]]; then
+      if [[ "$current_type" == "markdown" ]]; then
+        echo -e "$current_block" > "b${block_num}.md"
+      elif [[ "$current_type" == "python" ]]; then
+        echo -e "$current_block" > "b${block_num}.py"
+      fi
+      block_num=$((block_num + 1))
+    fi
+    # End current block
+    current_block=""
+    current_type=""
+  else
+    # If not within a code block, determine if it's markdown
+    if [[ -z "$current_type" ]]; then
+      current_type="markdown"
+    fi
+    # Append line to current block
+    current_block+="$line\n"
+  fi
+done
+
+# Save any remaining block
+if [[ -n "$current_block" ]]; then
+  if [[ "$current_type" == "markdown" ]]; then
+    echo -e "$current_block" > "b${block_num}.md"
+  elif [[ "$current_type" == "python" ]]; then
+    echo -e "$current_block" > "b${block_num}.py"
+  fi
+fi
+
+# Inform user of completion
+echo "Parsing complete. Created ${block_num} files."

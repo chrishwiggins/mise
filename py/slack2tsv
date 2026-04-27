@@ -1,0 +1,82 @@
+#!/usr/bin/python3
+
+import sys
+import json
+import csv
+from datetime import datetime
+
+
+def extract_text(message):
+    """Extracts text from a Slack message, including 'blocks' if present."""
+    if "text" in message:
+        return message["text"].strip()
+
+    # Extract text from 'blocks' structure
+    if "blocks" in message:
+        text_pieces = []
+        for block in message["blocks"]:
+            if block.get("type") == "rich_text" and "elements" in block:
+                for element in block["elements"]:
+                    if (
+                        element.get("type") == "rich_text_section"
+                        and "elements" in element
+                    ):
+                        for sub_element in element["elements"]:
+                            if sub_element.get("type") == "text":
+                                text_pieces.append(sub_element["text"].strip())
+        return " ".join(text_pieces).strip()
+
+    return ""
+
+
+def process_slack_json():
+    writer = csv.writer(sys.stdout, delimiter="\t", quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(["uid", "post", "timestamp", "date", "client_msg_id"])
+
+    seen_texts = set()
+
+    try:
+        raw_data = sys.stdin.read().strip()
+        data = json.loads(raw_data)  # Try parsing entire input as a JSON object
+    except json.JSONDecodeError:
+        # If that fails, treat input as newline-delimited JSON
+        data = []
+        for line in raw_data.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                if isinstance(entry, list):
+                    data.extend(entry)
+                elif isinstance(entry, dict):
+                    data.append(entry)
+            except json.JSONDecodeError:
+                print(f"Skipping malformed JSON line: {line}", file=sys.stderr)
+
+    for message in data:
+        if (
+            not isinstance(message, dict)
+            or "type" not in message
+            or message["type"] != "message"
+        ):
+            continue  # Skip invalid message structures
+
+        uid = message.get("user")
+        text = extract_text(message)
+        ts = message.get("ts")
+        client_msg_id = message.get("client_msg_id")
+
+        date = (
+            datetime.utcfromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M:%S")
+            if ts
+            else ""
+        )
+
+        if text and text not in seen_texts:
+            seen_texts.add(text)
+            writer.writerow([uid, " ".join(text.splitlines()), ts, date, client_msg_id])
+
+
+if __name__ == "__main__":
+    process_slack_json()

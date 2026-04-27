@@ -1,0 +1,375 @@
+#!/Users/wiggins/mise/py/.venv/bin/python3
+"""
+gcal-list - List Google Calendar events for a given day.
+
+Usage:
+    gcal-list                          Today's events
+    gcal-list +3                       Events 3 days from now
+    gcal-list -1                       Yesterday's events
+    gcal-list move 3 2pm               Move event #3 to 2:00 PM
+    gcal-list +1 move 3 noon           Move tomorrow's event #3 to noon
+    gcal-list delete 3                 Delete event #3 (with confirmation)
+    gcal-list delete 3 -y              Delete event #3 (skip confirmation)
+    gcal-list +1 delete 2              Delete tomorrow's event #2
+    gcal-list desc 2                   Show event #2's description
+    gcal-list +1 desc 2                Show tomorrow's event #2 description
+    gcal-list desc 2 "notes here"      Set description on event #2
+    gcal-list +1 desc 2 -a "SSW 1004"  Append to tomorrow's event #2
+"""
+
+import argparse
+import re
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+sys.path.insert(0, str(Path(__file__).parent))
+from google_auth import get_credentials
+
+LOCAL_TZ = ZoneInfo("America/New_York")
+
+
+def get_calendar_service():
+    creds = get_credentials(service="calendar", scopes="calendar")
+    return build("calendar", "v3", credentials=creds)
+
+
+def fetch_events(service, target_date):
+    """Fetch all events for target_date from the primary calendar."""
+    start_of_day = datetime(target_date.year, target_date.month, target_date.day, tzinfo=LOCAL_TZ)
+    end_of_day = start_of_day + timedelta(days=1)
+
+    result = service.events().list(
+        calendarId="primary",
+        timeMin=start_of_day.isoformat(),
+        timeMax=end_of_day.isoformat(),
+        singleEvents=True,
+        orderBy="startTime",
+    ).execute()
+
+    events = result.get("items", [])
+
+    def sort_key(ev):
+        start = ev.get("start", {})
+        if "date" in start:
+            return (0, start["date"])
+        return (1, start.get("dateTime", ""))
+
+    events.sort(key=sort_key)
+    return events
+
+
+def _fmt_time(dt):
+    return dt.strftime("%-I:%M%p").lower()
+
+
+def display_events(events, target_date):
+    if not events:
+        print(f"No events on {target_date.strftime('%A, %B %-d')}.")
+        return
+
+    print(target_date.strftime("%A, %B %-d"))
+    print()
+
+    for i, event in enumerate(events, 1):
+        summary = event.get("summary", "(no title)")
+        start = event.get("start", {})
+        end = event.get("end", {})
+
+        if "date" in start:
+            print(f"  {i:2d}. {'[all day]':17s} {summary}")
+        else:
+            start_dt = datetime.fromisoformat(start["dateTime"])
+            end_dt = datetime.fromisoformat(end["dateTime"])
+            time_range = f"{_fmt_time(start_dt)}-{_fmt_time(end_dt)}"
+            print(f"  {i:2d}. {time_range:17s} {summary}")
+
+    print()
+
+
+def parse_offset(value):
+    """Parse a day offset like +3, -1, 3, or -0."""
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected integer offset, got '{value}'")
+
+
+# ---------------------------------------------------------------------------
+# Time parsing (shared with gcal-today)
+# ---------------------------------------------------------------------------
+
+def _to_24h(hour, ampm):
+    if ampm == "am":
+        return 0 if hour == 12 else hour
+    return hour if hour == 12 else hour + 12
+
+
+def parse_time(time_str):
+    s = time_str.strip().lower()
+    if s == "noon":
+        return (12, 0)
+    if s == "midnight":
+        return (0, 0)
+    m = re.match(r"^(\d{1,2}):(\d{2})\s*(am|pm)$", s)
+    if m:
+        h, mi, ap = int(m.group(1)), int(m.group(2)), m.group(3)
+        if 1 <= h <= 12 and 0 <= mi <= 59:
+            return (_to_24h(h, ap), mi)
+    m = re.match(r"^(\d{1,2})\s*(am|pm)$", s)
+    if m:
+        h, ap = int(m.group(1)), m.group(2)
+        if 1 <= h <= 12:
+            return (_to_24h(h, ap), 0)
+    m = re.match(r"^(\d{1,2}):(\d{2})$", s)
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return (h, mi)
+    m = re.match(r"^(\d{1,2})$", s)
+    if m:
+        h = int(m.group(1))
+        if 0 <= h <= 23:
+            return (h, 0)
+    raise ValueError(f"Cannot parse time: '{time_str}'")
+
+
+# ---------------------------------------------------------------------------
+# Move / reschedule
+# ---------------------------------------------------------------------------
+
+def move_event(service, events, event_num, new_time_str):
+    if event_num < 1 or event_num > len(events):
+        print(f"Error: event {event_num} out of range (1-{len(events)})", file=sys.stderr)
+        sys.exit(1)
+
+    event = events[event_num - 1]
+    start = event.get("start", {})
+
+    if "date" in start:
+        print(f"Error: cannot move all-day event '{event.get('summary', '')}'", file=sys.stderr)
+        sys.exit(1)
+
+    old_start = datetime.fromisoformat(start["dateTime"])
+    old_end = datetime.fromisoformat(event["end"]["dateTime"])
+    duration = old_end - old_start
+
+    new_hour, new_minute = parse_time(new_time_str)
+    new_start = old_start.replace(hour=new_hour, minute=new_minute, second=0, microsecond=0)
+    new_end = new_start + duration
+
+    body = {
+        "start": {"dateTime": new_start.isoformat(), "timeZone": str(LOCAL_TZ)},
+        "end": {"dateTime": new_end.isoformat(), "timeZone": str(LOCAL_TZ)},
+    }
+
+    try:
+        service.events().patch(
+            calendarId="primary",
+            eventId=event["id"],
+            body=body,
+        ).execute()
+    except HttpError as e:
+        print(f"Error updating event: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    summary = event.get("summary", "(no title)")
+    dur_min = int(duration.total_seconds() // 60)
+    print(f"Moved: {summary}")
+    print(f"  {_fmt_time(old_start)} -> {_fmt_time(new_start)} ({dur_min} min)")
+
+
+# ---------------------------------------------------------------------------
+# Delete
+# ---------------------------------------------------------------------------
+
+def delete_event(service, events, event_num, skip_confirm=False):
+    if event_num < 1 or event_num > len(events):
+        print(f"Error: event {event_num} out of range (1-{len(events)})", file=sys.stderr)
+        sys.exit(1)
+
+    event = events[event_num - 1]
+    summary = event.get("summary", "(no title)")
+    start = event.get("start", {})
+
+    if "date" in start:
+        when = start["date"]
+    else:
+        start_dt = datetime.fromisoformat(start["dateTime"])
+        end_dt = datetime.fromisoformat(event["end"]["dateTime"])
+        when = f"{_fmt_time(start_dt)}-{_fmt_time(end_dt)}"
+
+    if not skip_confirm:
+        try:
+            response = input(f"Delete '{summary}' ({when})? [y/N] ").strip().lower()
+            if response not in ("y", "yes"):
+                print("Cancelled.")
+                return
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return
+
+    try:
+        service.events().delete(
+            calendarId="primary",
+            eventId=event["id"],
+        ).execute()
+    except HttpError as e:
+        print(f"Error deleting event: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Deleted: {summary} ({when})")
+
+
+# ---------------------------------------------------------------------------
+# Description
+# ---------------------------------------------------------------------------
+
+def describe_event(service, events, event_num, text=None, append=False):
+    if event_num < 1 or event_num > len(events):
+        print(f"Error: event {event_num} out of range (1-{len(events)})", file=sys.stderr)
+        sys.exit(1)
+
+    event = events[event_num - 1]
+    summary = event.get("summary", "(no title)")
+
+    if text is None:
+        existing = event.get("description", "")
+        if existing:
+            print(f"{summary}:")
+            print(existing)
+        else:
+            print(f"{summary}: (no description)")
+        return
+
+    if append:
+        existing = event.get("description", "")
+        new_desc = f"{existing}\n{text}" if existing else text
+    else:
+        new_desc = text
+
+    try:
+        service.events().patch(
+            calendarId="primary",
+            eventId=event["id"],
+            body={"description": new_desc},
+        ).execute()
+    except HttpError as e:
+        print(f"Error updating event: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    action = "Appended to" if append else "Set description on"
+    print(f"{action}: {summary}")
+    print(f"  {new_desc}")
+
+
+USAGE = """\
+usage: gcal-list [offset] [command]
+
+List Google Calendar events for a given day, or modify an event.
+
+commands:
+  (none)                    List events (default: today)
+  move N TIME               Move event #N to TIME (e.g., 2pm, noon, 14:00)
+  delete N [-y]             Delete event #N (asks for confirmation unless -y)
+  desc N                    Show event #N's description
+  desc N "text"             Set event #N's description
+  desc N -a "text"          Append to event #N's description
+
+arguments:
+  offset                    Day offset from today (e.g., +3, -1). Default: 0 (today).
+
+options:
+  -h, --help                Show this help message and exit"""
+
+
+def main():
+    argv = sys.argv[1:]
+
+    if not argv:
+        offset = 0
+        cmd = None
+        rest = []
+    elif argv[0] in ("-h", "--help"):
+        print(USAGE)
+        sys.exit(0)
+    else:
+        # Peel off leading offset if present
+        offset = 0
+        first = argv[0]
+        if re.match(r"^[+-]\d+$", first):
+            offset = int(first)
+            argv = argv[1:]
+        elif first not in ("move", "delete", "desc") and re.match(r"^\d+$", first):
+            offset = int(first)
+            argv = argv[1:]
+
+        # Now argv is [command, ...args] or empty (list mode)
+        cmd = argv[0] if argv else None
+        rest = argv[1:] if argv else []
+
+    target_date = date.today() + timedelta(days=offset)
+    service = get_calendar_service()
+    events = fetch_events(service, target_date)
+
+    if cmd == "move":
+        if len(rest) != 2:
+            print("usage: gcal-list [offset] move <event#> <time>", file=sys.stderr)
+            sys.exit(1)
+        try:
+            event_num = int(rest[0])
+        except ValueError:
+            print(f"gcal-list: error: event# must be integer, got '{rest[0]}'", file=sys.stderr)
+            sys.exit(1)
+        move_event(service, events, event_num, rest[1])
+
+    elif cmd == "delete":
+        if not rest:
+            print("usage: gcal-list [offset] delete <event#> [-y]", file=sys.stderr)
+            sys.exit(1)
+        try:
+            event_num = int(rest[0])
+        except ValueError:
+            print(f"gcal-list: error: event# must be integer, got '{rest[0]}'", file=sys.stderr)
+            sys.exit(1)
+        skip_confirm = "-y" in rest[1:] or "--yes" in rest[1:]
+        delete_event(service, events, event_num, skip_confirm)
+
+    elif cmd == "desc":
+        if not rest:
+            print("usage: gcal-list [offset] desc <event#> [text] [-a text]", file=sys.stderr)
+            sys.exit(1)
+        try:
+            event_num = int(rest[0])
+        except ValueError:
+            print(f"gcal-list: error: event# must be integer, got '{rest[0]}'", file=sys.stderr)
+            sys.exit(1)
+        rest = rest[1:]
+        # Parse -a/--append flag and text
+        append = False
+        text = None
+        if rest and rest[0] in ("-a", "--append"):
+            append = True
+            rest = rest[1:]
+        if rest:
+            text = " ".join(rest)
+        if append and text is None:
+            print("gcal-list: error: -a requires text to append", file=sys.stderr)
+            sys.exit(1)
+        describe_event(service, events, event_num, text, append)
+
+    elif cmd is None:
+        display_events(events, target_date)
+
+    else:
+        print(f"gcal-list: unknown command '{cmd}'", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,42 @@
+#! /usr/bin/python3
+import subprocess
+import re
+from operator import itemgetter
+
+
+def parse_wifi_networks():
+    # Call system_profiler and get WiFi details
+    result = subprocess.run(
+        ["system_profiler", "SPAirPortDataType"], capture_output=True, text=True
+    )
+    output = result.stdout
+
+    # Regular expression to capture network blocks
+    network_blocks = re.findall(
+        r"Other Local Wi-Fi Networks:\n(.*?)\n {6}\S", output, re.DOTALL
+    )
+
+    networks = []
+
+    for block in network_blocks:
+        # Extract necessary details
+        name_match = re.search(r"^ {12}(.*?):", block, re.MULTILINE)
+        signal_match = re.search(r"Signal / Noise: (.*?) dBm", block)
+        security_match = re.search(r"Security: (.*)", block)
+
+        if name_match and signal_match and security_match:
+            name = name_match.group(1)
+            signal, noise = signal_match.group(1).split(" / ")
+            security = security_match.group(1)
+            networks.append((name, signal, noise, security))
+
+    # Sort networks by signal strength (convert to integer for sorting)
+    sorted_networks = sorted(networks, key=lambda x: int(x[1]), reverse=True)
+
+    # Print results
+    for net in sorted_networks:
+        print(f"{net[0]} | {net[1]} dBm / {net[2]} dBm | {net[3]}")
+
+
+if __name__ == "__main__":
+    parse_wifi_networks()

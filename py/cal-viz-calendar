@@ -1,0 +1,528 @@
+#!/usr/bin/env python3
+"""cal-viz-calendar: generate calendar-style HTML from schedule files.
+
+Shows weeks in rows like a normal calendar, with events listed on the right.
+"""
+
+import argparse
+import html as html_mod
+import sys
+from dataclasses import dataclass, field
+from datetime import date, timedelta, datetime
+import calendar
+
+# Import the parsing logic from cal-viz
+import os
+sys.path.insert(0, os.path.dirname(__file__))
+
+# ── Data structures (reuse from cal-viz) ──────────────────────────────
+
+@dataclass
+class Person:
+    name: str
+    color: str
+
+@dataclass
+class Break:
+    person: str
+    start: date
+    end: date
+    label: str = ''
+    tentative: bool = False
+    category: str = 'default'
+
+@dataclass
+class Special:
+    day: date
+    label: str
+    person: str = ''
+
+@dataclass
+class Schedule:
+    persons: list = field(default_factory=list)
+    breaks: list = field(default_factory=list)
+    specials: list = field(default_factory=list)
+    title: str = 'Schedule'
+    range_start: date = None
+    range_end: date = None
+
+# ── Color and parsing (reuse from cal-viz) ────────────────────────
+
+NAMED_COLORS = {
+    'red': '#F44336', 'pink': '#E91E63', 'purple': '#9C27B0',
+    'deeppurple': '#673AB7', 'indigo': '#3F51B5', 'blue': '#2196F3',
+    'lightblue': '#03A9F4', 'cyan': '#00BCD4', 'teal': '#009688',
+    'green': '#4CAF50', 'lightgreen': '#8BC34A', 'lime': '#CDDC39',
+    'yellow': '#FFEB3B', 'amber': '#FFC107', 'orange': '#FF9800',
+    'deeporange': '#FF5722', 'brown': '#795548', 'gray': '#9E9E9E',
+    'grey': '#9E9E9E', 'bluegray': '#607D8B', 'bluegrey': '#607D8B',
+}
+
+def resolve_color(token):
+    if token.startswith('#') and len(token) == 7:
+        return token.upper()
+    c = NAMED_COLORS.get(token.lower())
+    if c:
+        return c
+    raise ValueError(f"unknown color '{token}' (use a named color or #RRGGBB)")
+
+def parse_date(token):
+    return date.fromisoformat(token)
+
+def parse_schedule(lines, source='<stdin>'):
+    sched = Schedule()
+    person_names = set()
+
+    for i, raw in enumerate(lines, 1):
+        comment = ""
+        if '#' in raw:
+            line_part, comment = raw.split('#', 1)
+            line_part = line_part.strip()
+            comment = comment.strip()
+        else:
+            line_part = raw.strip()
+
+        if not line_part:
+            continue
+        parts = line_part.split()
+        cmd = parts[0].lower()
+
+        try:
+            if cmd == 'title':
+                sched.title = ' '.join(parts[1:])
+
+            elif cmd == 'range':
+                if len(parts) < 3:
+                    raise ValueError("range requires START END")
+                sched.range_start = parse_date(parts[1])
+                sched.range_end = parse_date(parts[2])
+
+            elif cmd == 'person':
+                if len(parts) < 3:
+                    raise ValueError("person requires NAME COLOR")
+                name = parts[1]
+                if name in person_names:
+                    raise ValueError(f"duplicate person '{name}'")
+                color = resolve_color(parts[2])
+                sched.persons.append(Person(name, color))
+                person_names.add(name)
+
+            elif cmd == 'break':
+                if len(parts) < 3:
+                    raise ValueError("break requires NAME START [END] [tentative]")
+                name = parts[1]
+                if name not in person_names:
+                    raise ValueError(f"unknown person '{name}'")
+                start = parse_date(parts[2])
+
+                remaining = parts[3:]
+                tentative = False
+                category = 'default'
+
+                remaining_filtered = []
+                for p in remaining:
+                    if p.lower() == 'tentative':
+                        tentative = True
+                    elif p.startswith('@'):
+                        category = p[1:].lower()
+                    else:
+                        remaining_filtered.append(p)
+                remaining = remaining_filtered
+
+                end = start
+                if remaining:
+                    try:
+                        end = parse_date(remaining[0])
+                        remaining = remaining[1:]
+                    except ValueError:
+                        pass
+
+                label = ' '.join(remaining).strip() or comment
+                sched.breaks.append(Break(name, start, end, label, tentative, category))
+
+            elif cmd == 'special':
+                if len(parts) < 3:
+                    raise ValueError("special requires DATE LABEL")
+                day = parse_date(parts[1])
+                label = ' '.join(parts[2:])
+                if comment and comment not in label:
+                    label = f"{label} ({comment})"
+                person = ''
+                if ':' in label:
+                    first_part = label.split(':')[0].strip()
+                    if first_part in person_names:
+                        person = first_part
+                sched.specials.append(Special(day, label, person))
+
+        except ValueError as e:
+            print(f"cal-viz-calendar: {source}:{i}: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    return sched
+
+# ── Calendar generation ──────────────────────────────────────────────
+
+def get_weeks_in_range(start_date, end_date):
+    """Get all weeks that overlap with the given date range."""
+    weeks = []
+
+    # Start from the Monday of the week containing start_date
+    current = start_date - timedelta(days=start_date.weekday())
+
+    while current <= end_date:
+        # Week runs Monday to Sunday
+        week_end = current + timedelta(days=6)
+        weeks.append((current, week_end))
+        current += timedelta(days=7)
+
+    return weeks
+
+def get_events_for_date(day, sched, person_filter=None):
+    """Get all events for a specific date, optionally filtered by person."""
+    events = []
+
+    # Check breaks
+    for b in sched.breaks:
+        if person_filter and b.person != person_filter:
+            continue
+        if b.start <= day <= b.end:
+            if day == b.start and b.start != b.end:
+                events.append(f"Start: {b.label}")
+            elif day == b.end and b.start != b.end:
+                events.append(f"End: {b.label}")
+            elif b.start == b.end:
+                events.append(b.label)
+
+    # Check specials
+    for s in sched.specials:
+        if person_filter and s.person and s.person != person_filter:
+            continue
+        if s.day == day:
+            events.append(s.label)
+
+    return events
+
+def get_ongoing_programs_for_date(day, sched, person_filter=None):
+    """Get all ongoing programs for a specific date."""
+    programs = []
+
+    for b in sched.breaks:
+        if person_filter and b.person != person_filter:
+            continue
+        if b.start <= day <= b.end and b.start != b.end:  # Multi-day programs only
+            programs.append((b.label, b.tentative))
+
+    return programs
+
+def generate_calendar_html(sched, start_date, end_date, person_filter=None):
+    """Generate calendar-style HTML."""
+    weeks = get_weeks_in_range(start_date, end_date)
+
+    # Collect all events in the range for the sidebar
+    all_events = []
+    current = start_date
+    while current <= end_date:
+        events = get_events_for_date(current, sched, person_filter)
+        for event in events:
+            all_events.append((current, event))
+        current += timedelta(days=1)
+
+    html = ['<!DOCTYPE html><html><head><meta charset="UTF-8">']
+    html.append('<style>')
+    html.append(generate_calendar_css())
+    html.append('</style></head><body>')
+
+    title = sched.title
+    if person_filter:
+        title += f" - {person_filter}"
+    html.append(f'<h1>{html_mod.escape(title)}</h1>')
+
+    html.append('<div class="calendar-container">')
+    html.append('<div class="calendar">')
+
+    # Calendar header
+    html.append('<div class="calendar-header">')
+    html.append('<div class="month-col">Month</div>')
+    html.append('<div class="day-header">Mon</div>')
+    html.append('<div class="day-header">Tue</div>')
+    html.append('<div class="day-header">Wed</div>')
+    html.append('<div class="day-header">Thu</div>')
+    html.append('<div class="day-header">Fri</div>')
+    html.append('<div class="day-header weekend">Sat</div>')
+    html.append('<div class="day-header weekend">Sun</div>')
+    html.append('</div>')
+
+    # Calendar weeks
+    for week_start, week_end in weeks:
+        html.append('<div class="calendar-week">')
+
+        # Month column - show if this week starts a new month
+        month_text = ""
+        if week_start.day <= 7:  # First week of month
+            month_text = week_start.strftime("%b %Y")
+        html.append(f'<div class="month-col">{month_text}</div>')
+
+        # Days of the week
+        current_day = week_start
+        for _ in range(7):
+            day_classes = ["calendar-day"]
+            day_content = ""
+            day_title = ""
+
+            # Check if day is in our range
+            if start_date <= current_day <= end_date:
+                day_content = str(current_day.day)
+
+                # Check for ongoing programs
+                programs = get_ongoing_programs_for_date(current_day, sched, person_filter)
+                if programs:
+                    day_classes.append("has-program")
+                    day_title = " | ".join([p[0] + (" (tentative)" if p[1] else "") for p in programs])
+
+                # Check for events (start/end dates)
+                events = get_events_for_date(current_day, sched, person_filter)
+                if events:
+                    day_classes.append("has-event")
+                    if day_title:
+                        day_title += " | " + " | ".join(events)
+                    else:
+                        day_title = " | ".join(events)
+            else:
+                # Outside range
+                day_classes.append("outside-range")
+                day_content = str(current_day.day)
+
+            # Weekend styling
+            if current_day.weekday() >= 5:
+                day_classes.append("weekend")
+
+            title_attr = f' title="{html_mod.escape(day_title)}"' if day_title else ""
+            html.append(f'<div class="{" ".join(day_classes)}"{title_attr}>{day_content}</div>')
+
+            current_day += timedelta(days=1)
+
+        html.append('</div>')
+
+    html.append('</div>')  # End calendar
+
+    # Events sidebar
+    html.append('<div class="events-sidebar">')
+    html.append('<h2>Key Dates & Events</h2>')
+    html.append('<ul class="events-list">')
+
+    for event_date, event_text in all_events:
+        html.append(f'<li><span class="event-date">{event_date.strftime("%a %b %d")}</span>{html_mod.escape(event_text)}</li>')
+
+    html.append('</ul>')
+    html.append('</div>')  # End events sidebar
+
+    html.append('</div>')  # End calendar container
+    html.append('</body></html>')
+
+    return '\n'.join(html)
+
+def generate_calendar_css():
+    return """
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #f5f5f5;
+        color: #333;
+    }
+
+    h1 {
+        text-align: center;
+        color: #333;
+        margin-bottom: 30px;
+    }
+
+    .calendar-container {
+        display: grid;
+        grid-template-columns: 1fr 300px;
+        gap: 30px;
+        max-width: 1200px;
+        margin: 0 auto;
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+
+    .calendar {
+        display: grid;
+        grid-template-columns: 80px repeat(7, 1fr);
+        gap: 1px;
+        background: #e0e0e0;
+        border: 1px solid #ddd;
+    }
+
+    .calendar-header {
+        display: contents;
+    }
+
+    .month-col {
+        background: #333;
+        color: white;
+        padding: 10px 5px;
+        font-weight: bold;
+        font-size: 12px;
+        text-align: center;
+        writing-mode: vertical-rl;
+        text-orientation: mixed;
+    }
+
+    .day-header {
+        background: #4CAF50;
+        color: white;
+        padding: 8px;
+        text-align: center;
+        font-weight: bold;
+        font-size: 14px;
+    }
+
+    .day-header.weekend {
+        background: #757575;
+    }
+
+    .calendar-week {
+        display: contents;
+    }
+
+    .calendar-day {
+        background: white;
+        padding: 8px;
+        text-align: center;
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        cursor: default;
+        position: relative;
+    }
+
+    .calendar-day.weekend {
+        background: #f5f5f5;
+    }
+
+    .calendar-day.outside-range {
+        background: #fafafa;
+        color: #ccc;
+    }
+
+    .calendar-day.has-program {
+        background: #E3F2FD;
+        color: #1565C0;
+        font-weight: bold;
+    }
+
+    .calendar-day.has-event {
+        border: 2px solid #FF5722;
+        background: #FFF3E0;
+    }
+
+    .calendar-day.has-program.has-event {
+        background: linear-gradient(135deg, #E3F2FD 50%, #FFF3E0 50%);
+        border: 2px solid #FF5722;
+    }
+
+    .calendar-day:hover {
+        background: #f0f0f0;
+    }
+
+    .calendar-day.has-program:hover {
+        background: #BBDEFB;
+    }
+
+    .events-sidebar {
+        background: #fafafa;
+        padding: 20px;
+        border-radius: 8px;
+        border-left: 4px solid #4CAF50;
+    }
+
+    .events-sidebar h2 {
+        margin-top: 0;
+        color: #333;
+        font-size: 18px;
+        border-bottom: 2px solid #4CAF50;
+        padding-bottom: 8px;
+    }
+
+    .events-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    .events-list li {
+        margin-bottom: 12px;
+        padding: 8px;
+        background: white;
+        border-radius: 4px;
+        border-left: 3px solid #4CAF50;
+        font-size: 14px;
+        line-height: 1.4;
+    }
+
+    .event-date {
+        display: block;
+        font-weight: bold;
+        color: #1565C0;
+        font-size: 12px;
+        margin-bottom: 4px;
+    }
+
+    @media (max-width: 900px) {
+        .calendar-container {
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+
+        .calendar {
+            grid-template-columns: 60px repeat(7, 1fr);
+        }
+
+        .month-col {
+            font-size: 10px;
+        }
+
+        .events-sidebar {
+            order: -1;
+        }
+    }
+    """
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate calendar-style HTML from schedule files")
+    parser.add_argument('file', nargs='?', default='-', help="Schedule file (or - for stdin)")
+    parser.add_argument('--start', help="Start date (YYYY-MM-DD)")
+    parser.add_argument('--end', help="End date (YYYY-MM-DD)")
+    parser.add_argument('--person', help="Filter by person name")
+    args = parser.parse_args()
+
+    text = sys.stdin.read() if args.file == '-' else open(args.file).read()
+    sched = parse_schedule(text.splitlines())
+
+    # Compute date range
+    start = parse_date(args.start) if args.start else sched.range_start
+    end = parse_date(args.end) if args.end else sched.range_end
+
+    if not start or not end:
+        all_dates = []
+        for b in sched.breaks:
+            all_dates.extend([b.start, b.end])
+        for s in sched.specials:
+            all_dates.append(s.day)
+        if not all_dates:
+            print("cal-viz-calendar: no dates found in schedule", file=sys.stderr)
+            sys.exit(1)
+        start = start or min(all_dates)
+        end = end or max(all_dates)
+
+    html = generate_calendar_html(sched, start, end, args.person)
+    sys.stdout.write(html)
+
+if __name__ == '__main__':
+    main()

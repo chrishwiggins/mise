@@ -1,0 +1,23 @@
+#!/usr/bin/python3
+import sys
+import datetime
+
+
+def generate_dates(n):
+    sign = 1 if n > 0 else -1
+    for i in range(1, abs(n) + 1):
+        delta = datetime.timedelta(days=i * sign)
+        new_date = datetime.datetime.now() + delta
+        print(new_date.strftime("%Y-%m-%d_%a"))
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: script.py <number>")
+        sys.exit(1)
+    try:
+        num = int(sys.argv[1])
+        generate_dates(num)
+    except ValueError:
+        print("Please enter a valid integer.")
+        sys.exit(1)

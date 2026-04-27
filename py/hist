@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""
+hist - Create a histogram from a data file
+
+Usage: hist <filename> [options]
+
+Automatically detects data type:
+  - Numeric values (one per line or whitespace-separated)
+  - Timestamps (e.g., "Jan 26 23:29", "2024-01-26 14:30", "14:30")
+
+Options:
+  -o, --output FILE   Save histogram to FILE (default: <input>_histogram.png)
+  -b, --bins N        Number of bins (default: auto)
+  -t, --title TEXT    Custom title
+  --show              Open the image after saving
+  -h, --help          Show this help
+"""
+
+import sys
+import os
+import re
+import argparse
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def parse_timestamp(line):
+    """Try to parse various timestamp formats, return decimal hours or None."""
+    line = line.strip()
+
+    # Try "Mon DD HH:MM" format (e.g., "Jan 26 23:29")
+    match = re.match(r'[A-Za-z]{3}\s+\d{1,2}\s+(\d{1,2}):(\d{2})', line)
+    if match:
+        h, m = int(match.group(1)), int(match.group(2))
+        return h + m / 60
+
+    # Try "YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS"
+    match = re.match(r'\d{4}-\d{2}-\d{2}\s+(\d{1,2}):(\d{2})', line)
+    if match:
+        h, m = int(match.group(1)), int(match.group(2))
+        return h + m / 60
+
+    # Try bare "HH:MM" or "HH:MM:SS"
+    match = re.match(r'^(\d{1,2}):(\d{2})(?::\d{2})?$', line)
+    if match:
+        h, m = int(match.group(1)), int(match.group(2))
+        return h + m / 60
+
+    return None
+
+
+def parse_number(line):
+    """Try to parse a numeric value from a line."""
+    line = line.strip()
+    try:
+        return float(line)
+    except ValueError:
+        pass
+
+    # Try extracting first number from line
+    match = re.search(r'-?\d+\.?\d*', line)
+    if match:
+        try:
+            return float(match.group())
+        except ValueError:
+            pass
+    return None
+
+
+def detect_and_parse(lines):
+    """Detect data type and parse all lines. Returns (values, data_type)."""
+    # Try timestamps first
+    timestamps = [parse_timestamp(line) for line in lines if line.strip()]
+    valid_ts = [t for t in timestamps if t is not None]
+    if len(valid_ts) > len(lines) * 0.5:  # >50% parsed as timestamps
+        return valid_ts, 'time'
+
+    # Try numeric
+    numbers = [parse_number(line) for line in lines if line.strip()]
+    valid_nums = [n for n in numbers if n is not None]
+    if len(valid_nums) > len(lines) * 0.5:
+        return valid_nums, 'numeric'
+
+    # Fallback: try splitting lines on whitespace for multiple numbers per line
+    all_nums = []
+    for line in lines:
+        for token in line.split():
+            try:
+                all_nums.append(float(token))
+            except ValueError:
+                pass
+    if all_nums:
+        return all_nums, 'numeric'
+
+    return [], 'unknown'
+
+
+def format_time_axis(ax, values):
+    """Format x-axis for time data (decimal hours)."""
+    min_h, max_h = min(values), max(values)
+    # Round to nearest half hour for ticks
+    start = int(min_h * 2) / 2
+    end = int(max_h * 2 + 1) / 2
+    ticks = np.arange(start, end + 0.5, 0.5)
+    labels = [f"{int(t)}:{int((t % 1) * 60):02d}" for t in ticks]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(labels, rotation=45 if len(ticks) > 10 else 0)
+    ax.set_xlabel('Time of Day')
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Create a histogram from a data file',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    parser.add_argument('filename', help='Input data file')
+    parser.add_argument('-o', '--output', help='Output image file')
+    parser.add_argument('-b', '--bins', type=int, help='Number of bins')
+    parser.add_argument('-t', '--title', help='Custom title')
+    parser.add_argument('--show', action='store_true', help='Open image after saving')
+
+    args = parser.parse_args()
+
+    # Read input file
+    input_path = Path(args.filename)
+    if not input_path.exists():
+        print(f"Error: File not found: {args.filename}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(input_path, 'r') as f:
+        lines = f.readlines()
+
+    # Parse data
+    values, data_type = detect_and_parse(lines)
+
+    if not values:
+        print("Error: Could not parse any data from file", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Parsed {len(values)} values (detected: {data_type})")
+
+    # Determine output path
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        output_path = input_path.with_name(f"{input_path.stem}_histogram.png")
+
+    # Create histogram
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    bins = args.bins if args.bins else 'auto'
+    ax.hist(values, bins=bins, edgecolor='black', alpha=0.7, color='steelblue')
+
+    # Configure axes based on data type
+    if data_type == 'time':
+        format_time_axis(ax, values)
+    else:
+        ax.set_xlabel('Value')
+
+    ax.set_ylabel('Count')
+
+    # Title
+    if args.title:
+        ax.set_title(args.title)
+    else:
+        ax.set_title(f'Histogram of {input_path.name}')
+
+    ax.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+
+    # Save
+    plt.savefig(output_path, dpi=150)
+    print(f"Saved: {output_path}")
+
+    # Show if requested
+    if args.show:
+        subprocess.run(['open', str(output_path)])
+
+
+if __name__ == '__main__':
+    main()

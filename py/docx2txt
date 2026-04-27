@@ -1,0 +1,59 @@
+#!/usr/bin/python3
+import sys
+import os
+from docx import Document
+
+
+def docx2txt(path_of_docx, destination=None):
+    """
+    Convert a DOCX file to text.
+
+    Parameters:
+    - path_of_docx: The path to the .docx file to be converted.
+    - destination: The path to the output text file. If None, output to stdout.
+
+    The function checks if the specified DOCX file exists, opens it, and writes its content
+    as text either to a specified file or to stdout, paragraph by paragraph.
+    """
+    # Check if the .docx file exists
+    if not os.path.exists(path_of_docx):
+        print(f"Error: '{path_of_docx}' does not exist.")
+        return
+
+    # Open the .docx file using the Document class from the docx module
+    document = Document(path_of_docx)
+
+    # Check if destination is provided. If not, set the output to stdout
+    if destination:
+        # Open the destination file for writing
+        with open(destination, "w") as f:
+            for (
+                para
+            ) in document.paragraphs:  # Iterate through each paragraph in the document
+                f.write(para.text)  # Write the text of the paragraph to the file
+                f.write(
+                    "\n"
+                )  # Add a newline character after each paragraph for readability
+    else:
+        for (
+            para
+        ) in document.paragraphs:  # Iterate through each paragraph in the document
+            print(para.text)  # Print the text of the paragraph to stdout
+
+    if destination:
+        print("Done Writing! Check your directory for the .txt file!")
+
+
+if __name__ == "__main__":
+    # Check the number of arguments provided to the script
+    if len(sys.argv) < 2:
+        # If fewer than 2 arguments, print the usage message
+        print("Usage: docx2txt.py <path_to_docx_file> [<path_to_txt_file>]")
+    else:
+        docx_path = sys.argv[1]  # The first argument is always the .docx file path
+        txt_path = (
+            sys.argv[2] if len(sys.argv) == 3 else None
+        )  # The second argument, if provided, is the destination .txt file path
+        docx2txt(
+            docx_path, txt_path
+        )  # Call the conversion function with the provided paths

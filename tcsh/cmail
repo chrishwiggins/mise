@@ -1,0 +1,9 @@
+#!/bin/tcsh -f #-V #-X -V
+#% open your browser in a gmail search
+#% eliminates spaces
+#% turns / (for dates) into url-formatted /
+ 
+set str=`echo $* | sed -e 's/\ /+/g' -e 's/\:/%3a/g' -e 's/\//%2F/g' -e 's/@/%40/g'`
+set url="http://mail.google.com/mail/u/0/#search/"$str
+source ~/.login > /dev/null
+c-cu $url
