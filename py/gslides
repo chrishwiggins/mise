@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""gslides: Read and edit Google Slides presentations via the REST API.
+
+Auth: uses the service account key at ~/.config/gcloud/slides-automation-key.json
+(same credentials as marp2slides). Falls back to user OAuth token at
+~/.config/gcloud/slides-automation-user-token.pickle if the service account
+cannot access the deck.
+
+Subcommands:
+  read   DECK   - Dump all slide text (slide number, element ID, text)
+  add    DECK   - Add a new slide with a title and body
+  update DECK   - Update text in a specific element
+  delete DECK N - Delete slide N (1-indexed)
+  search DECK Q - Search for text across all slides
+
+DECK can be a full Google Slides URL or just the presentation ID.
+
+Examples:
+  gslides read https://docs.google.com/presentation/d/1abc.../edit
+  gslides read 1abc... --slide 5
+  gslides search 1abc... "Colab"
+  gslides add 1abc... --title "New Slide" --body "Content here"
+  gslides add 1abc... --title "New Slide" --body "Content" --after 12
+  gslides update 1abc... --element-id g1234abcd --text "New text"
+  gslides delete 1abc... 5
+"""
+
+import argparse
+import json
+import os
+import pickle
+import re
+import subprocess
+import sys
+
+KEY_FILE = os.path.expanduser('~/.config/gcloud/slides-automation-key.json')
+TOKEN_FILE = os.path.expanduser('~/.config/gcloud/slides-automation-user-token.pickle')
+SCOPES = [
+    'https://www.googleapis.com/auth/presentations',
+    'https://www.googleapis.com/auth/drive',
+]
+
+
+def get_token():
+    """Get access token via service account or user OAuth token."""
+    # Try user OAuth pickle token first (has access to personal decks)
+    if os.path.exists(TOKEN_FILE):
+        try:
+            from google.auth.transport.requests import Request
+            with open(TOKEN_FILE, 'rb') as f:
+                creds = pickle.load(f)
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            return creds.token
+        except Exception as e:
+            print(f'User token auth failed: {e}', file=sys.stderr)
+
+    # Fall back to service account
+    if os.path.exists(KEY_FILE):
+        try:
+            from google.oauth2 import service_account
+            from google.auth.transport.requests import Request
+            creds = service_account.Credentials.from_service_account_file(
+                KEY_FILE, scopes=SCOPES
+            )
+            creds.refresh(Request())
+            return creds.token
+        except Exception as e:
+            print(f'Service account auth failed: {e}', file=sys.stderr)
+
+    print('No valid credentials found. Need either:', file=sys.stderr)
+    print(f'  Service account key: {KEY_FILE}', file=sys.stderr)
+    print(f'  User OAuth token:    {TOKEN_FILE}', file=sys.stderr)
+    sys.exit(1)
+
+
+def extract_deck_id(url_or_id):
+    """Extract presentation ID from a Google Slides URL or bare ID."""
+    m = re.search(r'/d/([a-zA-Z0-9_-]+)', url_or_id)
+    if m:
+        return m.group(1)
+    # Assume it's a bare ID if it looks like one
+    if re.match(r'^[a-zA-Z0-9_-]{20,}$', url_or_id):
+        return url_or_id
+    print(f'Cannot parse deck ID from: {url_or_id}', file=sys.stderr)
+    sys.exit(1)
+
+
+def api_get(token, deck_id):
+    """GET the full presentation."""
+    result = subprocess.run(
+        ['curl', '-s', '-H', f'Authorization: Bearer {token}',
+         f'https://slides.googleapis.com/v1/presentations/{deck_id}'],
+        capture_output=True, text=True
+    )
+    data = json.loads(result.stdout)
+    if 'error' in data:
+        print(f'API error: {data["error"]["message"]}', file=sys.stderr)
+        sys.exit(1)
+    return data
+
+
+def api_batch_update(token, deck_id, requests):
+    """POST batchUpdate to the presentation."""
+    body = json.dumps({'requests': requests})
+    result = subprocess.run(
+        ['curl', '-s', '-X', 'POST',
+         '-H', f'Authorization: Bearer {token}',
+         '-H', 'Content-Type: application/json',
+         '-d', body,
+         f'https://slides.googleapis.com/v1/presentations/{deck_id}:batchUpdate'],
+        capture_output=True, text=True
+    )
+    data = json.loads(result.stdout)
+    if 'error' in data:
+        print(f'API error: {data["error"]["message"]}', file=sys.stderr)
+        sys.exit(1)
+    return data
+
+
+def extract_text(element):
+    """Extract plain text from a page element."""
+    shape = element.get('shape', {})
+    tf = shape.get('text', {})
+    parts = []
+    for te in tf.get('textElements', []):
+        tr = te.get('textRun', {})
+        content = tr.get('content', '')
+        if content:
+            parts.append(content)
+    return ''.join(parts).strip()
+
+
+def extract_links(element):
+    """Extract links from a page element."""
+    shape = element.get('shape', {})
+    tf = shape.get('text', {})
+    links = []
+    for te in tf.get('textElements', []):
+        tr = te.get('textRun', {})
+        link = tr.get('style', {}).get('link', {})
+        url = link.get('url', '')
+        if url:
+            links.append(url)
+    return links
+
+
+def cmd_read(args):
+    """Read and display slide contents."""
+    token = get_token()
+    deck_id = extract_deck_id(args.deck)
+    data = api_get(token, deck_id)
+    slides = data.get('slides', [])
+
+    print(f'Presentation: {data.get("title", "(untitled)")}')
+    print(f'Slides: {len(slides)}')
+    print()
+
+    for i, slide in enumerate(slides, 1):
+        if args.slide and i != args.slide:
+            continue
+        slide_id = slide['objectId']
+        print(f'--- Slide {i} (id: {slide_id}) ---')
+        for elem in slide.get('pageElements', []):
+            eid = elem.get('objectId', '')
+            text = extract_text(elem)
+            links = extract_links(elem)
+            if text:
+                print(f'  [{eid}] {text}')
+            for url in links:
+                print(f'    link: {url}')
+        print()
+
+
+def cmd_search(args):
+    """Search for text across all slides."""
+    token = get_token()
+    deck_id = extract_deck_id(args.deck)
+    data = api_get(token, deck_id)
+    slides = data.get('slides', [])
+    query = args.query.lower()
+    found = False
+
+    for i, slide in enumerate(slides, 1):
+        for elem in slide.get('pageElements', []):
+            text = extract_text(elem)
+            links = extract_links(elem)
+            all_text = text + ' '.join(links)
+            if query in all_text.lower():
+                eid = elem.get('objectId', '')
+                print(f'Slide {i} [{eid}]: {text[:200]}')
+                for url in links:
+                    if query in url.lower():
+                        print(f'  link: {url}')
+                found = True
+
+    if not found:
+        print(f'No matches for "{args.query}"')
+
+
+def cmd_add(args):
+    """Add a new slide with title and body text."""
+    import uuid
+    token = get_token()
+    deck_id = extract_deck_id(args.deck)
+
+    slide_id = f'gslides_{uuid.uuid4().hex[:8]}'
+    title_id = f'title_{uuid.uuid4().hex[:8]}'
+    body_id = f'body_{uuid.uuid4().hex[:8]}'
+
+    requests = []
+
+    # Create the slide
+    create_req = {
+        'createSlide': {
+            'objectId': slide_id,
+            'slideLayoutReference': {'predefinedLayout': 'TITLE_AND_BODY'},
+        }
+    }
+
+    # Insert after a specific slide if requested
+    if args.after:
+        data = api_get(token, deck_id)
+        slides = data.get('slides', [])
+        if args.after < 1 or args.after > len(slides):
+            print(f'--after must be between 1 and {len(slides)}', file=sys.stderr)
+            sys.exit(1)
+        create_req['createSlide']['insertionIndex'] = args.after
+
+    requests.append(create_req)
+
+    # First, create the slide to get placeholder IDs
+    result = api_batch_update(token, deck_id, requests)
+
+    # Now read the slide to find placeholder IDs
+    data = api_get(token, deck_id)
+    new_slide = None
+    for s in data.get('slides', []):
+        if s['objectId'] == slide_id:
+            new_slide = s
+            break
+
+    if not new_slide:
+        print('Error: could not find newly created slide', file=sys.stderr)
+        sys.exit(1)
+
+    # Find title and body placeholders
+    text_requests = []
+    for elem in new_slide.get('pageElements', []):
+        ph = elem.get('shape', {}).get('placeholder', {})
+        ph_type = ph.get('type', '')
+        eid = elem['objectId']
+
+        if ph_type == 'TITLE' and args.title:
+            text_requests.append({
+                'insertText': {
+                    'objectId': eid,
+                    'text': args.title,
+                    'insertionIndex': 0,
+                }
+            })
+        elif ph_type == 'BODY' and args.body:
+            text_requests.append({
+                'insertText': {
+                    'objectId': eid,
+                    'text': args.body,
+                    'insertionIndex': 0,
+                }
+            })
+
+    if text_requests:
+        api_batch_update(token, deck_id, text_requests)
+
+    # Report which slide number it ended up at
+    data = api_get(token, deck_id)
+    for i, s in enumerate(data.get('slides', []), 1):
+        if s['objectId'] == slide_id:
+            print(f'Added slide {i} (id: {slide_id})')
+            break
+
+
+def cmd_update(args):
+    """Update text in a specific element."""
+    token = get_token()
+    deck_id = extract_deck_id(args.deck)
+
+    requests = [
+        # Delete all existing text
+        {'deleteText': {
+            'objectId': args.element_id,
+            'textRange': {'type': 'ALL'},
+        }},
+        # Insert new text
+        {'insertText': {
+            'objectId': args.element_id,
+            'text': args.text,
+            'insertionIndex': 0,
+        }},
+    ]
+
+    api_batch_update(token, deck_id, requests)
+    print(f'Updated element {args.element_id}')
+
+
+def cmd_delete(args):
+    """Delete a slide by number (1-indexed)."""
+    token = get_token()
+    deck_id = extract_deck_id(args.deck)
+    data = api_get(token, deck_id)
+    slides = data.get('slides', [])
+
+    n = args.slide_number
+    if n < 1 or n > len(slides):
+        print(f'Slide number must be between 1 and {len(slides)}', file=sys.stderr)
+        sys.exit(1)
+
+    slide_id = slides[n - 1]['objectId']
+    requests = [{'deleteObject': {'objectId': slide_id}}]
+    api_batch_update(token, deck_id, requests)
+    print(f'Deleted slide {n} (id: {slide_id})')
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Read and edit Google Slides via REST API.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    sub = parser.add_subparsers(dest='command', required=True)
+
+    # read
+    p_read = sub.add_parser('read', help='Dump slide text')
+    p_read.add_argument('deck', help='Presentation URL or ID')
+    p_read.add_argument('--slide', type=int, help='Show only this slide number')
+
+    # search
+    p_search = sub.add_parser('search', help='Search for text')
+    p_search.add_argument('deck', help='Presentation URL or ID')
+    p_search.add_argument('query', help='Text to search for')
+
+    # add
+    p_add = sub.add_parser('add', help='Add a new slide')
+    p_add.add_argument('deck', help='Presentation URL or ID')
+    p_add.add_argument('--title', default='', help='Slide title')
+    p_add.add_argument('--body', default='', help='Slide body text')
+    p_add.add_argument('--after', type=int, help='Insert after this slide number')
+
+    # update
+    p_update = sub.add_parser('update', help='Update element text')
+    p_update.add_argument('deck', help='Presentation URL or ID')
+    p_update.add_argument('--element-id', required=True, help='Element object ID')
+    p_update.add_argument('--text', required=True, help='New text content')
+
+    # delete
+    p_delete = sub.add_parser('delete', help='Delete a slide')
+    p_delete.add_argument('deck', help='Presentation URL or ID')
+    p_delete.add_argument('slide_number', type=int, help='Slide number (1-indexed)')
+
+    args = parser.parse_args()
+
+    cmds = {
+        'read': cmd_read,
+        'search': cmd_search,
+        'add': cmd_add,
+        'update': cmd_update,
+        'delete': cmd_delete,
+    }
+    cmds[args.command](args)
+
+
+if __name__ == '__main__':
+    main()

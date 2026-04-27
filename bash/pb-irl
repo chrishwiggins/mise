@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# pb-irl: grab clipboard, extract first URL, open in Chrome profile 0 (c-irl)
+# Usage: pb-irl
+
+url=$(pbpaste | grep -oE 'https?://[^ >"'"'"']+' | head -1)
+
+if [ -z "$url" ]; then
+    echo "No URL found in clipboard" >&2
+    exit 1
+fi
+
+echo "$url"
+chrome-profile-open 0 "$url"

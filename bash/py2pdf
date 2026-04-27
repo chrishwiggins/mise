@@ -1,0 +1,144 @@
+#!/bin/bash
+
+# Check if a file was provided
+if [ $# -eq 0 ]; then
+    echo "Usage: py2pdf <python_file>"
+    exit 1
+fi
+
+# Check if the file exists
+if [ ! -f "$1" ]; then
+    echo "Error: File '$1' not found"
+    exit 1
+fi
+
+# Get the base filename without extension for the output
+basename=$(basename "$1" .py)
+output_tex="${basename}.tex"
+output_pdf="${basename}.pdf"
+
+# Create a temporary file with the Python code and prompt
+tmpfile=$(mktemp)
+cat > "$tmpfile" << 'PROMPT'
+Read and analyze this Python file and generate a complete LaTeX document that explains this code as a technical report or paper.
+
+The document should:
+1. Have a proper title based on what the code does
+2. Include an abstract summarizing the implementation
+3. Describe the algorithms, data structures, and methods used
+4. Explain the mathematical concepts if applicable
+5. Include code snippets for key functions
+6. Discuss the computational approach and complexity
+7. Add a conclusion
+
+CRITICAL Requirements:
+- Write pure LaTeX - absolutely NO Unicode characters or emojis
+- Use only ASCII characters
+- Use standard LaTeX packages only (article class, amsmath, listings, graphicx)
+- Format it like an arxiv.org preprint or technical report
+- Include proper sections and subsections
+- Add mathematical equations where relevant using LaTeX math mode
+- Use lstlisting environment for any code snippets
+- Make sure it compiles with pdflatex without errors
+- Test that all special characters are properly escaped
+- Use \textbackslash for backslashes in text mode
+- Use math mode for all mathematical symbols
+
+Output ONLY the LaTeX code, starting with \documentclass and ending with \end{document}
+No commentary, no explanations, just pure LaTeX code.
+
+Here is the Python file to analyze:
+
+```python
+PROMPT
+
+cat "$1" >> "$tmpfile"
+echo '```' >> "$tmpfile"
+
+# Use claude to analyze the Python code and generate a LaTeX technical report
+echo "Analyzing $1 and generating technical report..."
+
+# Unset parent IDE / Agent detection vars
+for var in $(env | grep -oE '^(CLAUDE|VSCODE)[A-Z_]*'); do unset "$var"; done
+unset ELECTRON_RUN_AS_NODE
+
+# Use claude with the prompt file
+claude --print < "$tmpfile" > "$output_tex" 2>&1
+
+# Clean up temp file
+rm -f "$tmpfile"
+
+# Strip markdown wrapper (claude --print may output ```latex...``` blocks)
+# Extract only content from \documentclass to \end{document}
+if grep -q '\\documentclass' "$output_tex"; then
+    sed -n '/^\\documentclass/,/^\\end{document}/p' "$output_tex" > "${output_tex}.tmp"
+    mv "${output_tex}.tmp" "$output_tex"
+fi
+
+# Check if LaTeX was generated
+if [ ! -s "$output_tex" ]; then
+    echo "Error: Failed to generate LaTeX document (empty output)"
+    exit 1
+fi
+
+if ! grep -q "documentclass" "$output_tex"; then
+    echo "Error: Output does not appear to be LaTeX"
+    echo "First 500 chars of output:"
+    head -c 500 "$output_tex"
+    exit 1
+fi
+
+# Test compilation and show errors if it fails
+echo "Testing LaTeX compilation..."
+if command -v pdflatex &> /dev/null; then
+    # First compilation with error output
+    if ! pdflatex -interaction=nonstopmode "$output_tex" > "${basename}_compile.log" 2>&1; then
+        echo "Error: LaTeX compilation failed. Errors:"
+        grep -A 2 "^!" "${basename}_compile.log" | head -20
+        echo ""
+        echo "Full log saved in: ${basename}_compile.log"
+        echo "LaTeX source saved as: $output_tex"
+        echo ""
+        echo "Attempting to fix common issues..."
+
+        # Try to fix common Unicode issues
+        sed -i '' 's/'/'"'"'/g' "$output_tex"
+        sed -i '' 's/'/'"'"'/g' "$output_tex"
+        sed -i '' 's/"/``/g' "$output_tex"
+        sed -i '' 's/"/''"'"'/g' "$output_tex"
+        sed -i '' 's/—/---/g' "$output_tex"
+        sed -i '' 's/–/--/g' "$output_tex"
+        sed -i '' 's/…/\.\.\./g' "$output_tex"
+        # Fix other common LaTeX issues
+        sed -i '' 's/≈/\\approx /g' "$output_tex"
+        sed -i '' 's/∆/\\Delta /g' "$output_tex"
+        sed -i '' 's/β/\\beta /g' "$output_tex"
+        sed -i '' 's/Σ/\\Sigma /g' "$output_tex"
+
+        # Try compilation again
+        if ! pdflatex -interaction=nonstopmode "$output_tex" > "${basename}_compile2.log" 2>&1; then
+            echo "Still failing after fixes. Check $output_tex manually."
+            echo "Errors from second attempt:"
+            grep -A 2 "^!" "${basename}_compile2.log" | head -10
+            exit 1
+        else
+            echo "Fixed common issues and compilation succeeded!"
+        fi
+    fi
+
+    # Second compilation for references
+    pdflatex -interaction=nonstopmode "$output_tex" > /dev/null 2>&1
+
+    # Clean up auxiliary files
+    rm -f "${basename}.aux" "${basename}.log" "${basename}.out" "${basename}.toc" "${basename}_compile.log" "${basename}_compile2.log"
+
+    if [ -f "$output_pdf" ]; then
+        echo "Successfully created: $output_pdf"
+        echo "LaTeX source saved as: $output_tex"
+    else
+        echo "Error: PDF not created despite compilation. Check $output_tex"
+    fi
+else
+    echo "Error: pdflatex not found. Install with: brew install --cask mactex"
+    echo "LaTeX source saved as: $output_tex"
+fi

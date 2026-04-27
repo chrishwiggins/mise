@@ -1,0 +1,3 @@
+#!/bin/tcsh
+# Set title of current terminal window
+printf "\033]0;%s\007" "$*"

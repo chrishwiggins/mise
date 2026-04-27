@@ -1,0 +1,270 @@
+#!/Users/wiggins/mise/py/.venv/bin/python3
+"""
+calzoom - Quick access to upcoming Zoom meetings.
+
+Looks for calendar events with Zoom URLs in the next 4-hour window
+(2 hours before and 2 hours after current time).
+
+If exactly one Zoom meeting is found, opens it automatically.
+If multiple meetings found, shows a menu to choose.
+Opens the selected meeting in both Zoom app and web browser.
+
+Usage:
+    calzoom                     Find and open Zoom meetings
+    calzoom -l                  List Zoom meetings without opening
+    calzoom -w HOURS            Set time window (default: 4 hours total)
+"""
+
+import argparse
+import re
+import subprocess
+import sys
+import webbrowser
+from datetime import datetime, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+sys.path.insert(0, str(Path(__file__).parent))
+from google_auth import get_credentials
+
+LOCAL_TZ = ZoneInfo("America/New_York")
+
+
+def get_calendar_service():
+    creds = get_credentials(service="calendar", scopes="calendar")
+    return build("calendar", "v3", credentials=creds)
+
+
+def extract_zoom_urls(text):
+    """Extract Zoom URLs from text (description, location, etc.)"""
+    if not text:
+        return []
+
+    # Match various Zoom URL patterns
+    zoom_patterns = [
+        r'https://[a-zA-Z0-9.-]*\.?zoom\.us/j/[0-9]+[^\s]*',
+        r'https://[a-zA-Z0-9.-]*\.?zoom\.us/s/[0-9]+[^\s]*',
+        r'https://[a-zA-Z0-9.-]*\.?zoom\.us/my/[a-zA-Z0-9._-]+[^\s]*',
+        r'https://[a-zA-Z0-9.-]*\.?zoom\.us/webinar/[a-zA-Z0-9]+[^\s]*',
+        r'zoommtg://[^\s]+',
+    ]
+
+    urls = []
+    for pattern in zoom_patterns:
+        urls.extend(re.findall(pattern, text, re.IGNORECASE))
+
+    # Clean up URLs (remove trailing punctuation)
+    cleaned_urls = []
+    for url in urls:
+        url = re.sub(r'[.,;!?]+$', '', url)
+        if url not in cleaned_urls:
+            cleaned_urls.append(url)
+
+    return cleaned_urls
+
+
+def fetch_zoom_meetings(service, window_hours=4):
+    """Fetch meetings with Zoom URLs in the time window around now."""
+    now = datetime.now(LOCAL_TZ)
+    start_time = now - timedelta(hours=window_hours//2)
+    end_time = now + timedelta(hours=window_hours//2)
+
+    try:
+        result = service.events().list(
+            calendarId="primary",
+            timeMin=start_time.isoformat(),
+            timeMax=end_time.isoformat(),
+            singleEvents=True,
+            orderBy="startTime",
+        ).execute()
+    except HttpError as e:
+        print(f"Error fetching calendar events: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    events = result.get("items", [])
+    zoom_meetings = []
+
+    for event in events:
+        # Skip all-day events
+        start = event.get("start", {})
+        if "date" in start:
+            continue
+
+        # Look for Zoom URLs in various fields
+        zoom_urls = []
+
+        # Check location field
+        location = event.get("location", "")
+        zoom_urls.extend(extract_zoom_urls(location))
+
+        # Check description
+        description = event.get("description", "")
+        zoom_urls.extend(extract_zoom_urls(description))
+
+        # Check summary/title for zoom references
+        summary = event.get("summary", "")
+        if "zoom" in summary.lower():
+            zoom_urls.extend(extract_zoom_urls(description + " " + location))
+
+        if zoom_urls:
+            start_dt = datetime.fromisoformat(start["dateTime"])
+            end_dt = datetime.fromisoformat(event["end"]["dateTime"])
+
+            meeting = {
+                "event": event,
+                "summary": summary,
+                "start": start_dt,
+                "end": end_dt,
+                "zoom_urls": zoom_urls,
+            }
+            zoom_meetings.append(meeting)
+
+    # Sort by start time
+    zoom_meetings.sort(key=lambda m: m["start"])
+    return zoom_meetings
+
+
+def format_time(dt):
+    """Format datetime for display."""
+    return dt.strftime("%-I:%M%p").lower()
+
+
+def format_meeting(meeting, index=None):
+    """Format meeting for display."""
+    prefix = f"{index:2d}. " if index is not None else "    "
+    start_str = format_time(meeting["start"])
+    end_str = format_time(meeting["end"])
+    time_range = f"{start_str}-{end_str}"
+
+    # Show time until/since meeting
+    now = datetime.now(LOCAL_TZ)
+    delta = meeting["start"] - now
+
+    if delta.total_seconds() > 0:
+        mins = int(delta.total_seconds() // 60)
+        if mins < 60:
+            timing = f"in {mins}m"
+        else:
+            hours = mins // 60
+            remaining_mins = mins % 60
+            timing = f"in {hours}h{remaining_mins}m" if remaining_mins else f"in {hours}h"
+    else:
+        delta = now - meeting["start"]
+        mins = int(delta.total_seconds() // 60)
+        if meeting["end"] > now:
+            timing = f"started {mins}m ago"
+        else:
+            timing = f"ended {mins}m ago"
+
+    return f"{prefix}{time_range:17s} {meeting['summary']} ({timing})"
+
+
+def open_zoom_meeting(meeting):
+    """Open a Zoom meeting in both app and browser."""
+    zoom_url = meeting["zoom_urls"][0]  # Use first URL found
+
+    print(f"Opening: {meeting['summary']}")
+    print(f"Time: {format_time(meeting['start'])}-{format_time(meeting['end'])}")
+    print(f"URL: {zoom_url}")
+
+    # Open in Zoom app (try zoommtg:// protocol first)
+    if zoom_url.startswith("https://"):
+        zoom_app_url = zoom_url.replace("https://", "zoommtg://")
+    else:
+        zoom_app_url = zoom_url
+
+    try:
+        subprocess.run(["open", zoom_app_url], check=True)
+        print("✓ Opened in Zoom app")
+    except subprocess.CalledProcessError:
+        print("⚠ Could not open Zoom app")
+
+    # Open in browser as backup
+    try:
+        # Convert back to https for browser
+        if zoom_url.startswith("zoommtg://"):
+            browser_url = zoom_url.replace("zoommtg://", "https://")
+        else:
+            browser_url = zoom_url
+        webbrowser.open(browser_url)
+        print("✓ Opened in browser")
+    except Exception as e:
+        print(f"⚠ Could not open browser: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Find and open upcoming Zoom meetings",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "-l", "--list",
+        action="store_true",
+        help="List Zoom meetings without opening"
+    )
+    parser.add_argument(
+        "-w", "--window",
+        type=int,
+        default=4,
+        help="Time window in hours to search (default: 4)"
+    )
+
+    args = parser.parse_args()
+
+    service = get_calendar_service()
+    meetings = fetch_zoom_meetings(service, args.window)
+
+    if not meetings:
+        print("No Zoom meetings found in the next few hours.")
+        return
+
+    if args.list:
+        print(f"Zoom meetings in {args.window}h window:")
+        print()
+        for i, meeting in enumerate(meetings, 1):
+            print(format_meeting(meeting, i))
+        print()
+        return
+
+    # If exactly one meeting, open it automatically
+    if len(meetings) == 1:
+        open_zoom_meeting(meetings[0])
+        return
+
+    # Multiple meetings - show menu
+    print(f"Found {len(meetings)} Zoom meetings:")
+    print()
+    for i, meeting in enumerate(meetings, 1):
+        print(format_meeting(meeting, i))
+    print()
+
+    while True:
+        try:
+            choice = input("Choose meeting (1-{}, or 'q' to quit): ".format(len(meetings))).strip()
+
+            if choice.lower() == 'q':
+                print("Cancelled.")
+                return
+
+            try:
+                index = int(choice)
+                if 1 <= index <= len(meetings):
+                    selected = meetings[index - 1]
+                    print()
+                    open_zoom_meeting(selected)
+                    return
+                else:
+                    print(f"Please enter a number between 1 and {len(meetings)}")
+            except ValueError:
+                print("Please enter a number or 'q' to quit")
+
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return
+
+
+if __name__ == "__main__":
+    main()

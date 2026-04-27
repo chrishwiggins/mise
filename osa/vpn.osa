@@ -1,0 +1,13 @@
+tell application "System Settings"
+    activate
+    reveal pane id "com.apple.preferences.network"
+end tell
+delay 1
+tell application "System Events"
+    tell process "System Settings"
+        -- Select VPN from the sidebar
+        key code 126 -- press the up arrow
+        key code 126 -- press the up arrow again
+        key code 36  -- press Enter to select VPN
+    end tell
+end tell

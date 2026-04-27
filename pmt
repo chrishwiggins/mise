@@ -1,0 +1,31 @@
+if you look at mutt and gmails, i wonder if mutt could be subsumed into gmails. 
+
+mutt is for sending, including both batch and interactive.
+
+if i were to change i could
+
+gmails foo@example.com -F folder
+
+and go interactive
+
+cat body.txt | gmails foo@example.com -s sub -a file
+
+and have batch
+
+gmails -H full.eml
+
+and have  batch send of an email which has to: and subject: (and maybe cc: ) in the file
+
+what do you think? what could go wrong?
+
+THE ONLY PROBLEM
+
+right now mutt is in 
+
+/Users/wiggins/gd/local/seiton/bash/mutt
+
+becuase i don't like hte idea of exposing, vi msie (which is a public repo), where i keep my muttmailrc files with ascii passwords. 
+
+do you have any idea how i can eat my cake and have it to
+- one file to rule them all
+- don't expose my PII like that

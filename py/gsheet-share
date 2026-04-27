@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""
+Google Sheets Permission Management CLI Tool
+
+Grants edit access to Google Sheets by trying multiple methods in order:
+1. Google Drive API (primary method)
+2. Google Sheets API + Drive API combo (with verification)
+3. Google Apps Script execution (limited, requires manual setup)
+
+Usage:
+    gsheet-share SHEET_ID_OR_URL EMAIL [--role ROLE] [--creds PATH]
+    gsheet-share --help
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+# Import our permission management library
+try:
+    from gsheet_permissions import grant_sheet_access, extract_sheet_id
+except ImportError:
+    # Handle case where script is run from different directory
+    import os
+
+    script_dir = Path(__file__).parent.absolute()
+    sys.path.insert(0, str(script_dir))
+    from gsheet_permissions import grant_sheet_access, extract_sheet_id
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Grant access to Google Sheets programmatically",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s SHEET_ID user@example.com
+  %(prog)s "https://docs.google.com/spreadsheets/d/SHEET_ID/edit" user@example.com
+  %(prog)s SHEET_ID user@example.com --role reader
+  %(prog)s SHEET_ID user@example.com --creds ~/my-credentials.json
+
+Roles:
+  writer    - Can edit the sheet (default)
+  reader    - Can view the sheet only
+  owner     - Full ownership (use with caution)
+
+Sheet ID can be:
+  - Full Google Sheets URL: https://docs.google.com/spreadsheets/d/SHEET_ID/edit
+  - Just the Sheet ID: 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms
+
+Authentication:
+  The tool will automatically find credentials in these locations:
+  - ~/.config/gsheet/credentials.json
+  - ~/.gsheet/credentials.json  
+  - ~/.0/credentials.json
+  - ~/Library/Application Support/gsheet/credentials.json
+  - ./credentials.json (current directory, with warning)
+  
+  Or specify a custom path with --creds option.
+
+Methods tried (in order):
+  1. Google Drive API - Most reliable method
+  2. Google Sheets API + Drive API combo - With sheet verification
+  3. Google Apps Script - Limited (requires manual setup)
+        """,
+    )
+
+    parser.add_argument("sheet_input", help="Google Sheet URL or ID")
+
+    parser.add_argument("email", help="Email address to grant access to")
+
+    parser.add_argument(
+        "--role",
+        "-r",
+        choices=["reader", "writer", "owner"],
+        default="writer",
+        help="Permission level to grant (default: writer)",
+    )
+
+    parser.add_argument(
+        "--creds",
+        "-c",
+        help="Path to credentials.json file (optional, will auto-detect if not provided)",
+    )
+
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", help="Show detailed output"
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be done without actually granting access",
+    )
+
+    args = parser.parse_args()
+
+    # Validate inputs
+    if not args.sheet_input.strip():
+        print("❌ Error: Sheet ID/URL cannot be empty", file=sys.stderr)
+        return 1
+
+    if not args.email.strip():
+        print("❌ Error: Email address cannot be empty", file=sys.stderr)
+        return 1
+
+    # Extract and display sheet ID for confirmation
+    try:
+        sheet_id = extract_sheet_id(args.sheet_input)
+        sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+    except ValueError as e:
+        print(f"❌ Error: {e}", file=sys.stderr)
+        return 1
+
+    # Show what we're about to do
+    print(f"📊 Sheet: {sheet_id}")
+    print(f"📧 Granting '{args.role}' access to: {args.email}")
+    print(f"🔗 URL: {sheet_url}")
+
+    if args.dry_run:
+        print("\n🔍 DRY RUN - No actual changes will be made")
+        print(
+            f"   Would grant '{args.role}' access to '{args.email}' for sheet '{sheet_id}'"
+        )
+        print("\nMethods that would be tried:")
+        print("   1. Google Drive API")
+        print("   2. Google Sheets API + Drive API combo")
+        print("   3. Google Apps Script execution (if needed)")
+        return 0
+
+    print("\n" + "=" * 50)
+    print("🚀 Starting permission grant process...")
+    print("=" * 50)
+
+    # Grant the access
+    try:
+        result = grant_sheet_access(
+            sheet_input=args.sheet_input,
+            email=args.email,
+            role=args.role,
+            creds_path=args.creds,
+        )
+
+        if result["success"]:
+            print(f"\n🎉 SUCCESS!")
+            print(f"   Method used: {result['method']}")
+            print(f"   Message: {result['message']}")
+
+            if "permission_id" in result:
+                print(f"   Permission ID: {result['permission_id']}")
+
+            if "sheet_title" in result:
+                print(f"   Sheet title: {result['sheet_title']}")
+
+            print(
+                f"\n📧 {args.email} should receive an email notification about the access grant."
+            )
+            return 0
+
+        else:
+            print(f"\n❌ FAILED: {result['message']}")
+
+            if args.verbose and "attempts" in result:
+                print("\nDetailed attempt results:")
+                for i, attempt in enumerate(result["attempts"], 1):
+                    print(f"   {i}. {attempt['method']}: {attempt['message']}")
+
+            print(f"\nTroubleshooting:")
+            print(f"   • Ensure you have access to the sheet: {sheet_url}")
+            print(f"   • Verify the email address is correct: {args.email}")
+            print(f"   • Check that your credentials have the necessary permissions")
+            print(f"   • Make sure the Google Drive API is enabled in your project")
+
+            return 1
+
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Cancelled by user", file=sys.stderr)
+        return 1
+
+    except Exception as e:
+        print(f"\n❌ Unexpected error: {e}", file=sys.stderr)
+        if args.verbose:
+            import traceback
+
+            traceback.print_exc()
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

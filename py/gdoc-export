@@ -1,0 +1,96 @@
+#!/usr/bin/python3
+
+import pickle
+import os
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
+import sys
+import argparse
+import platform
+import webbrowser
+import re
+import requests
+
+# Setup argument parser
+parser = argparse.ArgumentParser(
+    description="Export Google Doc as Markdown using Drive API."
+)
+parser.add_argument("-i", "--id", required=True, help="Google Document ID or full URL")
+parser.add_argument("-f", "--file", required=True, help="Path to credentials.json file")
+parser.add_argument("-o", "--output", required=True, help="Output markdown filename")
+
+args = parser.parse_args()
+
+# Extract document ID from URL if full URL is provided
+doc_input = args.id
+if "docs.google.com" in doc_input:
+    match = re.search(r"/d/([a-zA-Z0-9-_]+)", doc_input)
+    if match:
+        document_id = match.group(1)
+    else:
+        print("Error: Could not extract document ID from URL")
+        sys.exit(1)
+else:
+    document_id = doc_input
+
+credentials_file = args.file
+output_file = args.output
+
+google_credentials_url = "https://console.cloud.google.com/apis/credentials"
+
+# Check if credentials file exists
+if not os.path.exists(credentials_file):
+    print(
+        f"Error: '{credentials_file}' not found. Please download it from {google_credentials_url}"
+    )
+    print(f"Visit: {google_credentials_url}")
+
+    if platform.system() == "Darwin":
+        print("Opening the URL on macOS...")
+        webbrowser.open(google_credentials_url)
+    else:
+        print("Please manually open the URL in your browser.")
+
+    sys.exit(1)
+
+# Load credentials
+creds = None
+
+if os.path.exists("token.pickle"):
+    with open("token.pickle", "rb") as token:
+        creds = pickle.load(token)
+
+if not creds or not creds.valid:
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file(
+            credentials_file, ["https://www.googleapis.com/auth/drive.readonly"]
+        )
+        creds = flow.run_local_server(port=8080)
+
+        with open("token.pickle", "wb") as token:
+            pickle.dump(creds, token)
+
+# Use Drive API to export as plain text, then we'll convert to markdown
+service = build("drive", "v3", credentials=creds)
+
+# Export as plain text first
+export_url = f"https://www.googleapis.com/drive/v3/files/{document_id}/export?mimeType=text/plain"
+
+headers = {"Authorization": f"Bearer {creds.token}"}
+response = requests.get(export_url, headers=headers)
+
+if response.status_code == 200:
+    text_content = response.text
+
+    # Save to file
+    with open(output_file, "w") as f:
+        f.write(text_content)
+
+    print(f"Document exported as {output_file}")
+else:
+    print(f"Error exporting document: {response.status_code}")
+    print(response.text)
+    sys.exit(1)

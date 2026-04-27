@@ -1,0 +1,115 @@
+#!/usr/bin/python3
+"""Download a Google Doc as Markdown.
+
+Usage:
+    doc2md <url-or-doc-id> [output-file]
+
+If output-file is omitted, saves as <document-title>.md in the current directory.
+
+Uses token at ~/.config/gdrive/token-drive-full.pickle (with auto-refresh).
+Falls back to OAuth browser flow if no token exists, using
+~/.config/gcloud/slides-automation-oauth-client.json as credentials.
+"""
+
+import pickle
+import os
+import re
+import sys
+import unicodedata
+
+TOKEN_PATH = os.path.expanduser("~/.config/gdrive/token-drive-full.pickle")
+CREDENTIALS_PATH = os.path.expanduser(
+    "~/.config/gcloud/slides-automation-oauth-client.json"
+)
+SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+def extract_doc_id(doc_input):
+    if "docs.google.com" in doc_input:
+        match = re.search(r"/d/([a-zA-Z0-9-_]+)", doc_input)
+        if match:
+            return match.group(1)
+        print("Error: Could not extract document ID from URL", file=sys.stderr)
+        sys.exit(1)
+    return doc_input
+
+
+def get_credentials():
+    from google.auth.transport.requests import Request
+
+    creds = None
+    if os.path.exists(TOKEN_PATH):
+        with open(TOKEN_PATH, "rb") as f:
+            creds = pickle.load(f)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(TOKEN_PATH, "wb") as f:
+                pickle.dump(creds, f)
+        else:
+            if not os.path.exists(CREDENTIALS_PATH):
+                print(f"Error: no credentials at {CREDENTIALS_PATH}", file=sys.stderr)
+                sys.exit(1)
+            from google_auth_oauthlib.flow import InstalledAppFlow
+
+            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
+            creds = flow.run_local_server(port=8080)
+            os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
+            with open(TOKEN_PATH, "wb") as f:
+                pickle.dump(creds, f)
+    return creds
+
+
+def slugify(title):
+    title = unicodedata.normalize("NFKD", title)
+    title = re.sub(r"[^\w\s-]", "", title).strip().lower()
+    return re.sub(r"[-\s]+", "-", title)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__.strip(), file=sys.stderr)
+        sys.exit(1)
+
+    doc_id = extract_doc_id(sys.argv[1])
+    output_file = sys.argv[2] if len(sys.argv) > 2 else None
+
+    creds = get_credentials()
+
+    import requests
+
+    headers = {"Authorization": f"Bearer {creds.token}"}
+
+    # If no output file, fetch doc metadata for the title
+    if not output_file:
+        meta_url = f"https://www.googleapis.com/drive/v3/files/{doc_id}?fields=name"
+        meta = requests.get(meta_url, headers=headers)
+        if meta.status_code == 200:
+            title = meta.json().get("name", doc_id)
+            output_file = slugify(title) + ".md"
+        else:
+            output_file = f"{doc_id}.md"
+
+    # Export as plain text
+    export_url = (
+        f"https://www.googleapis.com/drive/v3/files/{doc_id}/export"
+        f"?mimeType=text/plain"
+    )
+    r = requests.get(export_url, headers=headers)
+
+    if r.status_code != 200:
+        print(f"Error {r.status_code}: {r.text[:500]}", file=sys.stderr)
+        sys.exit(1)
+
+    # Strip BOM if present
+    text = r.text.lstrip("\ufeff")
+
+    with open(output_file, "w") as f:
+        f.write(text)
+
+    print(f"{output_file}")
+
+
+if __name__ == "__main__":
+    main()

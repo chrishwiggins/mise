@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""disperse - spread all windows across desktops, one per space"""
+
+import json
+import subprocess
+import sys
+
+YABAI = "/opt/homebrew/bin/yabai"
+MAX_SPACES = 10
+
+HELP = """\
+disperse - one window per desktop
+
+WHAT IT DOES
+  Queries every open window via yabai, then moves each one to its own
+  macOS Space (desktop), filling spaces 1 through 10. Minimized, hidden,
+  sticky, and native-fullscreen windows are skipped. If fewer than 10
+  spaces exist, it tries to create more (requires the yabai scripting
+  addition). If you have more windows than spaces, the extras stay put.
+
+HOW IT WORKS
+  1. yabai -m query --windows    (get all windows as JSON)
+  2. Filter to movable windows   (not minimized/hidden/sticky/fullscreen)
+  3. yabai -m space --create     (if more spaces are needed, up to 10)
+  4. yabai -m window ID --space N (assign window i to space i+1)
+
+TOOLING
+  Depends entirely on yabai (github.com/koekeishiya/yabai), a tiling
+  window manager for macOS that exposes window and space manipulation
+  via a JSON message-passing API. Requires:
+    - /opt/homebrew/bin/yabai running as a service
+    - SIP partially disabled (for space creation/destruction)
+    - Scripting addition loaded: sudo yabai --load-sa
+    - "Displays have separate Spaces" ON in System Settings > Desktop & Dock
+  Without the scripting addition, disperse can still move windows between
+  existing spaces but cannot create new ones.
+
+NON-GOALS
+  - No window sizing or tiling. Just placement; windows keep their geometry.
+  - No per-display logic. Spreads across all spaces globally, not per monitor.
+  - No persistence. Does not remember or restore previous arrangements.
+  - No priority or ordering. Windows are assigned in whatever order yabai
+    returns them; no sorting by app, recency, or focus history.
+  - No "gather" inverse. To pull everything back, use yabai directly:
+      yabai -m query --windows | python3 -c "
+        import json,sys
+        for w in json.load(sys.stdin):
+          print(w['id'])" | while read id; do
+            yabai -m window $id --space 1
+          done
+
+ALTERNATIVES
+  - yabai rules: write a yabairc rule per app to pin it to a space.
+    More surgical, but static; disperse is a one-shot spread.
+  - Hammerspoon (hs.spaces + hs.window): Lua scripting, same idea,
+    heavier runtime. Can do everything disperse does and much more.
+  - Amethyst: tiling WM with space support, but no scriptable API
+    for this kind of batch operation.
+  - AppleScript/JXA: System Events can move windows, but space
+    manipulation requires private APIs (CGSMoveWorkspaceWindowList)
+    that break across macOS versions. yabai wraps these safely.
+  - Shortcuts.app: can trigger Focus modes and open apps, but has
+    no window-to-space assignment primitive.
+  - BetterTouchTool: has "move window to space N" actions, but
+    no scriptable batch mode without building a macro chain.
+"""
+
+
+def yabai_query(*args):
+    r = subprocess.run([YABAI, "-m"] + list(args), capture_output=True, text=True)
+    return json.loads(r.stdout) if r.stdout.strip() else []
+
+
+def yabai_cmd(*args):
+    return subprocess.run([YABAI, "-m"] + list(args), capture_output=True, text=True)
+
+
+def main():
+    if "-h" in sys.argv or "--help" in sys.argv:
+        print(HELP)
+        return
+
+    windows = yabai_query("query", "--windows")
+
+    # all real, movable windows across every space
+    movable = [
+        w for w in windows
+        if not w.get("is-minimized")
+        and not w.get("is-hidden")
+        and not w.get("is-sticky")
+        and not w.get("is-native-fullscreen")
+        and w.get("app", "") != ""
+    ]
+
+    if not movable:
+        print("No windows to disperse.")
+        return
+
+    n_needed = min(len(movable), MAX_SPACES)
+    movable = movable[:n_needed]
+
+    # ensure enough spaces exist
+    spaces = yabai_query("query", "--spaces")
+    n_spaces = len(spaces)
+
+    created = 0
+    while n_spaces < n_needed:
+        r = yabai_cmd("space", "--create")
+        if r.returncode != 0:
+            print(f"Could not create space {n_spaces + 1} "
+                  f"(yabai scripting addition may not be loaded).")
+            break
+        n_spaces += 1
+        created += 1
+
+    if created:
+        # re-query so indices are fresh
+        spaces = yabai_query("query", "--spaces")
+        n_spaces = len(spaces)
+
+    # disperse: window i -> space i+1
+    moved = 0
+    for i, win in enumerate(movable):
+        if i >= n_spaces:
+            break
+        space_idx = i + 1
+        r = yabai_cmd("window", str(win["id"]), "--space", str(space_idx))
+        if r.returncode == 0:
+            moved += 1
+            title = win.get("title", "")
+            if len(title) > 45:
+                title = title[:42] + "..."
+            print(f"  space {space_idx}: {win['app']}"
+                  + (f" ({title})" if title else ""))
+        else:
+            print(f"  space {space_idx}: FAILED to move {win['app']}")
+
+    extra = len(windows) - n_needed
+    print(f"\n{moved} windows dispersed across {moved} desktops."
+          + (f" ({extra} more windows than spaces.)" if extra > 0 else ""))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,95 @@
+#!/bin/bash
+# tb - manage tech-bono.org / tech-bono.com
+#
+# Usage:
+#   tb pub <file> <slug>      publish file to tech-bono.org/<slug>
+#   tb 301 <slug> <url>       permanent redirect tech-bono.org/<slug> -> <url>
+#   tb 302 <slug> <url>       temporary redirect
+#   tb rm <slug> [...]        remove published file(s) or redirect(s)
+#   tb ls                     list published files and redirects
+#   tb open <slug>            open URL in browser
+#
+# Examples:
+#   tb pub slides.pdf a       -> https://tech-bono.org/a
+#   tb 301 b http://ex.com   -> 301 tech-bono.org/b -> http://ex.com
+#   tb rm a b                 remove file a and redirect b
+#   tb ls                     show what's live
+
+set -euo pipefail
+
+VPS="root@23.95.164.201"
+KEY="$HOME/.ssh/google_compute_engine"
+DIR="/var/www/html/tech-bono"
+REDIR="/etc/nginx/tech-bono-redirects.conf"
+DOMAIN="https://tech-bono.org"
+
+usage() {
+    sed -nE '2,/^$/s/^# ?//p' "$0"
+    exit 0
+}
+
+do_redirect() {
+    local CODE="$1" SLUG="$2" URL="$3"
+    local RULE="location = /${SLUG} { return ${CODE} ${URL}; }"
+    ssh -i "$KEY" "$VPS" "sed -i '/^location = \/${SLUG} {/d' ${REDIR} && echo '${RULE}' >> ${REDIR}"
+    ssh -i "$KEY" "$VPS" "nginx -t 2>&1 && nginx -s reload 2>&1" || { echo "Error: nginx reload failed"; exit 1; }
+    echo "$DOMAIN/$SLUG -> $URL ($CODE)"
+}
+
+case "${1:-}" in
+    pub|pbu|add|push)
+        [ $# -lt 3 ] && { echo "Usage: tb pub <file> <slug>"; exit 1; }
+        FILE="$2"; SLUG="$3"
+        [ ! -f "$FILE" ] && { echo "Error: $FILE not found"; exit 1; }
+        scp -i "$KEY" "$FILE" "$VPS:$DIR/$SLUG"
+        echo "$DOMAIN/$SLUG"
+        ;;
+    301|302)
+        CODE="$1"; shift
+        [ $# -lt 2 ] && { echo "Usage: tb $CODE <slug> <url>"; exit 1; }
+        do_redirect "$CODE" "$1" "$2"
+        ;;
+    rm|del|remove)
+        shift
+        [ $# -lt 1 ] && { echo "Usage: tb rm <slug> [...]"; exit 1; }
+        NEED_RELOAD=false
+        for slug in "$@"; do
+            if ssh -i "$KEY" "$VPS" "test -f $DIR/$slug"; then
+                ssh -i "$KEY" "$VPS" "rm -f $DIR/$slug"
+                echo "Removed file: $DOMAIN/$slug"
+            fi
+            if ssh -i "$KEY" "$VPS" "grep -q '^location = /$slug {' $REDIR 2>/dev/null"; then
+                ssh -i "$KEY" "$VPS" "sed -i '/^location = \\/$slug {/d' $REDIR"
+                echo "Removed redirect: $DOMAIN/$slug"
+                NEED_RELOAD=true
+            fi
+        done
+        $NEED_RELOAD && ssh -i "$KEY" "$VPS" "nginx -s reload 2>/dev/null"
+        ;;
+    ls|list)
+        ssh -i "$KEY" "$VPS" '
+            for f in '"$DIR"'/*; do
+                [ -f "$f" ] || continue
+                b=$(basename "$f")
+                sz=$(stat -c%s "$f" 2>/dev/null | numfmt --to=iec 2>/dev/null || wc -c < "$f" | tr -d " ")
+                printf "%-6s  %s\n" "$sz" "'"$DOMAIN"'/$b"
+            done
+            awk "/^location = / { slug=\$3; code=\$6; url=\$7; gsub(/;/,\"\",url); gsub(/^\\//,\"\",slug); printf \"  ->   %-40s %s %s\\n\", \"'"$DOMAIN"'/\" slug, code, url }" '"$REDIR"' 2>/dev/null
+        '
+        ;;
+    open)
+        [ $# -lt 2 ] && { open "$DOMAIN"; exit 0; }
+        open "$DOMAIN/$2"
+        ;;
+    status|st)
+        ssh -i "$KEY" "$VPS" 'echo "=== Gateway ===" && curl -sf http://127.0.0.1:18789/health && echo "" && echo "=== Postfix ===" && systemctl is-active postfix && echo "=== Nginx ===" && systemctl is-active nginx && echo "=== OpenDKIM ===" && systemctl is-active opendkim && echo "=== Load ===" && uptime'
+        ;;
+    -h|--help|help|"?"|"")
+        usage
+        ;;
+    *)
+        echo "tb: unknown command '$1'"
+        echo "Try: tb help"
+        exit 1
+        ;;
+esac

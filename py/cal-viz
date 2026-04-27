@@ -1,0 +1,499 @@
+#!/usr/bin/env python3
+"""cal-viz: generate HTML timeline calendars from plain-text schedule files.
+
+Updated to include breaks in annotations and support labels from comments.
+"""
+
+import argparse
+import html as html_mod
+import sys
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+
+# ── Constants ────────────────────────────────────────────────────
+
+NAMED_COLORS = {
+    'red': '#F44336', 'pink': '#E91E63', 'purple': '#9C27B0',
+    'deeppurple': '#673AB7', 'indigo': '#3F51B5', 'blue': '#2196F3',
+    'lightblue': '#03A9F4', 'cyan': '#00BCD4', 'teal': '#009688',
+    'green': '#4CAF50', 'lightgreen': '#8BC34A', 'lime': '#CDDC39',
+    'yellow': '#FFEB3B', 'amber': '#FFC107', 'orange': '#FF9800',
+    'deeporange': '#FF5722', 'brown': '#795548', 'gray': '#9E9E9E',
+    'grey': '#9E9E9E', 'bluegray': '#607D8B', 'bluegrey': '#607D8B',
+}
+
+WEEKEND_BG = '#d0d0d0'
+OVERLAP_1 = '#4CAF50'  # green
+OVERLAP_2 = '#FFEB3B'  # yellow
+OVERLAP_3 = '#FF9800'  # orange
+OVERLAP_4 = '#F44336'  # red
+OVERLAP_5PLUS = '#212121'  # black
+SPECIAL_BORDER = '#FF1493'
+
+DAY_ABBR = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
+
+# ── Data structures ──────────────────────────────────────────────
+
+@dataclass
+class Person:
+    name: str
+    color: str  # hex
+
+@dataclass
+class Break:
+    person: str
+    start: date
+    end: date
+    label: str = ''
+    tentative: bool = False
+    category: str = 'default'  # 'school', 'program', 'camp', etc.
+
+@dataclass
+class Special:
+    day: date
+    label: str
+    person: str = ''  # person name extracted from label if present
+
+@dataclass
+class Schedule:
+    persons: list = field(default_factory=list)
+    breaks: list = field(default_factory=list)
+    specials: list = field(default_factory=list)
+    title: str = 'Schedule'
+    range_start: date = None
+    range_end: date = None
+
+# ── Parsing ──────────────────────────────────────────────────────
+
+def resolve_color(token):
+    if token.startswith('#') and len(token) == 7:
+        return token.upper()
+    c = NAMED_COLORS.get(token.lower())
+    if c:
+        return c
+    raise ValueError(f"unknown color '{token}' (use a named color or #RRGGBB)")
+
+
+def parse_date(token):
+    return date.fromisoformat(token)
+
+
+def parse_schedule(lines, source='<stdin>'):
+    sched = Schedule()
+    person_names = set()
+
+    for i, raw in enumerate(lines, 1):
+        # handle comments for labels
+        comment = ""
+        if '#' in raw:
+            line_part, comment = raw.split('#', 1)
+            line_part = line_part.strip()
+            comment = comment.strip()
+        else:
+            line_part = raw.strip()
+
+        if not line_part:
+            continue
+        parts = line_part.split()
+        cmd = parts[0].lower()
+
+        try:
+            if cmd == 'title':
+                sched.title = ' '.join(parts[1:])
+
+            elif cmd == 'range':
+                if len(parts) < 3:
+                    raise ValueError("range requires START END")
+                sched.range_start = parse_date(parts[1])
+                sched.range_end = parse_date(parts[2])
+                if sched.range_end < sched.range_start:
+                    raise ValueError("range end before start")
+
+            elif cmd == 'person':
+                if len(parts) < 3:
+                    raise ValueError("person requires NAME COLOR")
+                name = parts[1]
+                if name in person_names:
+                    raise ValueError(f"duplicate person '{name}'")
+                color = resolve_color(parts[2])
+                sched.persons.append(Person(name, color))
+                person_names.add(name)
+
+            elif cmd == 'break':
+                if len(parts) < 3:
+                    raise ValueError("break requires NAME START [END] [tentative]")
+                name = parts[1]
+                if name not in person_names:
+                    raise ValueError(f"unknown person '{name}'")
+                start = parse_date(parts[2])
+
+                remaining = parts[3:]
+                tentative = False
+                category = 'default'
+
+                # Extract flags and category
+                remaining_filtered = []
+                for p in remaining:
+                    if p.lower() == 'tentative':
+                        tentative = True
+                    elif p.startswith('@'):
+                        category = p[1:].lower()
+                    else:
+                        remaining_filtered.append(p)
+                remaining = remaining_filtered
+
+                end = start
+                if remaining:
+                    try:
+                        end = parse_date(remaining[0])
+                        remaining = remaining[1:]
+                    except ValueError:
+                        pass
+
+                if end < start:
+                    raise ValueError("break end before start")
+
+                # Label is either remaining parts or the comment
+                label = ' '.join(remaining).strip() or comment
+                sched.breaks.append(Break(name, start, end, label, tentative, category))
+
+            elif cmd == 'special':
+                if len(parts) < 3:
+                    raise ValueError("special requires DATE LABEL")
+                day = parse_date(parts[1])
+                label = ' '.join(parts[2:])
+                if comment and comment not in label:
+                    label = f"{label} ({comment})"
+                # Extract person name from label if it starts with "PersonName:"
+                person = ''
+                if ':' in label:
+                    first_part = label.split(':')[0].strip()
+                    # Check if this is a known person
+                    if first_part in person_names:
+                        person = first_part
+                sched.specials.append(Special(day, label, person))
+
+            else:
+                raise ValueError(f"unknown directive '{cmd}'")
+
+        except ValueError as e:
+            print(f"cal-viz: {source}:{i}: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    if not sched.persons:
+        print(f"cal-viz: {source}: no persons defined", file=sys.stderr)
+        sys.exit(1)
+
+    return sched
+
+# ── Date computation ─────────────────────────────────────────────
+
+def is_weekend(d):
+    return d.weekday() >= 5
+
+
+def build_groups(persons):
+    """Auto-group persons by base name (strip (S), (X) suffix).
+    Returns: dict of display_name -> [person_names]
+    Example: Taizo, Taizo(S) -> display_name='Taizo', members=['Taizo', 'Taizo(S)']
+    """
+    import re
+    groups = {}
+    for p in persons:
+        # Strip trailing (X) suffix where X is any alphanumeric
+        base = re.sub(r'\([^)]*\)$', '', p.name)
+        if base not in groups:
+            groups[base] = []
+        groups[base].append(p.name)
+    return groups
+
+
+def day_range(start, end):
+    d = start
+    while d <= end:
+        yield d
+        d += timedelta(days=1)
+
+
+def compute_range(sched, cli_start, cli_end):
+    start = cli_start or sched.range_start
+    end = cli_end or sched.range_end
+    if start and end:
+        return start, end
+    all_dates = []
+    for b in sched.breaks:
+        all_dates.extend([b.start, b.end])
+    for s in sched.specials:
+        all_dates.append(s.day)
+    if not all_dates:
+        print("cal-viz: no dates found in schedule", file=sys.stderr)
+        sys.exit(1)
+    return start or min(all_dates), end or max(all_dates)
+
+
+def merge_ranges(ranges):
+    """Merge overlapping/adjacent (date, date, tentative) tuples."""
+    if not ranges:
+        return []
+    # sort by start, then by end descending so wider ranges come first
+    sorted_r = sorted(ranges, key=lambda r: (r[0], -r[1].toordinal() if hasattr(r[1], 'toordinal') else 0))
+    merged = [sorted_r[0]]
+    for s, e, t in sorted_r[1:]:
+        ps, pe, pt = merged[-1]
+        if s <= pe + timedelta(days=1):
+            merged[-1] = (ps, max(pe, e), pt and t)
+        else:
+            merged.append((s, e, t))
+    return merged
+
+
+def build_person_days(sched, days, groups):
+    """Build day_map for each display person.
+    Returns: dict of display_name -> {day -> [(label, tentative), ...]}
+    Each day maps to a list of (label, tentative) tuples for that person.
+    """
+    result = {}
+    for display_name, member_names in groups.items():
+        day_map = {}
+        for b in sched.breaks:
+            if b.person not in member_names:
+                continue
+            for d in day_range(b.start, b.end):
+                if d not in days:
+                    continue
+                day_map.setdefault(d, []).append((b.label, b.tentative))
+        result[display_name] = day_map
+    return result
+
+
+# ── Color math ───────────────────────────────────────────────────
+
+def hex_to_rgb(h):
+    h = h.lstrip('#')
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def rgb_to_hex(r, g, b):
+    return f'#{r:02X}{g:02X}{b:02X}'
+
+
+def lighten(hex_color, factor=0.6):
+    r, g, b = hex_to_rgb(hex_color)
+    r = int(r + (255 - r) * factor)
+    g = int(g + (255 - g) * factor)
+    b = int(b + (255 - b) * factor)
+    return rgb_to_hex(r, g, b)
+
+# ── HTML generation ──────────────────────────────────────────────
+
+def sizing(n_days):
+    if n_days <= 21: return dict(cell_h=34, font_hdr=11, font_label=14, font_legend=13, label_w=80, min_col=20)
+    elif n_days <= 45: return dict(cell_h=28, font_hdr=10, font_label=13, font_legend=12, label_w=70, min_col=16)
+    elif n_days <= 75: return dict(cell_h=22, font_hdr=8, font_label=11, font_legend=11, label_w=60, min_col=14)
+    else: return dict(cell_h=18, font_hdr=7, font_label=10, font_legend=10, label_w=55, min_col=12)
+
+
+def generate_css(sched, sz, n_days, n_display_persons=None):
+    if n_display_persons is None:
+        n_display_persons = len(sched.persons)
+    lines = ['* { box-sizing: border-box; }', 'body { font-family: sans-serif; margin: 0; padding: 10px; background: #f5f5f5; }']
+    lines.append(f'h1 {{ text-align: center; color: #333; font-size: {sz["font_label"] + 4}px; }}')
+    lines.append(f'.legend {{ display: flex; gap: 12px; justify-content: center; margin-bottom: 10px; font-size: {sz["font_legend"]}px; flex-wrap: wrap; }}')
+    lines.append('.legend-item { display: flex; align-items: center; gap: 4px; }')
+    lines.append('.legend-box { width: 14px; height: 14px; border-radius: 2px; }')
+    lines.append(f'.timeline {{ display: grid; grid-template-columns: {sz["label_w"]}px repeat({n_days}, minmax({sz["min_col"]}px, 1fr)); gap: 1px; background: white; padding: 8px; border-radius: 6px; overflow-x: auto; }}')
+    lines.append(f'.row-label {{ font-weight: 600; font-size: {sz["font_label"]}px; display: flex; align-items: center; position: sticky; left: 0; background: white; z-index: 2; }}')
+    lines.append(f'.day-header {{ text-align: center; font-size: {sz["font_hdr"]}px; padding: 2px 0; border-bottom: 1px solid #ddd; }}')
+    lines.append(f'.day-header.weekend {{ background: {WEEKEND_BG}; }}')
+    lines.append('.day-header.month-start { border-left: 2px solid #333; }')
+    lines.append(f'.month-header {{ text-align: center; font-weight: 600; font-size: {sz["font_hdr"] + 2}px; background: #333; color: white; padding: 3px 0; }}')
+    lines.append('.corner { position: sticky; left: 0; background: white; z-index: 2; }')
+    lines.append(f'.cell {{ height: {sz["cell_h"]}px; border: 1px solid #eee; }}')
+    lines.append(f'.cell.weekend {{ background: {WEEKEND_BG}; }}')
+    lines.append('.cell.month-start { border-left: 2px solid #333; }')
+    lines.append('.cell.tentative { opacity: 0.5; }')
+    lines.append(f'.special {{ border-bottom: 2px solid {SPECIAL_BORDER}; }}')
+    lines.append('.annotations { max-width: 1000px; margin: 20px auto; font-size: 14px; line-height: 1.6; }')
+    lines.append('.annotations ul { list-style: none; padding: 0; margin: 10px 0; }')
+    lines.append('.annotations li { display: grid; grid-template-columns: 180px 1fr; gap: 16px; margin-bottom: 4px; }')
+    lines.append('.ann-date { font-family: monospace; font-weight: bold; color: #555; white-space: nowrap; }')
+
+    # Event count-based coloring: 1=green, 2=yellow, 3=orange, 4=red, 5+=black
+    lines.append(f'.cell.overlap-1 {{ background: {OVERLAP_1}; }}')  # green
+    lines.append(f'.cell.overlap-2 {{ background: {OVERLAP_2}; }}')  # yellow
+    lines.append(f'.cell.overlap-3 {{ background: {OVERLAP_3}; }}')  # orange
+    lines.append(f'.cell.overlap-4 {{ background: {OVERLAP_4}; }}')  # red
+    lines.append(f'.cell.overlap-5plus {{ background: {OVERLAP_5PLUS}; color: white; }}')  # black
+
+    # Weekend stripe pattern for 1-event days
+    lines.append(f'.cell.overlap-1.weekend-stripe {{ background: repeating-linear-gradient(-45deg, {OVERLAP_1}, {OVERLAP_1} 3px, {lighten(OVERLAP_1)} 3px, {lighten(OVERLAP_1)} 6px); }}')
+
+    return '\n'.join(lines)
+
+def generate_month_row(days):
+    out = ['<div class="corner"></div>']
+    spans = []
+    for d in days:
+        if spans and spans[-1][0] == d.month: spans[-1] = (d.month, spans[-1][1] + 1)
+        else: spans.append((d.month, 1))
+    for m, count in spans:
+        name = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m-1]
+        out.append(f'<div class="month-header" style="grid-column: span {count}">{name}</div>')
+    return '\n'.join(out)
+
+def generate_header_row(days, specials):
+    out = ['<div class="corner"></div>']
+    for d in days:
+        cls = ['day-header']
+        if is_weekend(d): cls.append('weekend')
+        if d.day == 1: cls.append('month-start')
+        if d in specials: cls.append('special')
+        out.append(f'<div class="{" ".join(cls)}">{d.day}<br>{DAY_ABBR[d.weekday()]}</div>')
+    return '\n'.join(out)
+
+def generate_person_row(display_name, person_color, days, pmap, specials_by_day):
+    """Generate one row for a display person.
+    pmap[display_name][day] = [(label, tentative), ...]
+    specials_by_day[day] = [Special(...), ...]
+    Color by event count: 1=green, 2=yellow, 3=orange, 4=red, 5+=black
+    """
+    out = [f'<div class="row-label">{html_mod.escape(display_name)}</div>']
+    for d in days:
+        cls = ['cell']
+        if d.day == 1: cls.append('month-start')
+        # Only mark special if this person has a special on this day
+        if d in specials_by_day:
+            for spec in specials_by_day[d]:
+                if spec.person == display_name:
+                    cls.append('special')
+                    break
+
+        # Get events for this person on this day
+        events = pmap.get(display_name, {}).get(d, [])
+        if events:
+            # Color by event count
+            event_count = len(events)
+            if event_count == 1:
+                cls.append('overlap-1')
+                if is_weekend(d):
+                    cls.append('weekend-stripe')
+            elif event_count == 2:
+                cls.append('overlap-2')
+            elif event_count == 3:
+                cls.append('overlap-3')
+            elif event_count == 4:
+                cls.append('overlap-4')
+            else:  # 5+
+                cls.append('overlap-5plus')
+
+            # Mark tentative if any event is tentative
+            if any(tent for _, tent in events):
+                cls.append('tentative')
+
+            # Build tooltip: person + date header, then bulleted events.
+            # Escape each piece, then join with &#10; (HTML numeric newline,
+            # which native title= renders as a line break).
+            header = html_mod.escape(
+                f"{display_name} - {d.strftime('%a %b %-d, %Y')}",
+                quote=True,
+            )
+            bullets = [
+                html_mod.escape(
+                    f"- {label}{' (tentative)' if tent else ''}",
+                    quote=True,
+                )
+                for label, tent in events
+            ]
+            title_attr = f' title="{header}&#10;{"&#10;".join(bullets)}"'
+        else:
+            if is_weekend(d): cls.append('weekend')
+            title_attr = ''
+
+        out.append(f'<div class="{" ".join(cls)}"{title_attr}></div>')
+    return '\n'.join(out)
+
+def generate_annotations(sched):
+    items = []
+    for s in sched.specials:
+        items.append((s.day, s.day, s.label, False))
+    for b in sched.breaks:
+        if b.label:
+            items.append((b.start, b.end, b.label, b.tentative))
+
+    if not items: return ''
+    items.sort()
+
+    # Deduplicate by (start, end, label)
+    seen = {}
+    deduped = []
+    for start, end, label, tent in items:
+        key = (start, end, label)
+        if key not in seen:
+            seen[key] = tent
+            deduped.append((start, end, label, tent))
+    items = deduped
+
+    out = ['<div class="annotations"><h2>Key Dates</h2><ul>']
+    for start, end, label, tent in items:
+        date_str = start.strftime("%a %b %d")
+        if start != end:
+            date_str += f" – {end.strftime('%a %b %d')}"
+        label_text = html_mod.escape(label)
+        if tent:
+            label_text += ' <span style="color: #999; font-style: italic;">(tentative)</span>'
+        out.append(f'<li><span class="ann-date">{date_str}</span> {label_text}</li>')
+    out.append('</ul></div>')
+    return '\n'.join(out)
+
+def generate_html(sched, days, pmap, groups, title):
+    # Build mapping of day -> list of Special objects
+    specials_by_day = {}
+    for s in sched.specials:
+        specials_by_day.setdefault(s.day, []).append(s)
+    sz = sizing(len(days))
+    # Use group count for grid sizing, not person count
+    n_display_persons = len(groups)
+    out = ['<!DOCTYPE html><html><head><meta charset="UTF-8">']
+    out.append(f'<style>{generate_css(sched, sz, len(days), n_display_persons)}</style></head><body>')
+    out.append(f'<h1>{html_mod.escape(title)}</h1>')
+    out.append('<div class="timeline">')
+    out.append(generate_month_row(days))
+    # For header, we need a set of days with any special
+    specials_days = set(specials_by_day.keys())
+    out.append(generate_header_row(days, specials_days))
+    # Create a mapping of display_name to person color
+    display_color = {}
+    for display_name, members in groups.items():
+        # Get color from first member
+        for p in sched.persons:
+            if p.name == members[0]:
+                display_color[display_name] = p.color
+                break
+    for display_name in groups.keys():
+        out.append(generate_person_row(display_name, display_color[display_name], days, pmap, specials_by_day))
+    out.append('</div>')
+    out.append(generate_annotations(sched))
+    out.append('</body></html>')
+    return '\n'.join(out)
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('file', nargs='?', default='-')
+    parser.add_argument('--start')
+    parser.add_argument('--end')
+    args = parser.parse_args()
+
+    text = sys.stdin.read() if args.file == '-' else open(args.file).read()
+    sched = parse_schedule(text.splitlines())
+
+    start, end = compute_range(sched,
+                               parse_date(args.start) if args.start else None,
+                               parse_date(args.end) if args.end else None)
+    days = list(day_range(start, end))
+    groups = build_groups(sched.persons)
+    pmap = build_person_days(sched, set(days), groups)
+
+    sys.stdout.write(generate_html(sched, days, pmap, groups, sched.title))
+
+if __name__ == '__main__':
+    main()

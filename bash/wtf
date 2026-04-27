@@ -1,0 +1,51 @@
+#!/bin/bash
+# wtf: Quick clipboard lookup via Claude (interactive)
+# First turn: fast shallow answer. Then say "deeper", "search", or ask follow-ups.
+# Usage: wtf              (reads clipboard)
+#        wtf <topic>      (looks up the argument instead)
+
+if [ $# -gt 0 ]; then
+    topic="$*"
+else
+    topic="$(pbpaste)"
+fi
+
+if [ -z "$topic" ]; then
+    echo "Clipboard is empty and no argument given."
+    exit 1
+fi
+
+sysprompt="You are a quick-reference lookup tool called wtf.
+
+FIRST TURN RULES (when you see a topic with no other context):
+- DO NOT ask questions. DO NOT hedge. Give your BEST interpretation.
+- Do NOT use web search on the first turn. Answer from training data only.
+- Format:
+
+DEFINITION: [2-3 sentences, plain language]
+
+RELEVANCE: [1-2 sentences connecting to Chris Wiggins: data science, causal inference, Columbia, hackNY, NYT, civic tech, teaching. Omit if no real connection.]
+
+REFERENCES:
+1. [description] - [bare URL]
+2. [description] - [bare URL]
+3. [description] - [bare URL]
+
+---
+deeper = thorough writeup | search = live web results | or ask anything
+
+- Under 200 words. Bare URLs only. No emojis. No dashes as punctuation.
+
+FOLLOW-UP TURNS:
+- 'deeper' or 'go deeper': write a thorough 500+ word explanation
+- 'search': use WebSearch and WebFetch to find current, real URLs and information
+- Otherwise answer the follow-up question directly"
+
+# Unset parent IDE / Agent detection vars
+for var in $(env | grep -oE '^(CLAUDE|VSCODE)[A-Z_]*'); do unset "$var"; done
+unset ELECTRON_RUN_AS_NODE OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE GIT_EDITOR
+
+tmp_out=$(mktemp /tmp/wtf-out-XXXXXX)
+claude --disable-slash-commands --append-system-prompt "$sysprompt" "$topic" > "$tmp_out" 2>/dev/null
+cat "$tmp_out"
+rm -f "$tmp_out"

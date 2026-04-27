@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+import os
+import re
+import argparse
+
+# Regex patterns for normalization
+BRACKET_PATTERN = re.compile(r"\[[^]]*\]")
+PUNCT_PATTERN = re.compile(r"[,\s\-\[\]\(\)'\"\uff1a:\uff5c|]+")
+
+
+def normalize_name(path):
+    """Normalize a filename by removing bracketed content, replacing punctuation/whitespace
+    with underscores, collapsing multiple underscores, trimming leading/trailing underscores,
+    and removing underscore before extension."""
+    dirpath, basename = os.path.split(path)
+    root, ext = os.path.splitext(basename)
+    # Remove all bracketed segments
+    root = BRACKET_PATTERN.sub("", root)
+    # Replace punctuation and whitespace with underscore
+    root = PUNCT_PATTERN.sub("_", root)
+    # Collapse multiple underscores
+    root = re.sub(r"_+", "_", root)
+    # Trim leading/trailing underscores
+    root = root.strip("_")
+    # Combine and return new path
+    return os.path.join(dirpath, f"{root}{ext}")
+
+
+def unique_path(path, used):
+    """Return a unique path by appending _N suffix if needed."""
+    if path not in used and not os.path.exists(path):
+        return path
+    dirpath, basename = os.path.split(path)
+    root, ext = os.path.splitext(basename)
+    counter = 1
+    while True:
+        candidate = os.path.join(dirpath, f"{root}_{counter}{ext}")
+        if candidate not in used and not os.path.exists(candidate):
+            return candidate
+        counter += 1
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Normalize filenames by removing bracketed IDs and cleaning punctuation."
+    )
+    parser.add_argument(
+        "directory",
+        nargs="?",
+        default=".",
+        help="Directory to process (default: current directory)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be renamed without making changes",
+    )
+    parser.add_argument(
+        "-local", "--local",
+        action="store_true",
+        help="Only process files in the specified directory, do not recurse",
+    )
+    args = parser.parse_args()
+
+    used_paths = set()
+    if args.local:
+        items = [(args.directory, f) for f in os.listdir(args.directory)
+                 if os.path.isfile(os.path.join(args.directory, f))]
+    else:
+        items = [(dp, fn) for dp, _, fns in os.walk(args.directory) for fn in fns]
+    for dirpath, filename in items:
+            old_path = os.path.join(dirpath, filename)
+            new_path = normalize_name(old_path)
+            if new_path != old_path:
+                new_path = unique_path(new_path, used_paths)
+                print(f"Renaming: {old_path} -> {new_path}")
+                if not args.dry_run:
+                    os.makedirs(os.path.dirname(new_path), exist_ok=True)
+                    os.rename(old_path, new_path)
+            used_paths.add(new_path)
+
+
+if __name__ == "__main__":
+    main()

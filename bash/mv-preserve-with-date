@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# Smart mv wrapper that preserves old files with modification date
+# Usage: same as mv command
+
+# Get all arguments
+args=("$@")
+num_args=$#
+
+# Need at least 2 arguments for mv
+if [ $num_args -lt 2 ]; then
+    mv "$@"
+    exit $?
+fi
+
+# Get the last argument (destination)
+dest="${args[$((num_args-1))]}"
+
+# Function to backup a file with its modification date
+backup_file() {
+    local file="$1"
+    
+    # Get the modification time
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        mod_date=$(stat -f "%Sm" -t "%Y%m%d-%H%M%S" "$file")
+    else
+        # Linux
+        mod_date=$(stat -c "%y" "$file" | cut -d' ' -f1,2 | tr ' ' '-' | tr ':' '' | cut -d'.' -f1)
+    fi
+    
+    # Extract filename components
+    dir=$(dirname "$file")
+    basename=$(basename "$file")
+    
+    # Check if there's an extension
+    if [[ "$basename" == *.* ]]; then
+        stem="${basename%.*}"
+        ext="${basename##*.}"
+        backup_name="${dir}/${stem}-${mod_date}.${ext}"
+    else
+        # No extension
+        backup_name="${dir}/${basename}-${mod_date}"
+    fi
+    
+    # Move the existing file to backup
+    mv "$file" "$backup_name"
+    echo "Preserved existing file as: $backup_name"
+}
+
+# Check if destination is a directory
+if [ -d "$dest" ]; then
+    # Moving files into a directory
+    # Check each source file to see if it would overwrite
+    for ((i=0; i<$((num_args-1)); i++)); do
+        src="${args[$i]}"
+        # Skip if it's a flag
+        if [[ "$src" != -* ]]; then
+            target_file="$dest/$(basename "$src")"
+            if [ -f "$target_file" ]; then
+                backup_file "$target_file"
+            fi
+        fi
+    done
+elif [ -f "$dest" ]; then
+    # Moving to a specific file (will be overwritten)
+    backup_file "$dest"
+fi
+
+# Now execute the original mv command
+mv "$@"

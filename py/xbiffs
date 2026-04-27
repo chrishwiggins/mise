@@ -1,0 +1,233 @@
+#!/Users/wiggins/mise/py/.venv/bin/python3
+"""xbiffs - xbiff-style new mail notifier for multiple Gmail accounts.
+
+One mailbox per account. Flag down = no unread. Flag up + reverse video +
+bell = new mail. Looks like 1989.
+
+Usage:
+    xbiffs                # poll all accounts
+    xbiffs -i 120         # poll every 120 seconds
+    xbiffs -1             # check once, flash, exit
+"""
+
+import os
+import subprocess
+import sys
+import tkinter as tk
+
+GMAILS = "/Users/wiggins/mise/py/gmails"
+POLL_INTERVAL = 300  # seconds
+
+# Accounts: (label, gmails flags)
+ACCOUNTS = [
+    ("g",   []),
+    ("j",   ["-e", "joint"]),
+    ("l",   ["-e", "lake"]),
+    ("u",   ["-e", "cu"]),
+    ("hNY", ["-e", "hNY"]),
+]
+
+# Canvas size for each mailbox drawing
+BOX_W = 48
+BOX_H = 48
+
+
+def get_unread(flags):
+    """Get unread count for one account.
+
+    Uses --json to get actual message list rather than -c which returns
+    Gmail's unreliable resultSizeEstimate (always ~201).
+    """
+    try:
+        r = subprocess.run(
+            [GMAILS] + flags + ["-n", "50", "--json", "-q", "is:unread"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return 0
+        import json
+        msgs = json.loads(r.stdout)
+        return len(msgs)
+    except (subprocess.TimeoutExpired, ValueError, json.JSONDecodeError):
+        return 0
+
+
+def draw_mailbox(canvas, has_mail, fg, bg):
+    """Draw a classic US rural mailbox on a Tk canvas.
+
+    The mailbox is a side-view: rounded box on a post, with a flag
+    on the right side. Flag down = no mail. Flag up + letter = mail.
+    """
+    canvas.delete("all")
+    canvas.configure(bg=bg)
+    w, h = BOX_W, BOX_H
+
+    # Post: vertical line, right-of-center, from box bottom to ground
+    px = 30
+    canvas.create_line(px, 28, px, 44, fill=fg, width=2)
+    # Ground line
+    canvas.create_line(8, 44, 40, 44, fill=fg, width=1)
+
+    # Mailbox body: a rounded rectangle (side view)
+    # top-left (10,12) to bottom-right (38,28)
+    canvas.create_rectangle(10, 12, 38, 28, outline=fg, width=1, fill=bg)
+    # Rounded front of mailbox (left side arc)
+    canvas.create_arc(4, 12, 16, 28, start=90, extent=180,
+                      outline=fg, width=1, style="arc")
+    # Door line on front
+    canvas.create_line(10, 12, 10, 28, fill=fg, width=1)
+
+    if has_mail:
+        # Flag UP: vertical flag on right side
+        canvas.create_line(38, 24, 38, 8, fill=fg, width=2)
+        # Flag pennant (pointing right)
+        canvas.create_polygon(38, 8, 46, 11, 38, 14,
+                              outline=fg, fill=fg)
+        # Letter peeking out front
+        canvas.create_rectangle(6, 16, 14, 24, outline=fg, width=1, fill=bg)
+        # Letter lines
+        canvas.create_line(7, 18, 13, 18, fill=fg, width=1)
+        canvas.create_line(7, 20, 12, 20, fill=fg, width=1)
+        canvas.create_line(7, 22, 11, 22, fill=fg, width=1)
+    else:
+        # Flag DOWN: small flag hanging down on right side
+        canvas.create_line(38, 24, 38, 30, fill=fg, width=2)
+        # Flag pennant (pointing down-right)
+        canvas.create_polygon(38, 30, 44, 28, 40, 24,
+                              outline=fg, fill=fg)
+
+
+class MailboxWidget:
+    """One xbiff-style mailbox in the window."""
+
+    def __init__(self, parent, label, flags):
+        self.label = label
+        self.flags = flags
+        self.unread = 0
+        self.has_mail = False
+
+        # Frame with sunken relief: Athena/Motif style
+        self.frame = tk.Frame(parent, bd=2, relief="sunken", bg="#c0c0c0")
+        self.frame.pack(side="left", padx=1, pady=1)
+
+        # Canvas for drawing the mailbox
+        self.canvas = tk.Canvas(
+            self.frame, width=BOX_W, height=BOX_H,
+            bd=0, highlightthickness=0, bg="#c0c0c0",
+        )
+        self.canvas.pack(padx=2, pady=(2, 0))
+
+        # Account label: classic X11 fixed font
+        self.name_lbl = tk.Label(
+            self.frame, text=label,
+            font=("Courier", 10, "bold"),
+            bg="#c0c0c0", fg="black",
+        )
+        self.name_lbl.pack(pady=(0, 2))
+
+        # Draw initial state
+        draw_mailbox(self.canvas, False, "black", "#c0c0c0")
+
+        # Click to launch elm for this account
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.name_lbl.bind("<Button-1>", self._on_click)
+
+    def _on_click(self, event):
+        """Left-click: open elm for this account, reset state."""
+        cmd = ["/Users/wiggins/mise/py/elm"]
+        if self.flags:
+            cmd += self.flags
+        subprocess.Popen(cmd)
+        self.set_mail(False, 0)
+
+    def set_mail(self, has_mail, count):
+        """Update visual state: reverse video + flag up when mail."""
+        if has_mail:
+            fg, bg = "white", "black"
+            draw_mailbox(self.canvas, True, fg, bg)
+            self.frame.configure(bg="black")
+            self.name_lbl.configure(
+                bg="black", fg="white",
+                text=f"{self.label}:{count}",
+            )
+        else:
+            fg, bg = "black", "#c0c0c0"
+            draw_mailbox(self.canvas, False, fg, bg)
+            self.frame.configure(bg="#c0c0c0")
+            self.name_lbl.configure(
+                bg="#c0c0c0", fg="black",
+                text=self.label,
+            )
+        old_mail = self.has_mail
+        self.has_mail = has_mail
+        self.unread = count
+        return has_mail and not old_mail
+
+
+class XbiffsApp:
+    """The main xbiff window."""
+
+    def __init__(self, interval=POLL_INTERVAL, once=False):
+        self.interval = interval
+        self.once = once
+
+        self.root = tk.Tk()
+        self.root.title("xbiffs")
+        self.root.configure(bg="#c0c0c0", bd=2, relief="raised")
+        self.root.resizable(False, False)
+
+        # Keep it on top like the real xbiff
+        self.root.attributes("-topmost", True)
+
+        # Build one mailbox widget per account
+        self.boxes = []
+        for label, flags in ACCOUNTS:
+            box = MailboxWidget(self.root, label, flags)
+            self.boxes.append(box)
+
+        # First poll immediately
+        self.root.after(100, self.poll)
+
+    def poll(self):
+        """Check all accounts, update display, ring bell on new mail."""
+        any_new = False
+        for box in self.boxes:
+            count = get_unread(box.flags)
+            became_new = box.set_mail(count > 0, count)
+            if became_new:
+                any_new = True
+
+        if any_new:
+            self.root.bell()
+
+        if self.once:
+            self.root.after(10000, self.root.destroy)
+        else:
+            self.root.after(self.interval * 1000, self.poll)
+
+    def run(self):
+        self.root.mainloop()
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="xbiff-style mail notifier for multiple Gmail accounts"
+    )
+    parser.add_argument(
+        "-i", "--interval", type=int, default=POLL_INTERVAL,
+        help=f"poll interval in seconds (default: {POLL_INTERVAL})",
+    )
+    parser.add_argument(
+        "-1", "--once", action="store_true",
+        help="check once and exit after 10s",
+    )
+    args = parser.parse_args()
+
+    app = XbiffsApp(interval=args.interval, once=args.once)
+    app.run()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,226 @@
+#!/bin/bash
+# pbcal - Parse clipboard into calendar events via Claude
+# Usage: pbcal [-i [emails]] [-g] [-v] [-h]
+#   -i          Enable invitations (extract emails from clipboard content)
+#   -i emails   Enable invitations for specific emails only (comma-separated)
+#   -g          Add Google Meet to all events
+#   -v          Verbose output (generate summary file)
+#   -h          Show this help
+#
+# Default: solo mode (no invites, no Meet)
+# Generates /tmp/calparse.sh for review, then run: bash /tmp/calparse.sh
+
+show_help() {
+    cat << 'EOF'
+pbcal - Parse clipboard into calendar events
+
+Usage: pbcal [-i [emails]] [-g] [-v] [-h]
+
+Options:
+  -i          Enable invitations (extract emails from clipboard content)
+  -i emails   Enable invitations for specific emails only (comma-separated)
+  -g          Add Google Meet/Hangout to all events
+  -v          Verbose output (generate /tmp/calparse.summary)
+  -h          Show this help
+
+Examples:
+  pbcal                              # Solo events, no Meet
+  pbcal -g                           # Solo events with Google Meet
+  pbcal -i                           # Invite emails found in clipboard
+  pbcal -i alice@x.com,bob@y.com     # Invite only these addresses
+  pbcal -i alice@x.com -i bob@y.com  # Same as above (multiple -i flags)
+  pbcal -i -g -v                     # Invites + Meet + verbose summary
+
+Output:
+  /tmp/calparse.sh      Review this script, then: bash /tmp/calparse.sh
+  /tmp/calparse.urls    Calendar URLs after running
+  /tmp/calparse.err     Any errors
+  /tmp/calparse.summary (only with -v)
+EOF
+}
+
+# Defaults
+invite_mode="solo"
+invite_emails=""
+google_meet="no"
+verbose="no"
+subcommand="add"
+
+# Parse arguments manually (getopts doesn't handle optional args well)
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -i)
+            # Check if next arg is an email list (contains @) vs another flag
+            if [[ $# -gt 1 && $2 == *@* && $2 != -* ]]; then
+                # Accumulate emails (supports multiple -i flags)
+                if [[ -n "$invite_emails" ]]; then
+                    invite_emails="$invite_emails,$2"
+                else
+                    invite_emails="$2"
+                fi
+                invite_mode="explicit"
+                shift
+            else
+                # -i without argument means extract from clipboard
+                invite_mode="extract"
+            fi
+            shift
+            ;;
+        -g)
+            google_meet="yes"
+            subcommand="meet"
+            shift
+            ;;
+        -v)
+            verbose="yes"
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            echo "Use -h for help" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Read from stdin if piped, otherwise from clipboard
+if [ -t 0 ]; then
+    input=$(pbpaste)
+else
+    input=$(cat)
+fi
+
+if [ -z "$input" ]; then
+    echo "Error: Clipboard is empty" >&2
+    exit 1
+fi
+
+# Build mode instruction
+if [ "$invite_mode" = "extract" ]; then
+    mode_instruction="INVITE MODE: Extract email addresses from the input and include them as attendees."
+elif [ "$invite_mode" = "explicit" ]; then
+    mode_instruction="INVITE MODE: Use ONLY these email addresses as attendees for ALL events: $invite_emails"
+else
+    mode_instruction="SOLO MODE: No invitations. Use empty string \"\" for attendees in all events."
+fi
+
+# Build verbose instruction
+if [ "$verbose" = "yes" ]; then
+    verbose_instruction="Also write a human-readable summary to /tmp/calparse.summary listing each event on one line."
+else
+    verbose_instruction=""
+fi
+
+echo "Parsing clipboard for calendar events..."
+
+# Build the prompt
+prompt="Parse the following text and generate a bash script that creates calendar events.
+
+=== MODE ===
+$mode_instruction
+Google Meet: $google_meet (use '$subcommand' subcommand)
+$verbose_instruction
+
+=== TOOL SIGNATURE ===
+CRITICAL: Argument order is strict. The 4th argument is ALWAYS attendees, NOT location.
+
+./gcal-invite-advanced $subcommand <title> <when> <duration_min> <attendees> [description] [location]
+
+Arguments:
+1. title - Event title string
+2. when - Date/time like \"2025-12-06 11:00am\" or \"today 2pm\"
+3. duration_min - Duration in minutes (integer)
+4. attendees - Comma-separated emails OR empty string \"\" for solo - NEVER location here!
+5. description - Optional
+6. location - Optional
+
+=== PARSING RULES ===
+- Extract anything that looks like an event with a time
+- Use ISO dates (YYYY-MM-DD) for reliability
+- If no year specified, assume current year
+- If no date specified, assume TODAY
+- If no duration specified, assume 60 minutes
+- Preserve speaker names and details in titles
+
+=== OUTPUT FORMAT ===
+Output ONLY the raw bash script between these markers. NO markdown, NO code fences, NO \`\`\`bash - just the actual script starting with #!/bin/bash:
+<<<CALPARSE_START>>>
+<<<CALPARSE_END>>>
+
+The script must:
+1. Start with #!/bin/bash
+2. Back up old files to /tmp/calparse-old.dir/TIMESTAMP.dir
+3. cd /Users/wiggins/gd/local/seiton/python/
+4. Clear /tmp/calparse.urls and /tmp/calparse.err
+5. Run gcal-invite-advanced for each event, appending to .urls and .err
+6. Echo what was created after each event
+7. End with summary message
+
+=== TEXT TO PARSE ===
+$input"
+
+# Unset parent IDE / Agent detection vars to prevent child Claude conflicts
+for var in $(env | grep -oE '^(CLAUDE|VSCODE)[A-Z_]*'); do unset "$var"; done
+unset ELECTRON_RUN_AS_NODE OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE GIT_EDITOR
+
+# Write prompt to a temp file (printf avoids heredoc re-expansion issues)
+tmp_prompt=$(mktemp /tmp/pbcal-prompt-XXXXXX)
+tmp_out=$(mktemp /tmp/pbcal-out-XXXXXX)
+tmp_err=$(mktemp /tmp/pbcal-err-XXXXXX)
+printf '%s' "$prompt" > "$tmp_prompt"
+
+run_claude() {
+    timeout 45 "${HOME}/.local/bin/claude" --print \
+        --no-session-persistence \
+        --tools "" \
+        --model haiku \
+        --system-prompt "You are a calendar event parser. Output ONLY what is requested. No preamble." \
+        < "$tmp_prompt" > "$tmp_out" 2>"$tmp_err"
+}
+
+# Try up to 2 times (handles transient API failures and CLI hangs)
+raw_output=""
+for attempt in 1 2; do
+    run_claude
+    claude_exit=$?
+    raw_output=$(cat "$tmp_out")
+    if [ $claude_exit -ne 0 ] || [ -z "$raw_output" ]; then
+        if [ $attempt -eq 1 ]; then
+            echo "Retry (attempt $attempt failed: exit $claude_exit)..." >&2
+            sleep 1
+        else
+            echo "Error: Claude CLI failed after 2 attempts (exit $claude_exit)" >&2
+            cat "$tmp_err" >&2
+        fi
+    else
+        break
+    fi
+done
+rm -f "$tmp_prompt" "$tmp_out" "$tmp_err"
+
+# Extract the bash script between delimiters, strip any markdown code fences
+script=$(echo "$raw_output" | awk '/<<<CALPARSE_START>>>/{found=1; next} /<<<CALPARSE_END>>>/{found=0} found' | grep -v '^```')
+
+if [ -z "$script" ]; then
+    echo "Error: Failed to generate script" >&2
+    if [ -n "$raw_output" ]; then
+        echo "Raw output (no delimiters found):" >&2
+        echo "$raw_output" | head -20 >&2
+    else
+        echo "(empty output from Claude CLI)" >&2
+    fi
+    exit 1
+fi
+
+# Write to file
+echo "$script" > /tmp/calparse.sh
+chmod +x /tmp/calparse.sh
+
+echo "Generated /tmp/calparse.sh"
+echo "---"
+echo "Review with: cat /tmp/calparse.sh"
+echo "Run with:    bash /tmp/calparse.sh"

@@ -1,0 +1,384 @@
+#!/usr/bin/env python3
+"""
+md2doc - Convert markdown files to Google Docs with optional sharing.
+
+Usage:
+  md2doc foo.md                              # Just create doc
+  md2doc foo.md foo@bar.com                  # Share as editor
+  md2doc foo.md foo@bar.com bar@foo.com      # Share both as editors
+  md2doc foo.md -e foo@bar.com -e bar@foo.com  # Explicit editors
+  md2doc foo.md -c bar@foo.com -v foo@bar.com  # Mixed roles
+  md2doc foo.md foo@bar.com -c bar@foo.com -v baz@qux.com  # Positional + flags
+"""
+
+import os
+import sys
+import re
+import json
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+
+import click
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+
+# Scopes required for the application
+SCOPES = [
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.readonly",
+]
+
+
+class Config:
+    """Configuration management for md2doc."""
+
+    DEFAULT_CONFIG = {
+        "credentials_path": "~/.config/thoughtgun/credentials.json",
+        "token_path": "~/.config/thoughtgun/token.json",
+    }
+
+    def __init__(self, config_path: Optional[str] = None):
+        self.config_path = config_path or os.path.expanduser(
+            "~/.config/thoughtgun/config.json"
+        )
+        self.config = self._load_config()
+
+    def _load_config(self) -> dict:
+        """Load configuration from file or use defaults."""
+        config_file = Path(self.config_path)
+
+        if config_file.exists():
+            with open(config_file, "r") as f:
+                user_config = json.load(f)
+                config = {**self.DEFAULT_CONFIG, **user_config}
+                return config
+        else:
+            return self.DEFAULT_CONFIG.copy()
+
+    def get_credentials_path(self) -> str:
+        """Get the expanded credentials path."""
+        return os.path.expanduser(self.config["credentials_path"])
+
+    def get_token_path(self) -> str:
+        """Get the expanded token path."""
+        return os.path.expanduser(self.config["token_path"])
+
+
+class GoogleAPIClient:
+    """Wrapper for Google Docs and Drive API operations."""
+
+    def __init__(self, credentials_path: str, token_path: str):
+        self.credentials_path = credentials_path
+        self.token_path = token_path
+        self.creds = None
+        self.docs_service = None
+        self.drive_service = None
+
+    def authenticate(self):
+        """Authenticate with Google OAuth 2.0."""
+        if os.path.exists(self.token_path):
+            self.creds = Credentials.from_authorized_user_file(self.token_path, SCOPES)
+
+        if not self.creds or not self.creds.valid:
+            if self.creds and self.creds.expired and self.creds.refresh_token:
+                self.creds.refresh(Request())
+            else:
+                if not os.path.exists(self.credentials_path):
+                    raise FileNotFoundError(
+                        f"Credentials file not found at {self.credentials_path}. "
+                        "Please follow the setup instructions to obtain credentials.json"
+                    )
+
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    self.credentials_path, SCOPES
+                )
+                self.creds = flow.run_local_server(port=0)
+
+            token_dir = Path(self.token_path).parent
+            token_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.token_path, "w") as token:
+                token.write(self.creds.to_json())
+
+        self.docs_service = build("docs", "v1", credentials=self.creds)
+        self.drive_service = build("drive", "v3", credentials=self.creds)
+
+    def create_document(self, title: str) -> Dict[str, str]:
+        """Create a new Google Doc.
+
+        Returns:
+            Dictionary with 'documentId' and 'url'
+        """
+        try:
+            document = (
+                self.docs_service.documents().create(body={"title": title}).execute()
+            )
+
+            return {
+                "documentId": document.get("documentId"),
+                "url": f"https://docs.google.com/document/d/{document.get('documentId')}/edit",
+            }
+        except HttpError as error:
+            raise Exception(f"Error creating document: {error}")
+
+    def batch_update_document(
+        self, document_id: str, requests: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Execute a batch of updates on a document."""
+        try:
+            result = (
+                self.docs_service.documents()
+                .batchUpdate(documentId=document_id, body={"requests": requests})
+                .execute()
+            )
+            return result
+        except HttpError as error:
+            raise Exception(f"Error updating document: {error}")
+
+    def share_document(
+        self, document_id: str, email: str, role: str = "reader", notify: bool = True
+    ) -> Dict[str, Any]:
+        """Share a document with a user."""
+        try:
+            permission = {
+                "type": "user",
+                "role": role,
+                "emailAddress": email,
+            }
+
+            result = (
+                self.drive_service.permissions()
+                .create(
+                    fileId=document_id,
+                    body=permission,
+                    sendNotificationEmail=notify,
+                    fields="id,emailAddress,role",
+                )
+                .execute()
+            )
+            return result
+        except HttpError as error:
+            raise Exception(f"Error sharing document: {error}")
+
+
+class MarkdownConverter:
+    """Convert Markdown to Google Docs API batch update requests."""
+
+    def convert_file(self, markdown_path: str) -> List[Dict[str, Any]]:
+        """Convert a markdown file to Google Docs API requests."""
+        with open(markdown_path, "r", encoding="utf-8") as f:
+            markdown_text = f.read()
+
+        return self.convert_text(markdown_text)
+
+    def convert_text(self, markdown_text: str) -> List[Dict[str, Any]]:
+        """Convert markdown text to Google Docs API requests."""
+        requests = []
+
+        plain_text = self._html_to_plain_text(markdown_text)
+
+        requests.append(
+            {"insertText": {"location": {"index": 1}, "text": plain_text + "\n"}}
+        )
+
+        formatting_requests = self._generate_formatting_requests(markdown_text)
+        requests.extend(formatting_requests)
+
+        return requests
+
+    def _html_to_plain_text(self, markdown_text: str) -> str:
+        """Convert markdown to plain text preserving basic structure."""
+        text = re.sub(r"^#{1,6}\s+(.+)$", r"\1", markdown_text, flags=re.MULTILINE)
+
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+        text = re.sub(r"\*(.+?)\*", r"\1", text)
+        text = re.sub(r"__(.+?)__", r"\1", text)
+        text = re.sub(r"_(.+?)_", r"\1", text)
+
+        text = re.sub(r"`(.+?)`", r"\1", text)
+
+        text = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", text)
+
+        text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
+        text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
+
+        return text
+
+    def _generate_formatting_requests(self, markdown_text: str) -> List[Dict[str, Any]]:
+        """Generate formatting requests based on markdown patterns."""
+        requests = []
+        lines = markdown_text.split("\n")
+        current_index = 1
+
+        for line in lines:
+            line_length = len(self._strip_markdown(line))
+
+            header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+            if header_match:
+                level = len(header_match.group(1))
+                requests.append(
+                    {
+                        "updateParagraphStyle": {
+                            "range": {
+                                "startIndex": current_index,
+                                "endIndex": current_index + line_length,
+                            },
+                            "paragraphStyle": {
+                                "namedStyleType": f"HEADING_{level}",
+                            },
+                            "fields": "namedStyleType",
+                        }
+                    }
+                )
+
+            for match in re.finditer(r"\*\*(.+?)\*\*", line):
+                text = match.group(1)
+                prefix = line[: match.start()]
+                prefix_stripped = self._strip_markdown(prefix)
+                start_pos = current_index + len(prefix_stripped)
+                end_pos = start_pos + len(text)
+
+                requests.append(
+                    {
+                        "updateTextStyle": {
+                            "range": {
+                                "startIndex": start_pos,
+                                "endIndex": end_pos,
+                            },
+                            "textStyle": {"bold": True},
+                            "fields": "bold",
+                        }
+                    }
+                )
+
+            for match in re.finditer(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", line):
+                text = match.group(1)
+                prefix = line[: match.start()]
+                prefix_stripped = self._strip_markdown(prefix)
+                start_pos = current_index + len(prefix_stripped)
+                end_pos = start_pos + len(text)
+
+                requests.append(
+                    {
+                        "updateTextStyle": {
+                            "range": {
+                                "startIndex": start_pos,
+                                "endIndex": end_pos,
+                            },
+                            "textStyle": {"italic": True},
+                            "fields": "italic",
+                        }
+                    }
+                )
+
+            current_index += line_length + 1
+
+        return requests
+
+    def _strip_markdown(self, text: str) -> str:
+        """Remove markdown formatting from text."""
+        text = re.sub(r"^#{1,6}\s+", "", text)
+
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+        text = re.sub(r"\*(.+?)\*", r"\1", text)
+        text = re.sub(r"__(.+?)__", r"\1", text)
+        text = re.sub(r"_(.+?)_", r"\1", text)
+
+        text = re.sub(r"`(.+?)`", r"\1", text)
+
+        text = re.sub(r"\[(.+?)\]\(.+?\)", r"\1", text)
+
+        text = re.sub(r"^\s*[-*+]\s+", "", text)
+        text = re.sub(r"^\s*\d+\.\s+", "", text)
+
+        return text
+
+
+@click.command()
+@click.argument("markdown_file", type=click.Path(exists=True))
+@click.argument("positional_emails", nargs=-1)
+@click.option(
+    "-e",
+    "--editor",
+    "editor_emails",
+    multiple=True,
+    help="Share as editor (can repeat: -e foo@bar.com -e baz@qux.com)",
+)
+@click.option(
+    "-c",
+    "--commenter",
+    "commenter_emails",
+    multiple=True,
+    help="Share as commenter (can repeat: -c foo@bar.com)",
+)
+@click.option(
+    "-v",
+    "--viewer",
+    "viewer_emails",
+    multiple=True,
+    help="Share as viewer (can repeat: -v foo@bar.com)",
+)
+def md2doc(markdown_file, positional_emails, editor_emails, commenter_emails, viewer_emails):
+    """Convert a markdown file to a Google Doc and optionally share it.
+
+    Positional email arguments are shared as editors by default.
+    Use flags to specify other permission levels.
+
+    Examples:
+      md2doc foo.md                              # Just create doc
+      md2doc foo.md foo@bar.com                  # Share as editor
+      md2doc foo.md foo@bar.com bar@foo.com      # Share both as editors
+      md2doc foo.md -e foo@bar.com -e bar@foo.com  # Explicit editors
+      md2doc foo.md -c bar@foo.com -v foo@bar.com  # Mixed roles
+      md2doc foo.md foo@bar.com -c bar@foo.com -v baz@qux.com  # Positional + flags
+    """
+    config = Config()
+
+    try:
+        # Initialize Google API client
+        client = GoogleAPIClient(config.get_credentials_path(), config.get_token_path())
+        client.authenticate()
+
+        # Create document with filename as title
+        title = Path(markdown_file).stem.replace("_", " ").replace("-", " ").title()
+        doc_info = client.create_document(title)
+
+        # Convert markdown and populate document
+        converter = MarkdownConverter()
+        requests = converter.convert_file(markdown_file)
+        client.batch_update_document(doc_info["documentId"], requests)
+
+        # Build list of (email, role) tuples
+        share_list = []
+
+        # Positional emails are editors by default
+        for email in positional_emails:
+            share_list.append((email, "writer"))
+
+        # Explicit role emails
+        for email in editor_emails:
+            share_list.append((email, "writer"))
+        for email in commenter_emails:
+            share_list.append((email, "commenter"))
+        for email in viewer_emails:
+            share_list.append((email, "reader"))
+
+        # Share with all specified people
+        for email, role in share_list:
+            client.share_document(doc_info["documentId"], email, role=role, notify=False)
+
+        # Output only the URL
+        click.echo(doc_info["url"])
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    md2doc()

@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+"""
+Amazon Price Comparison Tool
+
+Parses Amazon search results from clipboard and creates price comparison table + scatterplot.
+Automatically detects units (oz, lb, g, ml, ct, etc.) and sorts by best unit price.
+"""
+
+import sys
+import re
+import subprocess
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+import argparse
+
+
+def show_help():
+    """Display help information"""
+    help_text = """
+AMAZON PRICE COMPARISON TOOL
+
+USAGE:
+    amazon-compare              # Parse Amazon data from clipboard
+    amazon-compare --help       # Show this help
+
+HOW TO USE:
+    1. Go to Amazon and search for products (e.g., "antiperspirant deodorant")
+    2. Copy the entire search results page (Cmd+A, Cmd+C)
+    3. Run: amazon-compare
+    4. View sorted price comparison table + scatterplot
+
+OUTPUT:
+    - Sorted table by unit price (best value first)
+    - Scatterplot showing rating vs unit price (saved as PNG)
+    - Automatically detects units: oz, lb, g, kg, ml, L, ct, pk, etc.
+
+EXAMPLES:
+    Search for:  "dog food"     -> compares $/pound
+    Search for:  "vitamins"     -> compares $/count  
+    Search for:  "shampoo"      -> compares $/ounce
+    Search for:  "paper towels" -> compares $/count
+
+SUPPORTED UNITS:
+    Weight:  oz, lb, g, kg
+    Volume:  ml, L, gal, qt, pt
+    Count:   ct, pk, ea, pc, item
+    Length:  ft, yd, m, sq ft
+
+REQUIREMENTS:
+    pip install pandas matplotlib numpy
+"""
+    print(help_text)
+
+
+def get_content():
+    """Get content from clipboard"""
+    result = subprocess.run(["pbpaste"], capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def extract_products(text):
+    """Extract product data from pasted Amazon text"""
+    products = []
+
+    # Split into product blocks - look for patterns that separate products
+    lines = text.split("\n")
+
+    current_product = {}
+    collecting_product = False
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+
+        # Skip empty lines and navigation
+        if not line or "Skip to" in line or "Deliver to" in line:
+            continue
+
+        # Look for star ratings (e.g., "4.74.7 out of 5 stars")
+        star_match = re.search(r"(\d\.\d)\d\.\d out of 5 stars", line)
+        if star_match:
+            if current_product:  # Save previous product
+                products.append(current_product)
+            current_product = {"stars": float(star_match.group(1))}
+            collecting_product = True
+            continue
+
+        if not collecting_product:
+            continue
+
+        # Look for price per unit with various formats
+        # "$6.96 ($1.29/ounce)" or "$6.96 ($1.29/oz)" or "$6.96 ($1.29/lb)" etc.
+        price_patterns = [
+            r"\$(\d+\.?\d*)\s*\(\$(\d+\.?\d*)/(ounce|oz|pound|lb|gram|g|kg|kilogram|ml|milliliter|liter|l|gallon|gal|quart|qt|pint|pt|count|ct|pack|pk|each|ea|foot|ft|yard|yd|meter|m|piece|pc|item|sq\s*ft|square\s*foot)\)",
+            r"\$(\d+\.?\d*)\s*\(\$(\d+\.?\d*)\s*/\s*(ounce|oz|pound|lb|gram|g|kg|kilogram|ml|milliliter|liter|l|gallon|gal|quart|qt|pint|pt|count|ct|pack|pk|each|ea|foot|ft|yard|yd|meter|m|piece|pc|item|sq\s*ft|square\s*foot)\)",
+        ]
+
+        price_match = None
+        for pattern in price_patterns:
+            price_match = re.search(pattern, line, re.IGNORECASE)
+            if price_match:
+                break
+
+        if price_match:
+            current_product["price"] = float(price_match.group(1))
+            current_product["unit_price"] = float(price_match.group(2))
+            current_product["unit"] = price_match.group(3).lower().strip()
+
+        # Look for product name with quantity (before the price line)
+        elif not "price" in current_product:
+            # Extract quantity from product names - expanded to cover more units
+            qty_patterns = [
+                r"(\d+\.?\d*)\s*(ounce|oz|pound|lb|gram|g|kg|kilogram|ml|milliliter|liter|l|gallon|gal|quart|qt|pint|pt|count|ct|pack|pk|each|ea|foot|ft|yard|yd|meter|m|piece|pc|item)\b",
+                r"(\d+\.?\d*)\s*-?\s*(oz|lb|g|kg|ml|l|gal|qt|pt|ct|pk|ea|ft|yd|m|pc)\b",
+            ]
+
+            qty_match = None
+            for pattern in qty_patterns:
+                qty_match = re.search(pattern, line.lower())
+                if qty_match:
+                    break
+
+            if qty_match:
+                current_product["quantity"] = float(qty_match.group(1))
+                current_product["unit_from_name"] = qty_match.group(2)
+                current_product["name"] = line[:100]  # Truncate long names
+
+    # Don't forget the last product
+    if current_product:
+        products.append(current_product)
+
+    return products
+
+
+def normalize_unit(unit):
+    """Normalize units to standard abbreviations"""
+    unit = unit.lower().strip()
+
+    # Weight units
+    if unit in ["ounce", "oz", "ounces"]:
+        return "oz"
+    elif unit in ["pound", "lb", "pounds", "lbs"]:
+        return "lb"
+    elif unit in ["gram", "g", "grams"]:
+        return "g"
+    elif unit in ["kilogram", "kg", "kilograms"]:
+        return "kg"
+
+    # Volume units
+    elif unit in ["milliliter", "ml", "milliliters"]:
+        return "ml"
+    elif unit in ["liter", "l", "liters"]:
+        return "L"
+    elif unit in ["gallon", "gal", "gallons"]:
+        return "gal"
+    elif unit in ["quart", "qt", "quarts"]:
+        return "qt"
+    elif unit in ["pint", "pt", "pints"]:
+        return "pt"
+
+    # Count/piece units
+    elif unit in ["count", "ct", "counts"]:
+        return "ct"
+    elif unit in ["pack", "pk", "packs"]:
+        return "pk"
+    elif unit in ["each", "ea"]:
+        return "ea"
+    elif unit in ["piece", "pc", "pieces"]:
+        return "pc"
+    elif unit in ["item", "items"]:
+        return "item"
+
+    # Length/area units
+    elif unit in ["foot", "ft", "feet"]:
+        return "ft"
+    elif unit in ["yard", "yd", "yards"]:
+        return "yd"
+    elif unit in ["meter", "m", "meters"]:
+        return "m"
+    elif unit in ["sq ft", "square foot", "square feet"]:
+        return "sq ft"
+
+    # Return as-is if not recognized
+    return unit
+
+
+def clean_and_validate(products):
+    """Clean and validate product data"""
+    valid_products = []
+
+    for p in products:
+        # Must have stars and unit price
+        if "stars" not in p or "unit_price" not in p:
+            continue
+
+        # Normalize unit
+        p["unit"] = normalize_unit(p.get("unit", ""))
+
+        valid_products.append(p)
+
+    return valid_products
+
+
+def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--help", action="store_true", help="Show help information")
+
+    try:
+        args = parser.parse_args()
+    except:
+        args = argparse.Namespace(help=False)
+
+    if args.help:
+        show_help()
+        return
+
+    print("Getting Amazon data from clipboard...")
+    content = get_content()
+
+    if not content:
+        print("No content found in clipboard")
+        print("Copy Amazon search results page and try again.")
+        print("Use --help for instructions.")
+        sys.exit(1)
+
+    print("Parsing product data...")
+    products = extract_products(content)
+
+    if not products:
+        print(
+            "No products found. Make sure you copied the full Amazon search results page."
+        )
+        print("Use --help for instructions.")
+        sys.exit(1)
+
+    print(f"Found {len(products)} raw products")
+
+    # Clean and validate
+    valid_products = clean_and_validate(products)
+
+    if not valid_products:
+        print("No valid products with both stars and unit prices found.")
+        print("Raw data found:")
+        for i, p in enumerate(products[:5]):
+            print(f"{i+1}: {p}")
+        sys.exit(1)
+
+    print(f"Valid products: {len(valid_products)}")
+
+    # Create DataFrame
+    df = pd.DataFrame(valid_products)
+
+    # Sort by unit price (best value first)
+    df = df.sort_values("unit_price")
+
+    # Determine most common unit
+    common_unit = df["unit"].mode()[0] if not df["unit"].mode().empty else "unit"
+
+    # Display table
+    print(f"\n{'='*70}")
+    print(f"PRICE COMPARISON (sorted by price per {common_unit})")
+    print(f"{'='*70}")
+    print(f"{'Stars':<8} {'$/Unit':<10} {'Product Name'}")
+    print("-" * 70)
+
+    for _, row in df.iterrows():
+        name = row.get("name", "Product")[:50]
+        print(f"{row['stars']:<8.1f} ${row['unit_price']:<9.2f} {name}")
+
+    print(f"\nTotal products analyzed: {len(valid_products)}")
+
+    # Generate scatterplot
+    if len(valid_products) >= 3:
+        plt.figure(figsize=(10, 6))
+        plt.scatter(df["stars"], df["unit_price"], alpha=0.7, s=60)
+        plt.xlabel("Star Rating")
+        plt.ylabel(f"Price per {common_unit} ($)")
+        plt.title("Product Ratings vs Unit Price")
+        plt.grid(True, alpha=0.3)
+
+        # Add trend line if we have enough data
+        if len(df) >= 3:
+            z = np.polyfit(df["stars"], df["unit_price"], 1)
+            p = np.poly1d(z)
+            plt.plot(df["stars"], p(df["stars"]), "r--", alpha=0.8)
+
+        # Save plot
+        plot_filename = f"/Users/wiggins/mise/py/amazon_price_vs_rating.png"
+        plt.savefig(plot_filename, dpi=150, bbox_inches="tight")
+        print(f"\nScatterplot saved as: {plot_filename}")
+        plt.show()
+    else:
+        print("Need at least 3 products for scatterplot")
+
+
+if __name__ == "__main__":
+    main()

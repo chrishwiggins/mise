@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Check if the CC email address is provided as CLI input
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <cc_email>"
+    exit 1
+fi
+
+# Assign command line arguments to variables
+cc="$1"
+to="audria.lee@nytimes.com"
+subject="Meeting request @ NYT"
+body="Dear Audria,\n\nPlease could you help me and $cc find 45 minutes to chat at NYT?\n\nRegards,\n\nChris"
+
+# Send email using neomutt
+echo -e "$body" | neomutt -e 'unset record' -F /Users/wiggins/.0/yewtiwramx -s "$subject" -c "$cc" -- "$to"

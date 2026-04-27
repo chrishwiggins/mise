@@ -1,0 +1,124 @@
+#!/usr/bin/python3
+
+import sys
+import requests
+from geopy.distance import geodesic
+import itertools
+import argparse
+
+
+# Function to geocode using OpenCage API
+def get_coordinates(address, api_key):
+    url = f"https://api.opencagedata.com/geocode/v1/json?q={address}&key={api_key}"
+    response = requests.get(url)
+    data = response.json()
+
+    # Check for potential errors in the API response
+    if response.status_code != 200:
+        raise ValueError(
+            f"Error from OpenCage API: {data.get('status', {}).get('message', 'Unknown error')}"
+        )
+
+    if data["results"]:
+        lat = data["results"][0]["geometry"]["lat"]
+        lng = data["results"][0]["geometry"]["lng"]
+        return (lat, lng)
+    else:
+        print(f"Could not geocode address: {address}")
+        return None
+
+
+# Function to get the coordinates for all locations
+def get_location_coordinates(locations, api_key):
+    location_coords = {}
+    for location in locations:
+        try:
+            coords = get_coordinates(location, api_key)
+            if coords:
+                location_coords[location] = coords
+                print(f"Geocoded {location}: {location_coords[location]}")
+            else:
+                print(f"Skipping address: {location}")
+        except ValueError as e:
+            print(e)
+    return location_coords
+
+
+# Function to calculate distances between all locations
+def calculate_distance_matrix(locations, location_coords):
+    distance_matrix = {}
+    valid_locations = [loc for loc in locations if loc in location_coords]
+
+    for loc1, loc2 in itertools.combinations(valid_locations, 2):
+        coord1, coord2 = location_coords[loc1], location_coords[loc2]
+        distance = geodesic(coord1, coord2).miles  # Using geodesic distance
+        distance_matrix[(loc1, loc2)] = distance
+        distance_matrix[(loc2, loc1)] = distance  # Symmetric
+    return distance_matrix
+
+
+# Function to find Hamiltonian Path using Nearest Neighbor Heuristic
+def find_hamiltonian_path(locations, distance_matrix):
+    path = []
+    current_location = locations[0]
+    unvisited = set(locations)
+    unvisited.remove(current_location)
+    path.append(current_location)
+
+    while unvisited:
+        nearest_neighbor = min(
+            unvisited, key=lambda loc: distance_matrix[(current_location, loc)]
+        )
+        path.append(nearest_neighbor)
+        unvisited.remove(nearest_neighbor)
+        current_location = nearest_neighbor
+
+    return path
+
+
+# Main execution
+if __name__ == "__main__":
+    # Argument parser setup
+    parser = argparse.ArgumentParser(
+        description="Find Hamiltonian path for a set of locations."
+    )
+    parser.add_argument(
+        "filename", type=str, help="File containing addresses, one per line"
+    )
+    parser.add_argument("-k", "--key", type=str, required=True, help="OpenCage API key")
+
+    args = parser.parse_args()
+
+    filename = args.filename
+    api_key = args.key
+
+    # Read addresses from the file
+    try:
+        with open(filename, "r") as f:
+            locations = [line.strip() for line in f.readlines()]
+    except FileNotFoundError:
+        print(f"Error: File {filename} not found.")
+        sys.exit(1)
+
+    # Geocode locations
+    location_coords = get_location_coordinates(locations, api_key)
+
+    # Check if we have any valid geocoded addresses
+    if not location_coords:
+        print("No valid locations could be geocoded.")
+        sys.exit(1)
+
+    # Calculate distance matrix
+    distance_matrix = calculate_distance_matrix(locations, location_coords)
+
+    # Ensure the valid addresses match up
+    valid_locations = [loc for loc in locations if loc in location_coords]
+    if len(valid_locations) < 2:
+        print("Not enough valid locations to compute a Hamiltonian path.")
+        sys.exit(1)
+
+    # Find Hamiltonian path
+    hamiltonian_path = find_hamiltonian_path(valid_locations, distance_matrix)
+
+    # Output the result
+    print("Hamiltonian Path:", hamiltonian_path)

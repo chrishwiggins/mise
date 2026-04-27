@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# Function to URL-encode strings
+urlencode() {
+    local length="${#1}"
+    for (( i = 0; i < length; i++ )); do
+        local c="${1:i:1}"
+        case $c in
+            [a-zA-Z0-9.~_-]) printf "$c" ;;
+            *) printf '%s' "$c" | xxd -p -c1 |
+                 while read c; do printf '%%%s' "$c"; done ;;
+        esac
+    done
+}
+
+# Function to replace special character (+) with quotation marks (") in the input
+replace_special_character_with_quotes() {
+    local input="$1"
+    # Replace + with " in the input
+    echo "${input//+/\"}"
+}
+
+# Check if at least one argument is passed
+if [ "$#" -lt 1 ]; then
+    echo "Usage: $0 word [+'a phrase'+]"
+    exit 1
+fi
+
+# Process the input arguments
+SEARCH_TERM=""
+for arg in "$@"; do
+    if [ -n "$SEARCH_TERM" ]; then
+        SEARCH_TERM="$SEARCH_TERM "
+    fi
+    SEARCH_TERM="$SEARCH_TERM$(replace_special_character_with_quotes "$arg")"
+done
+
+# URL encode the search term
+ENCODED_SEARCH_TERM=$(urlencode "$SEARCH_TERM")
+
+# Construct the URL
+URL="https://earth.google.com/web/search/$ENCODED_SEARCH_TERM/@0,-10.346,0a,22251752.77375655d,35y,0h,0t,0r/data=CigiJgokCWCS1bm12jlAEWCS1bm12jnAGZ9bDWIFnkZAIRFukCLQv0_AOgMKATA"
+URL="https://earth.google.com/web/search/$ENCODED_SEARCH_TERM/"
+
+# Open the URL in the default browser
+open "$URL"

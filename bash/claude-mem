@@ -1,0 +1,154 @@
+#!/bin/bash
+# claude-mem - persistent memory monitor with alerting
+# Shows system memory, top processes, and Claude session detail
+# Usage: claude-mem [-n SECS] [-w MB_WARN] [-c MB_CRIT]
+#   -n  refresh interval in seconds (default: 5)
+#   -w  warning threshold in MB free (default: 1024)
+#   -c  critical threshold in MB free (default: 512)
+
+interval=5
+warn_mb=1024
+crit_mb=512
+
+while getopts "n:w:c:" opt; do
+  case $opt in
+    n) interval=$OPTARG ;;
+    w) warn_mb=$OPTARG ;;
+    c) crit_mb=$OPTARG ;;
+    *) echo "Usage: claude-mem [-n secs] [-w warn_mb] [-c crit_mb]"; exit 1 ;;
+  esac
+done
+
+# colors
+RED='\033[1;31m'
+YEL='\033[1;33m'
+GRN='\033[1;32m'
+DIM='\033[2m'
+BOLD='\033[1m'
+RST='\033[0m'
+
+# macOS notification (only fire once per threshold crossing)
+notified_warn=0
+notified_crit=0
+
+notify() {
+  osascript -e "display notification \"$1\" with title \"claude-mem\" sound name \"Sosumi\"" 2>/dev/null
+}
+
+get_page_size() {
+  vm_stat | head -1 | grep -oE '[0-9]+'
+}
+
+while true; do
+  clear
+
+  # --- system memory via vm_stat ---
+  page_size=$(get_page_size)
+  vm_out=$(vm_stat)
+  # vm_stat fields end with "." and some have multi-word labels; always grab last field
+  grab() { echo "$vm_out" | awk "/$1/ {gsub(/\\./,\"\",\$NF); print \$NF}"; }
+  pages_free=$(grab "Pages free")
+  pages_inactive=$(grab "Pages inactive")
+  pages_active=$(grab "Pages active")
+  pages_wired=$(grab "Pages wired")
+  pages_compressed=$(grab "Pages occupied by compressor")
+  pages_speculative=$(grab "Pages speculative")
+
+  # physical memory in MB
+  total_mb=$(sysctl -n hw.memsize 2>/dev/null | awk '{printf "%d", $1/1048576}')
+
+  to_mb() { echo $(( ($1 * page_size) / 1048576 )); }
+
+  free_mb=$(to_mb "${pages_free:-0}")
+  inactive_mb=$(to_mb "${pages_inactive:-0}")
+  active_mb=$(to_mb "${pages_active:-0}")
+  wired_mb=$(to_mb "${pages_wired:-0}")
+  compressed_mb=$(to_mb "${pages_compressed:-0}")
+  speculative_mb=$(to_mb "${pages_speculative:-0}")
+  available_mb=$(( free_mb + inactive_mb ))
+  used_mb=$(( active_mb + wired_mb + compressed_mb ))
+
+  # memory pressure color
+  if [ "$available_mb" -lt "$crit_mb" ]; then
+    mem_color=$RED
+    status="CRITICAL"
+    if [ "$notified_crit" -eq 0 ]; then
+      notify "CRITICAL: ${available_mb}MB available. Kill something."
+      notified_crit=1
+    fi
+  elif [ "$available_mb" -lt "$warn_mb" ]; then
+    mem_color=$YEL
+    status="WARNING"
+    notified_crit=0
+    if [ "$notified_warn" -eq 0 ]; then
+      notify "WARNING: ${available_mb}MB available"
+      notified_warn=1
+    fi
+  else
+    mem_color=$GRN
+    status="OK"
+    notified_warn=0
+    notified_crit=0
+  fi
+
+  # usage bar
+  if [ "$total_mb" -gt 0 ]; then
+    pct=$(( (used_mb * 100) / total_mb ))
+  else
+    pct=0
+  fi
+  bar_width=40
+  filled=$(( (pct * bar_width) / 100 ))
+  empty=$(( bar_width - filled ))
+  bar="${mem_color}$(printf '%*s' "$filled" '' | tr ' ' '#')${DIM}$(printf '%*s' "$empty" '' | tr ' ' '-')${RST}"
+
+  printf "${BOLD}=== MEMORY ${mem_color}[%s]${RST}${BOLD} ===${RST}  %s\n" "$status" "$(date '+%H:%M:%S')"
+  printf "[%b] %d%% of %dMB\n" "$bar" "$pct" "$total_mb"
+  printf "  Used: ${BOLD}%dMB${RST}  (active %d + wired %d + compressed %d)\n" "$used_mb" "$active_mb" "$wired_mb" "$compressed_mb"
+  printf "  Available: ${mem_color}${BOLD}%dMB${RST}  (free %d + inactive %d)\n\n" "$available_mb" "$free_mb" "$inactive_mb"
+
+  # --- top memory consumers (non-Claude) ---
+  printf "${BOLD}=== TOP PROCESSES ===${RST}\n"
+  printf "${DIM}%-7s %8s  %s${RST}\n" "PID" "MEM(MB)" "COMMAND"
+  ps -eo pid,rss,command | sort -rnk2 | head -10 | while read -r pid rss cmd; do
+    mb=$(( rss / 1024 ))
+    short=$(echo "$cmd" | cut -c1-60)
+    if echo "$cmd" | grep -qi "claude"; then
+      printf "${YEL}%-7s %7dMB  %s${RST}\n" "$pid" "$mb" "$short"
+    else
+      printf "%-7s %7dMB  %s\n" "$pid" "$mb" "$short"
+    fi
+  done
+
+  # --- Claude-specific ---
+  claude_pids=$(pgrep -if "claude" 2>/dev/null)
+  claude_count=$(echo "$claude_pids" | grep -c . 2>/dev/null)
+  claude_total=0
+  if [ -n "$claude_pids" ]; then
+    claude_total=$(ps -o rss= -p $(echo "$claude_pids" | tr '\n' ',') 2>/dev/null | awk '{s+=$1} END {printf "%d", s/1024}')
+  fi
+
+  printf "\n${BOLD}=== CLAUDE ===${RST}  "
+  if [ "$claude_count" -gt 3 ]; then
+    printf "${RED}%d processes${RST}" "$claude_count"
+  elif [ "$claude_count" -gt 1 ]; then
+    printf "${YEL}%d processes${RST}" "$claude_count"
+  else
+    printf "${GRN}%d processes${RST}" "$claude_count"
+  fi
+  printf "  total: ${BOLD}%dMB${RST}\n" "$claude_total"
+
+  if [ -n "$claude_pids" ]; then
+    printf "${DIM}%-7s %8s  %s${RST}\n" "PID" "MEM(MB)" "COMMAND"
+    for pid in $claude_pids; do
+      rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ')
+      cmd=$(ps -o command= -p "$pid" 2>/dev/null | cut -c1-60)
+      mb=$(( ${rss:-0} / 1024 ))
+      printf "%-7s %7dMB  %s\n" "$pid" "$mb" "$cmd"
+    done
+  fi
+
+  printf "\n${DIM}Refresh: %ds | Warn: <%dMB | Crit: <%dMB | ctrl-c to quit${RST}\n" "$interval" "$warn_mb" "$crit_mb"
+
+  sleep "$interval"
+done

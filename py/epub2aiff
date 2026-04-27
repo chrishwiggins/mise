@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import zipfile
+import xml.etree.ElementTree as ET
+import subprocess
+import unicodedata
+
+# --- CONFIGURATION ---
+OUTPUT_DIR = "audiobook"
+VOICE = "Samantha"
+SPEECH_RATE = 200
+
+
+# ---------------------
+def check_epub_file(epub_path):
+    if not os.path.isfile(epub_path):
+        print(f"Error: EPUB file '{epub_path}' not found.")
+        sys.exit(1)
+
+
+def create_output_directories(output_dir):
+    os.makedirs(os.path.join(output_dir, "text"), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "audio"), exist_ok=True)
+
+
+def unzip_epub(epub_path, output_dir):
+    unzip_dir = os.path.join(output_dir, "epub_contents")
+    os.makedirs(unzip_dir, exist_ok=True)
+    with zipfile.ZipFile(epub_path, "r") as zip_ref:
+        zip_ref.extractall(unzip_dir)
+    return unzip_dir
+
+
+def find_opf_path(unzip_dir):
+    # Read META-INF/container.xml to find content.opf location
+    container_path = os.path.join(unzip_dir, "META-INF", "container.xml")
+    tree = ET.parse(container_path)
+    rootfile = tree.find(".//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile")
+    opf_rel_path = rootfile.attrib["full-path"]
+    return os.path.join(unzip_dir, opf_rel_path)
+
+
+def get_spine_order(opf_path):
+    # Parse content.opf to determine reading order
+    tree = ET.parse(opf_path)
+    ns = {"n": "http://www.idpf.org/2007/opf"}  # default namespace
+
+    root = tree.getroot()
+    manifest = {}
+    for item in root.findall(".//n:manifest/n:item", ns):
+        manifest[item.attrib["id"]] = item.attrib["href"]
+
+    spine = []
+    base_dir = os.path.dirname(opf_path)
+    for itemref in root.findall(".//n:spine/n:itemref", ns):
+        idref = itemref.attrib["idref"]
+        if idref in manifest:
+            html_path = os.path.join(base_dir, manifest[idref])
+            spine.append(html_path)
+    return spine
+
+
+def convert_html_to_text(html_files, output_dir):
+    text_dir = os.path.join(output_dir, "text")
+    for idx, html_path in enumerate(html_files):
+        base_name = f"chapter_{idx + 1:02d}"
+        txt_path = os.path.join(text_dir, f"{base_name}.txt")
+
+        try:
+            with open(txt_path, "w", encoding="utf-8") as out_f:
+                subprocess.run(
+                    [
+                        "lynx",
+                        "-useragent=Mozilla",
+                        "-accept_all_cookies",
+                        "-width=999",
+                        "-dump",
+                        "-hiddenlinks=ignore",
+                        "-image_links=no",
+                        "-minimal",
+                        "-nobold",
+                        "-nolist",
+                        "-pseudo_inlines",
+                        "-force_html",
+                        html_path,
+                    ],
+                    stdout=out_f,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+        except subprocess.CalledProcessError as e:
+            print(f"Error converting {html_path} to text:\n{e.stderr.decode()}")
+            continue
+
+        clean_text_file(txt_path)
+        print(f"✔️ Converted {html_path} → {txt_path}")
+
+
+def clean_text_file(txt_path):
+    # Normalize Unicode and strip accents
+    try:
+        with open(txt_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except UnicodeDecodeError:
+        with open(txt_path, "r", encoding="ISO-8859-1") as f:
+            text = f.read()
+
+    normalized = unicodedata.normalize("NFKD", text)
+    ascii_cleaned = "".join(
+        c for c in normalized if unicodedata.category(c) != "Mn" and ord(c) < 128
+    )
+
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(ascii_cleaned)
+
+
+def generate_audio_files(output_dir, voice, speech_rate):
+    print("🎙 Generating audio files...")
+    text_dir = os.path.join(output_dir, "text")
+    audio_dir = os.path.join(output_dir, "audio")
+    text_files = sorted(os.listdir(text_dir))
+
+    for txt_file in text_files:
+        base_name = os.path.splitext(txt_file)[0]
+        txt_path = os.path.join(text_dir, txt_file)
+        aiff_path = os.path.join(audio_dir, f"{base_name}.aiff")
+
+        try:
+            subprocess.run(
+                [
+                    "say",
+                    "-v",
+                    voice,
+                    "-r",
+                    str(speech_rate),
+                    "-f",
+                    txt_path,
+                    "-o",
+                    aiff_path,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Error generating audio for {txt_file}:\n{e.stderr.decode()}")
+            continue
+
+        print(f"🔊 Created audio file: {aiff_path}")
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: epub2aiff.py <file.epub>")
+        sys.exit(1)
+
+    epub_file = sys.argv[1]
+    check_epub_file(epub_file)
+    create_output_directories(OUTPUT_DIR)
+    unzip_dir = unzip_epub(epub_file, OUTPUT_DIR)
+
+    opf_path = find_opf_path(unzip_dir)
+    spine_files = get_spine_order(opf_path)
+
+    print(f"🧠 Using EPUB spine to determine correct chapter order...")
+    convert_html_to_text(spine_files, OUTPUT_DIR)
+    generate_audio_files(OUTPUT_DIR, VOICE, SPEECH_RATE)
+
+    print(f"✅ Done! Audiobook saved in {os.path.join(OUTPUT_DIR, 'audio')}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,72 @@
+#!/usr/bin/python3
+
+import os  # Import os to work with file and directory operations
+import sys  # Import sys to handle command line arguments
+import subprocess  # Import subprocess to run shell commands from Python
+from datetime import datetime  # Import datetime to handle and format dates
+
+
+def main():
+    # Check if argument is provided
+    if len(sys.argv) != 2:
+        # If the script does not receive exactly 1 argument, print usage message and exit
+        print("Usage: python script.py <number of commits>")
+        sys.exit(1)
+
+    # Check if we are in a Git repository
+    if not os.path.exists(".git"):
+        # If there's no `.git` directory, print an error message and exit
+        print("Error: This script must be run inside a Git repository.")
+        sys.exit(1)
+
+    # Get the number of commits to process
+    N = int(sys.argv[1])
+
+    # Get the last N commit hashes and their corresponding dates from the Git log
+    log_format = "--pretty=format:%H %ci"  # Define the log format to get the commit hash and date
+    try:
+        # Use `git log` to get the last N commits with the specified format
+        commit_logs = (
+            subprocess.check_output(["git", "log", log_format, f"-n{N}"])
+            .decode()  # Decode the output from bytes to a string
+            .splitlines()  # Split the output into separate lines for each commit
+        )
+    except subprocess.CalledProcessError as e:
+        # If `git log` fails, print an error message and exit
+        print(f"Error: Unable to retrieve git logs. {e}")
+        sys.exit(1)
+
+    # Iterate over each commit hash and date, and save the diff to a file in /tmp/
+    for log in commit_logs:
+        # Split the log entry into the commit hash and the commit date
+        commit_hash, commit_date = log.split(" ", 1)
+
+        # Convert the commit date string to a datetime object and then format it as YYYY-MM-DDTHH-MM-SS
+        timestamp = datetime.strptime(
+            commit_date.strip(), "%Y-%m-%d %H:%M:%S %z"
+        ).strftime("%Y-%m-%dT%H-%M-%S")
+
+        try:
+            # Get the diff for the current commit compared to its parent
+            diff_output = subprocess.check_output(
+                ["git", "diff", f"{commit_hash}^", commit_hash]
+            )
+        except subprocess.CalledProcessError as e:
+            # If `git diff` fails, print an error message and skip to the next commit
+            print(f"Error: Unable to retrieve diff for commit {commit_hash}. {e}")
+            continue
+
+        # Create the file path in /tmp/ directory with the formatted timestamp
+        diff_file_path = f"/tmp/{timestamp}.dif"
+
+        # Write the diff output to the file in binary mode
+        with open(diff_file_path, "wb") as diff_file:
+            diff_file.write(diff_output)
+
+        # Print a message indicating where the diff was saved
+        print(f"Diff for commit {commit_hash} saved to {diff_file_path}")
+
+
+if __name__ == "__main__":
+    # Execute the main function if the script is run directly
+    main()

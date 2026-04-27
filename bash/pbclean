@@ -1,0 +1,30 @@
+#!/bin/bash
+# pbclean - Clean up clipboard contents via Claude
+# Usage: pbclean [-s|-m|-l] [-f] [-d]
+# Reads clipboard (or stdin if piped), cleans text via cleanup, writes back to clipboard
+
+# Read from stdin if piped, otherwise from clipboard
+if [ -t 0 ]; then
+    input=$(pbpaste)
+else
+    input=$(cat)
+fi
+
+if [ -z "$input" ]; then
+    echo "Error: input is empty" >&2
+    exit 1
+fi
+
+# Pass all flags through to cleanup
+cleaned=$(echo "$input" | cleanup "$@")
+rc=$?
+
+if [ $rc -ne 0 ] || [ -z "$cleaned" ]; then
+    echo "Clipboard NOT modified." >&2
+    exit 1
+fi
+
+echo "$cleaned" | pbcopy
+echo "Clipboard cleaned."
+echo "---"
+echo "$cleaned"

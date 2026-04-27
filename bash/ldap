@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+
+# LDAP search wrapper for Columbia University directory
+# Default searches by uni, but allows custom filters
+
+show_help() {
+    cat << EOF
+Columbia LDAP Search Tool
+
+Usage: 
+    ldap <uni>                     Search by UNI (default)
+    ldap -f '<filter>'             Custom LDAP filter
+    ldap -cn '<name>'              Search by common name
+    ldap -sn '<surname>'           Search by surname  
+    ldap -mail '<email>'           Search by email
+    ldap -uid '<uid>'              Search by UID
+    ldap -h, --help                Show this help
+
+Examples:
+    ldap mkg216901                 Search for uni=mkg216901
+    ldap -cn 'John Doe'            Search by full name
+    ldap -sn 'Smith'               Search by last name
+    ldap -mail 'jd123@columbia'    Search by email
+    ldap -f '(cn=*Smith*)'         Custom filter for names containing Smith
+    ldap -f '(&(sn=Smith)(givenName=John))'  Complex filter
+
+Note: Add -v for verbose output (shows full LDAP records)
+EOF
+}
+
+# Configuration
+LDAP_SERVER="ldaps://ldapprod.cc.columbia.edu:636"
+LDAP_BASE="ou=People,o=Columbia University,c=US"
+VERBOSE=0
+
+# Check for no arguments
+if [ $# -eq 0 ]; then
+    show_help
+    exit 0
+fi
+
+# Parse arguments
+FILTER=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        -f|--filter)
+            FILTER="$2"
+            shift 2
+            ;;
+        -cn|--commonname)
+            FILTER="(cn=$2)"
+            shift 2
+            ;;
+        -sn|--surname)
+            FILTER="(sn=$2)"
+            shift 2
+            ;;
+        -mail|--email)
+            FILTER="(mail=$2)"
+            shift 2
+            ;;
+        -uid)
+            FILTER="(uid=$2)"
+            shift 2
+            ;;
+        *)
+            # Default: treat as UNI
+            FILTER="(uni=$1)"
+            shift
+            ;;
+    esac
+done
+
+# Ensure we have a filter
+if [ -z "$FILTER" ]; then
+    echo "Error: No search criteria provided"
+    show_help
+    exit 1
+fi
+
+# Build the ldapsearch command
+LDAP_CMD="env LDAPTLS_REQCERT=never ldapsearch -H $LDAP_SERVER -x -b \"$LDAP_BASE\" \"$FILTER\""
+
+# Add output formatting based on verbose flag
+if [ $VERBOSE -eq 0 ]; then
+    # Concise output: just show key fields
+    LDAP_CMD="$LDAP_CMD uni cn mail uid"
+fi
+
+# Execute the search
+echo "Searching for: $FILTER"
+echo "---"
+eval $LDAP_CMD
+
+# Check exit status
+if [ $? -ne 0 ]; then
+    echo "Error: LDAP search failed"
+    exit 1
+fi

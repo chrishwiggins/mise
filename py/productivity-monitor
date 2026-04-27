@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""
+Productivity Monitoring Tool - Track optimization impact over time
+"""
+
+import json
+import os
+from datetime import datetime, timedelta
+from collections import Counter, defaultdict
+import statistics
+
+ANALYTICS_DIR = os.path.expanduser("~/.config/m/analytics")
+PRODUCTIVITY_LOG = os.path.join(ANALYTICS_DIR, "productivity.json")
+
+def load_usage_log():
+    """Load email usage analytics"""
+    log_file = os.path.join(ANALYTICS_DIR, "usage.log")
+    data = []
+    try:
+        with open(log_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    parts = line.split(',', 2)
+                    if len(parts) >= 3:
+                        timestamp = datetime.strptime(parts[0], '%Y-%m-%d %H:%M:%S')
+                        command = parts[1].strip()
+                        duration = int(parts[2]) if parts[2].isdigit() else 0
+                        data.append({
+                            'timestamp': timestamp,
+                            'command': command,
+                            'duration': duration
+                        })
+    except FileNotFoundError:
+        pass
+    return data
+
+def load_productivity_history():
+    """Load historical productivity metrics"""
+    try:
+        with open(PRODUCTIVITY_LOG, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"snapshots": []}
+
+def save_productivity_snapshot(metrics):
+    """Save current productivity metrics"""
+    os.makedirs(ANALYTICS_DIR, exist_ok=True)
+    history = load_productivity_history()
+
+    snapshot = {
+        "timestamp": datetime.now().isoformat(),
+        "metrics": metrics
+    }
+
+    history["snapshots"].append(snapshot)
+
+    # Keep last 30 days only
+    cutoff = datetime.now() - timedelta(days=30)
+    history["snapshots"] = [
+        s for s in history["snapshots"]
+        if datetime.fromisoformat(s["timestamp"]) > cutoff
+    ]
+
+    with open(PRODUCTIVITY_LOG, 'w') as f:
+        json.dump(history, f, indent=2)
+
+def calculate_metrics(data, period_days=7):
+    """Calculate productivity metrics for a period"""
+    cutoff = datetime.now() - timedelta(days=period_days)
+    recent_data = [d for d in data if d['timestamp'] > cutoff]
+
+    if not recent_data:
+        return {}
+
+    # Performance metrics
+    fast_commands = len([d for d in recent_data if d['duration'] < 50])
+    slow_commands = len([d for d in recent_data if d['duration'] > 1000])
+    total_commands = len(recent_data)
+
+    # Keystroke savings (estimate based on alias usage)
+    alias_commands = [
+        'muqk', 'mu-e', 'mqgf', 'mjr', 'mup', 'mgq', 'mkutz'
+    ]
+    alias_uses = sum(1 for d in recent_data if any(alias in d['command'] for alias in alias_commands))
+    estimated_keystrokes_saved = alias_uses * 15  # Average savings per alias
+
+    # Time efficiency
+    avg_duration = statistics.mean([d['duration'] for d in recent_data])
+
+    # Command diversity
+    unique_commands = len(set(d['command'] for d in recent_data))
+
+    return {
+        "period_days": period_days,
+        "total_commands": total_commands,
+        "fast_commands": fast_commands,
+        "slow_commands": slow_commands,
+        "fast_command_pct": (fast_commands / total_commands * 100) if total_commands else 0,
+        "avg_duration_ms": avg_duration,
+        "unique_commands": unique_commands,
+        "alias_uses": alias_uses,
+        "estimated_keystrokes_saved": estimated_keystrokes_saved,
+        "commands_per_day": total_commands / period_days
+    }
+
+def compare_metrics(current, previous):
+    """Compare current metrics with previous period"""
+    improvements = {}
+
+    for key in current:
+        if key in previous and isinstance(current[key], (int, float)):
+            change = current[key] - previous[key]
+            pct_change = (change / previous[key] * 100) if previous[key] else 0
+            improvements[key] = {
+                "change": change,
+                "pct_change": pct_change,
+                "better": _is_improvement(key, change)
+            }
+
+    return improvements
+
+def _is_improvement(metric, change):
+    """Determine if a change in metric is an improvement"""
+    good_increases = [
+        "fast_commands", "fast_command_pct", "alias_uses",
+        "estimated_keystrokes_saved", "unique_commands"
+    ]
+    good_decreases = ["slow_commands", "avg_duration_ms"]
+
+    if metric in good_increases:
+        return change > 0
+    elif metric in good_decreases:
+        return change < 0
+    else:
+        return False  # Neutral metrics
+
+def print_report():
+    """Print productivity monitoring report"""
+    print("📊 PRODUCTIVITY MONITORING REPORT")
+    print("=" * 45)
+
+    data = load_usage_log()
+    if not data:
+        print("No usage data available")
+        return
+
+    # Current metrics (last 7 days)
+    current_metrics = calculate_metrics(data, 7)
+
+    # Previous period for comparison (7-14 days ago)
+    two_weeks_ago = datetime.now() - timedelta(days=14)
+    one_week_ago = datetime.now() - timedelta(days=7)
+    previous_data = [d for d in data if two_weeks_ago <= d['timestamp'] <= one_week_ago]
+    previous_metrics = calculate_metrics(previous_data, 7) if previous_data else {}
+
+    # Save current snapshot
+    save_productivity_snapshot(current_metrics)
+
+    print(f"📈 Current Period (Last 7 Days)")
+    print(f"   Commands executed:     {current_metrics.get('total_commands', 0):>4}")
+    print(f"   Fast operations:       {current_metrics.get('fast_commands', 0):>4} ({current_metrics.get('fast_command_pct', 0):>4.1f}%)")
+    print(f"   Slow operations:       {current_metrics.get('slow_commands', 0):>4}")
+    print(f"   Average duration:      {current_metrics.get('avg_duration_ms', 0):>4.0f}ms")
+    print(f"   Commands per day:      {current_metrics.get('commands_per_day', 0):>4.1f}")
+    print(f"   Unique commands:       {current_metrics.get('unique_commands', 0):>4}")
+
+    # Alias impact
+    if current_metrics.get('alias_uses', 0) > 0:
+        print(f"\n🚀 Optimization Impact:")
+        print(f"   Alias uses:            {current_metrics.get('alias_uses', 0):>4}")
+        print(f"   Keystrokes saved:      {current_metrics.get('estimated_keystrokes_saved', 0):>4}")
+
+    # Comparison with previous period
+    if previous_metrics:
+        print(f"\n📊 Change from Previous Week:")
+        improvements = compare_metrics(current_metrics, previous_metrics)
+
+        for metric, change_data in improvements.items():
+            if abs(change_data['change']) > 0.1:  # Only show meaningful changes
+                direction = "📈" if change_data['better'] else "📉" if change_data['change'] < 0 else "➡️"
+                change_str = f"{change_data['change']:+.1f}"
+                if 'pct' in metric:
+                    change_str += "%"
+                elif 'ms' in metric:
+                    change_str += "ms"
+
+                metric_display = metric.replace('_', ' ').title()
+                print(f"   {direction} {metric_display:<20} {change_str}")
+
+    # Productivity score
+    if current_metrics.get('total_commands', 0) > 0:
+        score = min(100, (
+            current_metrics.get('fast_command_pct', 0) * 0.4 +
+            max(0, 100 - current_metrics.get('avg_duration_ms', 0) / 50) * 0.4 +
+            min(100, current_metrics.get('alias_uses', 0) * 10) * 0.2
+        ))
+        print(f"\n🎯 Productivity Score: {score:.1f}/100")
+
+        if score > 80:
+            status = "🟢 Excellent"
+        elif score > 60:
+            status = "🟡 Good"
+        else:
+            status = "🔴 Needs improvement"
+        print(f"   Status: {status}")
+
+    # Recommendations
+    print(f"\n💡 Recommendations:")
+
+    if current_metrics.get('slow_commands', 0) > current_metrics.get('total_commands', 1) * 0.1:
+        print("   • Focus on reducing slow operations")
+
+    if current_metrics.get('alias_uses', 0) < current_metrics.get('total_commands', 1) * 0.1:
+        print("   • Use more aliases to save keystrokes")
+
+    if current_metrics.get('fast_command_pct', 0) > 90:
+        print("   • ✨ Cache system working excellently!")
+
+    print("\n📅 Next Analysis: Run again in 1 week to track trends")
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--snapshot":
+        # Just save a snapshot without printing
+        data = load_usage_log()
+        metrics = calculate_metrics(data, 7)
+        save_productivity_snapshot(metrics)
+        print("Snapshot saved")
+    else:
+        print_report()

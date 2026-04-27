@@ -1,0 +1,26 @@
+#!/usr/bin/python3
+import datetime
+import sys
+
+
+def countdown(date_str):
+    date_format = "%Y-%m-%d"
+    target_date = datetime.datetime.strptime(date_str, date_format)
+    current_date = datetime.datetime.now()
+
+    delta = target_date - current_date
+    days = delta.days + 1  # Include today in the count
+
+    if days < 0:
+        print(f"{abs(days)} days since {date_str}")
+    else:
+        print(f"{days} days until {date_str}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python countdown.py <date>")
+        sys.exit(1)
+
+    date_str = sys.argv[1]
+    countdown(date_str)

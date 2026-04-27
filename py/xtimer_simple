@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+
+import os
+
+os.environ["TK_SILENCE_DEPRECATION"] = "1"
+
+import sys
+import tkinter as tk
+from datetime import datetime, timedelta
+import re
+import json
+from pathlib import Path
+
+LOG_FILE = Path.home() / ".xtimer_log"
+
+
+def save_timer_log(thing, target_time, time_str):
+    """Save timer info to log file"""
+    log_data = {
+        "thing": thing,
+        "target_time": target_time.isoformat(),
+        "time_str": time_str,
+        "started_at": datetime.now().isoformat(),
+    }
+    try:
+        with open(LOG_FILE, "w") as f:
+            json.dump(log_data, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Could not save log: {e}", file=sys.stderr)
+
+
+def parse_time(time_str):
+    """Parse time string in various formats"""
+    # Try HH:MM format
+    if ":" in time_str:
+        parts = time_str.split(":")
+        if len(parts) == 2:
+            hours, minutes = map(int, parts)
+            target = datetime.now().replace(hour=hours, minute=minutes, second=0)
+            if target < datetime.now():
+                target += timedelta(days=1)
+            return target
+
+    # Try duration formats (5m, 1h, 30s, etc)
+    duration_match = re.match(r"^(\d+)([hms])$", time_str.lower())
+    if duration_match:
+        value, unit = duration_match.groups()
+        value = int(value)
+        if unit == "h":
+            return datetime.now() + timedelta(hours=value)
+        elif unit == "m":
+            return datetime.now() + timedelta(minutes=value)
+        elif unit == "s":
+            return datetime.now() + timedelta(seconds=value)
+
+    # Try plain number as minutes
+    try:
+        minutes = int(time_str)
+        return datetime.now() + timedelta(minutes=minutes)
+    except ValueError:
+        pass
+
+    raise ValueError(f"Cannot parse time: {time_str}")
+
+
+class SimpleTimer:
+    def __init__(self, thing, target_time):
+        self.thing = thing
+        self.target_time = target_time
+
+        # Create window
+        self.root = tk.Tk()
+        self.root.title("TIMER")
+        self.root.configure(bg="white")
+        self.root.resizable(False, False)
+
+        # Simple layout without complex borders
+        main_frame = tk.Frame(self.root, bg="white", padx=10, pady=10)
+        main_frame.pack()
+
+        # Thing label
+        self.thing_label = tk.Label(
+            main_frame, text=f"[ {self.thing.upper()} ]", bg="white", fg="black", pady=5
+        )
+        self.thing_label.pack()
+
+        # Timer display
+        self.timer_label = tk.Label(
+            main_frame,
+            text="00:00:00",
+            bg="white",
+            fg="red",
+            font=("Monaco", 16, "bold"),
+            pady=5,
+        )
+        self.timer_label.pack()
+
+        # Status label
+        self.status_label = tk.Label(
+            main_frame, text="ACTIVE", bg="white", fg="black", pady=5
+        )
+        self.status_label.pack()
+
+        # Position window
+        self.root.update_idletasks()
+        screen_width = self.root.winfo_screenwidth()
+        x = screen_width - self.root.winfo_width() - 50
+        y = 50
+        self.root.geometry(f"+{x}+{y}")
+        self.root.attributes("-topmost", True)
+
+        # Start timer
+        self.update_timer()
+
+    def update_timer(self):
+        now = datetime.now()
+        remaining = self.target_time - now
+
+        if remaining.total_seconds() <= 0:
+            self.timer_label.configure(text="EXPIRED", fg="red")
+            self.status_label.configure(text="DONE", fg="red")
+            self.flash_timer()
+        else:
+            total_seconds = int(remaining.total_seconds())
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+
+            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            self.timer_label.configure(text=time_str)
+
+            self.root.after(1000, self.update_timer)
+
+    def flash_timer(self):
+        current_fg = self.timer_label.cget("fg")
+        if current_fg == "red":
+            self.timer_label.configure(fg="white", bg="red")
+            self.status_label.configure(fg="white", bg="red")
+        else:
+            self.timer_label.configure(fg="red", bg="white")
+            self.status_label.configure(fg="red", bg="white")
+        self.root.after(500, self.flash_timer)
+
+    def run(self):
+        self.root.mainloop()
+
+
+def main():
+    if len(sys.argv) != 3:
+        print("Usage: xtimer_simple <thing> <time>")
+        sys.exit(1)
+
+    thing = sys.argv[1]
+    time_str = sys.argv[2]
+
+    try:
+        target_time = parse_time(time_str)
+        save_timer_log(thing, target_time, time_str)
+        timer = SimpleTimer(thing, target_time)
+        timer.run()
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

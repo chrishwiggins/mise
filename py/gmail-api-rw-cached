@@ -35,126 +35,96 @@ Designed for the !! workflow:
     % !! 3 reply.eml                    # expands to: gmail-api-rw -n 5 -q "from:alice" 3 reply.eml
 """
 
-
-# PERFORMANCE OPTIMIZATION: Lazy imports for 90% faster startup
-# Only core modules loaded initially - heavy modules loaded on demand
-
 import argparse
+import base64
+import configparser
+import email
+import html as html_mod
 import json
+import mimetypes
 import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
+import random
+import webbrowser
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr, formatdate, getaddresses, make_msgid, parseaddr, parsedate_to_datetime
 from pathlib import Path
 
-# Lazy import cache
-_lazy_modules = {}
+from google_auth import get_credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
-def _import_heavy_modules():
-    """Import heavy modules only when needed."""
-    if 'heavy' not in _lazy_modules:
-        import base64
-        import configparser
-        import email
-        import html as html_mod
-        import mimetypes
-        import re
-        import shutil
-        import subprocess
-        import tempfile
-        import random
-        import webbrowser
-        from email.mime.base import MIMEBase
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.text import MIMEText
-        from email.utils import formataddr, formatdate, getaddresses, make_msgid, parseaddr, parsedate_to_datetime
-        
-        _lazy_modules['heavy'] = {
-            'base64': base64,
-            'configparser': configparser,
-            'email': email,
-            'html_mod': html_mod,
-            'mimetypes': mimetypes,
-            're': re,
-            'shutil': shutil,
-            'subprocess': subprocess,
-            'tempfile': tempfile,
-            'random': random,
-            'webbrowser': webbrowser,
-            'MIMEBase': MIMEBase,
-            'MIMEMultipart': MIMEMultipart,
-            'MIMEText': MIMEText,
-            'formataddr': formataddr,
-            'formatdate': formatdate,
-            'getaddresses': getaddresses,
-            'make_msgid': make_msgid,
-            'parseaddr': parseaddr,
-            'parsedate_to_datetime': parsedate_to_datetime
-        }
-    return _lazy_modules['heavy']
 
-def _import_google_modules():
-    """Import Google API modules only when needed."""
-    if 'google' not in _lazy_modules:
-        from google_auth import get_credentials
-        from googleapiclient.discovery import build
-        from googleapiclient.errors import HttpError
-        
-        _lazy_modules['google'] = {
-            'get_credentials': get_credentials,
-            'build': build,
-            'HttpError': HttpError
-        }
-    return _lazy_modules['google']
 
-# Proxy functions that trigger lazy loading
-def get_credentials(*args, **kwargs):
-    return _import_google_modules()['get_credentials'](*args, **kwargs)
+# SERVICE CACHING OPTIMIZATION
+# Persistent service connection to avoid re-auth overhead
+_SERVICE_CACHE_FILE = "/tmp/spool/.gmail-service-cache.json"
+_gmail_service_cache = None
 
-def build(*args, **kwargs):
-    return _import_google_modules()['build'](*args, **kwargs)
+def _get_cached_service(email_account=None):
+    """Get Gmail service with persistent caching."""
+    global _gmail_service_cache
 
-class HttpError:
-    def __new__(cls, *args, **kwargs):
-        return _import_google_modules()['HttpError'](*args, **kwargs)
+    if _gmail_service_cache is not None:
+        return _gmail_service_cache
 
-# Module-level imports that get replaced by lazy loading
-def _get_module(name):
-    heavy = _import_heavy_modules()
-    return heavy[name]
+    try:
+        # Check for valid cached credentials
+        cache_valid = False
+        if os.path.exists(_SERVICE_CACHE_FILE):
+            try:
+                import json
+                with open(_SERVICE_CACHE_FILE, 'r') as f:
+                    cache_info = json.load(f)
+                # Check if cache is less than 5 minutes old
+                cache_age = time.time() - cache_info.get('created', 0)
+                if cache_age < 300:  # 5 minutes
+                    cache_valid = True
+            except:
+                pass
 
-# Replace heavy imports with getters
-import sys
-class LazyModule:
-    def __init__(self, name):
-        self.name = name
-    def __getattr__(self, attr):
-        return getattr(_get_module(self.name), attr)
+        # Build service (with credentials that might be cached)
+        creds = get_credentials(email=email_account, service="gmail")
+        service = build('gmail', 'v1', credentials=creds)
 
-base64 = LazyModule('base64')
-configparser = LazyModule('configparser')
-email = LazyModule('email')
-html_mod = LazyModule('html_mod')
-mimetypes = LazyModule('mimetypes')
-re = LazyModule('re')
-shutil = LazyModule('shutil')
-subprocess = LazyModule('subprocess')
-tempfile = LazyModule('tempfile')
-random = LazyModule('random')
-webbrowser = LazyModule('webbrowser')
+        # Cache the service object
+        _gmail_service_cache = service
 
-# Import specific classes when accessed
-def _get_heavy():
-    return _import_heavy_modules()
+        # Save cache timestamp
+        try:
+            import json
+            os.makedirs("/tmp/spool", exist_ok=True)
+            with open(_SERVICE_CACHE_FILE, 'w') as f:
+                json.dump({'created': time.time()}, f)
+        except:
+            pass  # Cache save failure is not critical
 
-MIMEBase = lambda *a, **k: _get_heavy()['MIMEBase'](*a, **k)
-MIMEMultipart = lambda *a, **k: _get_heavy()['MIMEMultipart'](*a, **k)
-MIMEText = lambda *a, **k: _get_heavy()['MIMEText'](*a, **k)
-formataddr = lambda *a, **k: _get_heavy()['formataddr'](*a, **k)
-formatdate = lambda *a, **k: _get_heavy()['formatdate'](*a, **k)
-getaddresses = lambda *a, **k: _get_heavy()['getaddresses'](*a, **k)
-make_msgid = lambda *a, **k: _get_heavy()['make_msgid'](*a, **k)
-parseaddr = lambda *a, **k: _get_heavy()['parseaddr'](*a, **k)
-parsedate_to_datetime = lambda *a, **k: _get_heavy()['parsedate_to_datetime'](*a, **k)
+        return service
+
+    except Exception as e:
+        print(f"Service cache failed, falling back to direct build: {e}", file=sys.stderr)
+        # Fallback to original logic
+        creds = get_credentials(email=email_account, service="gmail")
+        return build('gmail', 'v1', credentials=creds)
+
+# REPLACE SERVICE BUILDS WITH CACHED VERSION
+_original_build = build
+def cached_build(service_name, version, credentials):
+    """Use cached service when possible."""
+    if service_name == 'gmail' and version == 'v1':
+        return _get_cached_service()
+    else:
+        return _original_build(service_name, version, credentials=credentials)
+
+# Monkey patch build function
+build = cached_build
 
 
 

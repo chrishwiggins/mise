@@ -1,0 +1,47 @@
+#!/bin/bash
+# moodping - ping with coin sounds on connectivity changes
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VERBOSE=0
+
+while getopts "v" opt; do
+    case $opt in
+        v) VERBOSE=1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+HOST="${1:-google.com}"
+INTERVAL="${2:-1}"
+
+COIN_UP="$SCRIPT_DIR/coin-up.wav"
+COIN_DOWN="$SCRIPT_DIR/coin-down.wav"
+
+state=-1
+
+echo "moodping: pinging $HOST every ${INTERVAL}s (ctrl-c to stop)"
+
+while true; do
+    if ping -c 1 -W 2 "$HOST" > /dev/null 2>&1; then
+        if [ "$state" != 1 ]; then
+            if [ "$state" = 0 ]; then
+                echo "$(date '+%H:%M:%S') RECONNECTED"
+                afplay "$COIN_UP" &
+            else
+                echo "$(date '+%H:%M:%S') Connected"
+            fi
+            state=1
+        elif [ "$VERBOSE" = 1 ]; then
+            echo "$(date '+%H:%M:%S') ok"
+        fi
+    else
+        if [ "$state" != 0 ]; then
+            echo "$(date '+%H:%M:%S') DISCONNECTED"
+            afplay "$COIN_DOWN" &
+            state=0
+        elif [ "$VERBOSE" = 1 ]; then
+            echo "$(date '+%H:%M:%S') still down..."
+        fi
+    fi
+    sleep "$INTERVAL"
+done

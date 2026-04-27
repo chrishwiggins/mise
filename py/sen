@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+
+import sys
+
+
+def calculate_class_progress(minutes):
+    """
+    Calculate percentage of class completed.
+    Class runs from 11:40 to 12:55 (75 minutes total)
+    Input: minutes after 11:00
+    """
+    class_start = 40  # 11:40
+    class_end = 115  # 12:55 (60 + 55 minutes after 11:00)
+    class_duration = class_end - class_start  # 75 minutes
+
+    if minutes < class_start:
+        return 0.0
+    elif minutes >= class_end:
+        return 100.0
+    else:
+        elapsed = minutes - class_start
+        return (elapsed / class_duration) * 100
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python3 class_progress.py MMSS")
+        print("Example: python3 class_progress.py 1215 (for 12:15)")
+        sys.exit(1)
+
+    time_str = sys.argv[1]
+
+    if len(time_str) != 4:
+        print("Error: Please provide exactly 4 digits (HHMM)")
+        sys.exit(1)
+
+    try:
+        hours = int(time_str[:2])
+        minutes = int(time_str[2:])
+
+        if hours not in [11, 12] or minutes < 0 or minutes > 59:
+            print("Error: Invalid time. Use 11:40-12:55 range")
+            sys.exit(1)
+
+        # Convert to minutes after 11:00
+        total_minutes = (hours - 11) * 60 + minutes
+
+        percentage = calculate_class_progress(total_minutes)
+
+        print(f"Time: {hours:02d}:{minutes:02d}")
+        print(f"Class progress: {percentage:.1f}%")
+
+    except ValueError:
+        print("Error: Please provide valid digits")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

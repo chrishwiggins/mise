@@ -1,0 +1,55 @@
+#!/usr/bin/python3
+# line above ensures the script is executed with Python 3.
+
+# NB requires
+# https://github.com/chrishwiggins/email_merger/blob/patch-1/email_merger
+# which is a python3 fork of https://github.com/ltratt/email_merger
+
+
+import csv
+import sys
+import os
+
+
+def file_exists(file):
+    return os.path.exists(file)
+
+
+def validate_csv_structure(file_path, expected_num_columns):
+    """
+    Validate the structure of the CSV file, ensuring it has the expected number of columns.
+    Raise an error with details if any row has an unexpected number of columns.
+    """
+    with open(file_path, mode="r") as csv_file:
+        csv_reader = csv.reader(csv_file)
+        for line_number, row in enumerate(csv_reader, start=1):
+            if len(row) != expected_num_columns:
+                raise ValueError(
+                    f"Error in CSV file '{file_path}' at line {line_number}: "
+                    f"Expected {expected_num_columns} columns, but found {len(row)}. "
+                    f"Row contents: {row}. Please fix this line."
+                )
+
+
+# Main script starts here
+body = "mbody.asc"  # Default body file
+data = "mdata.csv"  # Default data file
+
+# Check if body and data files exist
+for auxfile in [body, data]:
+    if not file_exists(auxfile):
+        print(f"Error: must exist: {auxfile}. MERGE FAIL")
+        sys.exit(1)  # Exit the script if file doesn't exist
+
+# Validate the CSV file structure
+try:
+    expected_columns = (
+        4  # Assuming 4 columns based on the example (First_Name, Email, class, digit)
+    )
+    validate_csv_structure(data, expected_columns)
+except ValueError as e:
+    print(f"CSV Parsing Error: {str(e)}")
+    sys.exit(1)  # Exit the script if CSV structure is invalid
+
+# If no error, proceed with the rest of the script
+print(f"fields used from {data}:")
