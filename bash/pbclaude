@@ -1,0 +1,5 @@
+#!/bin/bash
+tmpfile="/tmp/claude_$(date +%Y%m%d_%H%M%S)_$$.txt"
+pbpaste > "$tmpfile"
+claude "Read and execute the prompt in $tmpfile"
+rm "$tmpfile"

@@ -1,0 +1,84 @@
+#! /usr/bin/python3
+
+import pandas as pd
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+import os
+import warnings
+
+# Suppressing warnings from openpyxl
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
+
+
+def xlsx_to_pdf(xlsx_file, pdf_file):
+    # Load the Excel file into a Pandas ExcelFile object
+    xls = pd.ExcelFile(xlsx_file)
+
+    # Initialize a ReportLab canvas
+    c = canvas.Canvas(pdf_file, pagesize=letter)
+    width, height = letter
+
+    for sheet_name in xls.sheet_names:
+        # Read each sheet into a DataFrame
+        df = xls.parse(sheet_name)
+
+        # Drop rows and columns that are entirely NaN
+        df.dropna(how="all", inplace=True)
+        df.dropna(axis=1, how="all", inplace=True)
+
+        # Convert all columns to string type to avoid dtype issues
+        df = df.astype(str)
+
+        # Replace remaining NaN values with empty strings
+        df.fillna("", inplace=True)
+
+        # Add a new page for each sheet
+        c.showPage()
+        c.setFont("Helvetica", 12)
+        c.drawString(30, height - 30, f"Sheet: {sheet_name}")
+
+        # Set starting position for content
+        x_offset = 30
+        y_offset = height - 60
+        line_height = 14
+
+        # Write column headers
+        headers = df.columns.tolist()
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(
+            x_offset, y_offset, "  |  ".join(str(header) for header in headers)
+        )
+        y_offset -= line_height
+
+        # Write each row of the DataFrame
+        c.setFont("Helvetica", 10)
+        for row in df.itertuples(index=False):
+            line = "  |  ".join(str(cell) for cell in row)
+            c.drawString(x_offset, y_offset, line)
+            y_offset -= line_height
+
+            # Add a new page if the current page is full
+            if y_offset < 40:
+                c.showPage()
+                c.setFont("Helvetica", 12)
+                y_offset = height - 60
+
+    # Save the PDF
+    c.save()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Convert XLSX to PDF")
+    parser.add_argument("xlsx_file", type=str, help="Path to the XLSX file to convert")
+    parser.add_argument("pdf_file", type=str, help="Path to the output PDF file")
+    args = parser.parse_args()
+
+    # Check if the input file exists
+    if not os.path.exists(args.xlsx_file):
+        print(f"Error: The file {args.xlsx_file} does not exist.")
+    else:
+        # Convert XLSX to PDF
+        xlsx_to_pdf(args.xlsx_file, args.pdf_file)
+        print(f"Successfully created {args.pdf_file}")

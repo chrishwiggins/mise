@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# Set a default URL to about:blank if no URL is provided, or use the provided URL
+URL="${2:-about:blank}"
+
+# Determine the profile directory based on the first argument
+if [ $# -eq 0 ]; then
+    # No arguments provided, use the Default profile
+    PROFILE_DIRECTORY="Default"
+elif [ "$1" -eq 0 ]; then
+    # First argument is 0, use the Default profile
+    PROFILE_DIRECTORY="Default"
+else
+    # Use the provided profile number
+    PROFILE_DIRECTORY="Profile $1"
+fi
+
+# Execute the command with the determined profile and URL
+#/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --profile-directory="$PROFILE_DIRECTORY" "$URL"
+/Applications/Brave\ Browser.app/Contents/MacOS/Brave\ Browser  --profile-directory="$PROFILE_DIRECTORY" "$URL"

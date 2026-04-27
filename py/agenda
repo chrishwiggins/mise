@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import pickle
+from datetime import datetime, timedelta, time
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+import re
+
+TOKEN_FILE = os.path.expanduser("~/.config/gcal/token.pickle")
+
+
+def get_authenticated_service():
+    """Get authenticated Google Calendar service"""
+    if not os.path.exists(TOKEN_FILE):
+        print("❌ Not authenticated. Run: gcal-api-setup")
+        return None
+
+    with open(TOKEN_FILE, "rb") as token:
+        creds = pickle.load(token)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(TOKEN_FILE, "wb") as token:
+                pickle.dump(creds, token)
+        else:
+            print("❌ Invalid credentials. Run: gcal-api-setup")
+            return None
+
+    return build("calendar", "v3", credentials=creds)
+
+
+def parse_date(date_str):
+    """Parse various date formats into a datetime object"""
+    date_str = date_str.strip()
+
+    # Handle special keywords
+    if date_str.lower() == "today":
+        return datetime.now().date()
+    elif date_str.lower() == "tomorrow":
+        return (datetime.now() + timedelta(days=1)).date()
+    elif date_str.lower() == "yesterday":
+        return (datetime.now() - timedelta(days=1)).date()
+
+    # Try various date formats
+    formats = [
+        "%Y-%m-%d",  # 2025-09-24
+        "%Y/%m/%d",  # 2025/09/24
+        "%m/%d/%Y",  # 09/24/2025
+        "%m/%d/%y",  # 09/24/25
+        "%m-%d-%Y",  # 09-24-2025
+        "%m-%d-%y",  # 09-24-25
+        "%d/%m/%Y",  # 24/09/2025
+        "%d-%m-%Y",  # 24-09-2025
+        "%Y.%m.%d",  # 2025.09.24
+        "%m.%d.%Y",  # 09.24.2025
+        "%d.%m.%Y",  # 24.09.2025
+        "%B %d, %Y",  # September 24, 2025
+        "%b %d, %Y",  # Sep 24, 2025
+        "%B %d %Y",  # September 24 2025
+        "%b %d %Y",  # Sep 24 2025
+        "%d %B %Y",  # 24 September 2025
+        "%d %b %Y",  # 24 Sep 2025
+    ]
+
+    # Also handle formats with just month/day (assume current year)
+    year_optional_formats = [
+        "%m/%d",  # 09/24
+        "%m-%d",  # 09-24
+        "%d/%m",  # 24/09
+        "%d-%m",  # 24-09
+        "%B %d",  # September 24
+        "%b %d",  # Sep 24
+        "%d %B",  # 24 September
+        "%d %b",  # 24 Sep
+    ]
+
+    # First try with year
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+
+    # Try without year (use current year)
+    for fmt in year_optional_formats:
+        try:
+            parsed_date = datetime.strptime(date_str, fmt)
+            return parsed_date.replace(year=datetime.now().year).date()
+        except ValueError:
+            continue
+
+    # Handle typos in year (e.g., 245 instead of 2025, 2005 instead of 2025)
+    # Check if it looks like m/d/yyy or m-d-yyy pattern
+    patterns = [
+        r"^(\d{1,2})[/\-\.](\d{1,2})[/\-\.](\d{3,4})$",  # m/d/yyy or mm/dd/yyyy
+        r"^(\d{4})[/\-\.](\d{1,2})[/\-\.](\d{1,2})$",  # yyyy/m/d
+    ]
+
+    for pattern in patterns:
+        match = re.match(pattern, date_str)
+        if match:
+            if pattern.startswith(r"^(\d{1,2})"):
+                month, day, year = match.groups()
+            else:
+                year, month, day = match.groups()
+
+            # Fix common year typos
+            year = int(year)
+            if 0 <= year <= 99:
+                year += 2000
+            elif 100 <= year <= 999:
+                # Likely a typo, try to fix (e.g., 245 -> 2025)
+                year_str = str(year)
+                if year_str.startswith("2") and len(year_str) == 3:
+                    year = int("20" + year_str[1:])
+                else:
+                    year = 2000 + (year % 100)
+            elif 1900 <= year <= 2100:
+                pass  # Year seems reasonable
+            else:
+                # Year outside reasonable range, use current year
+                year = datetime.now().year
+
+            try:
+                return datetime(year, int(month), int(day)).date()
+            except ValueError:
+                continue
+
+    raise ValueError(f"Could not parse date: {date_str}")
+
+
+def get_events_for_day(target_date):
+    """Get all events for a specific day"""
+    service = get_authenticated_service()
+    if not service:
+        return []
+
+    # Set time boundaries for the day (in UTC)
+    start_of_day = datetime.combine(target_date, time.min)
+    end_of_day = datetime.combine(target_date, time.max)
+
+    # Convert to RFC3339 format with timezone
+    time_min = start_of_day.isoformat() + "Z"
+    time_max = end_of_day.isoformat() + "Z"
+
+    try:
+        events_result = (
+            service.events()
+            .list(
+                calendarId="primary",
+                timeMin=time_min,
+                timeMax=time_max,
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+        )
+
+        return events_result.get("items", [])
+    except Exception as e:
+        print(f"❌ Error fetching events: {e}")
+        return []
+
+
+def format_time(dt_str):
+    """Format time string for display"""
+    if "T" in dt_str:
+        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        return dt.strftime("%I:%M %p").lstrip("0")
+    return "All day"
+
+
+def display_events(events, target_date):
+    """Display events in a formatted way"""
+    if not events:
+        print(f"\n📅 No events scheduled for {target_date.strftime('%A, %B %d, %Y')}")
+        return
+
+    print(f"\n📅 Events for {target_date.strftime('%A, %B %d, %Y')}:")
+    print("=" * 60)
+
+    for event in events:
+        # Get event details
+        summary = event.get("summary", "No title")
+        location = event.get("location", "")
+        description = event.get("description", "")
+
+        # Get time
+        start = event["start"].get("dateTime", event["start"].get("date"))
+        end = event["end"].get("dateTime", event["end"].get("date"))
+
+        start_time = format_time(start)
+        end_time = format_time(end) if end else ""
+
+        # Get attendees
+        attendees = event.get("attendees", [])
+        confirmed_attendees = [
+            a.get("email", "")
+            for a in attendees
+            if a.get("responseStatus") != "declined"
+        ]
+
+        # Display event
+        print(f"\n🕐 {start_time}", end="")
+        if end_time and end_time != "All day" and start_time != "All day":
+            print(f" - {end_time}", end="")
+        print()
+
+        print(f"📝 {summary}")
+
+        if location:
+            print(f"📍 {location}")
+
+        if confirmed_attendees:
+            print(
+                f"👥 {len(confirmed_attendees)} attendee(s): {', '.join(confirmed_attendees[:3])}",
+                end="",
+            )
+            if len(confirmed_attendees) > 3:
+                print(f" and {len(confirmed_attendees) - 3} more", end="")
+            print()
+
+        if description:
+            # Show first 100 chars of description
+            desc_preview = description[:100]
+            if len(description) > 100:
+                desc_preview += "..."
+            print(f"📄 {desc_preview}")
+
+        # Check for video conference
+        if event.get("conferenceData"):
+            entry_points = event["conferenceData"].get("entryPoints", [])
+            for entry_point in entry_points:
+                if entry_point.get("entryPointType") == "video":
+                    print(f"📹 {entry_point.get('uri', 'Video conference')}")
+                    break
+
+        # Show event link
+        if event.get("htmlLink"):
+            print(f"🔗 {event['htmlLink']}")
+
+        print("-" * 60)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(
+            """
+Usage: agenda <date>
+
+Date formats supported:
+  - today, tomorrow, yesterday
+  - 2025-09-24
+  - 09/24/2025 or 9/24/2025
+  - 09/24/25 or 9/24/25
+  - 09-24-2025 or 9-24-2025
+  - 24/09/2025 (day/month/year)
+  - September 24, 2025
+  - Sep 24, 2025
+  - 09/24 or 9/24 (current year assumed)
+  - Sep 24 (current year assumed)
+  
+Examples:
+  agenda today
+  agenda tomorrow
+  agenda 9/24/2025
+  agenda 2025-09-24
+  agenda "September 24, 2025"
+  agenda 9/24
+"""
+        )
+        sys.exit(1)
+
+    # Join all arguments as the date string (in case of spaces)
+    date_input = " ".join(sys.argv[1:])
+
+    try:
+        target_date = parse_date(date_input)
+        events = get_events_for_day(target_date)
+        display_events(events, target_date)
+    except ValueError as e:
+        print(f"❌ Error: {e}")
+        print(
+            "Please use a valid date format. Run 'agenda' without arguments for examples."
+        )
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

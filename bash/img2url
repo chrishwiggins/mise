@@ -1,0 +1,68 @@
+#!/bin/bash
+
+# Usage: ./img2url.sh <image_file>
+# Uploads image to GitHub repo and returns public URL
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <image_file>"
+    exit 1
+fi
+
+IMAGE_FILE="$1"
+if [ ! -f "$IMAGE_FILE" ]; then
+    echo "Error: File '$IMAGE_FILE' not found"
+    exit 1
+fi
+
+# Configuration (modify these for your repo)
+REPO="apma4903/day1"
+BRANCH="main"
+DEST_PATH="src/survey-parse/images/$(basename "$IMAGE_FILE")"
+
+# Check if file exists and get its SHA
+echo "Checking if $(basename "$IMAGE_FILE") exists..." >&2
+EXISTING_SHA=$(gh api "/repos/$REPO/contents/$DEST_PATH" 2>/dev/null | jq -r '.sha // empty')
+
+# Upload to GitHub
+echo "Uploading $(basename "$IMAGE_FILE") to GitHub..." >&2
+
+if [ -n "$EXISTING_SHA" ]; then
+    # File exists, update it
+    echo "File exists, updating..." >&2
+    RESPONSE=$(base64 -i "$IMAGE_FILE" | gh api --method PUT \
+        "/repos/$REPO/contents/$DEST_PATH" \
+        --field message="Update $(basename "$IMAGE_FILE")" \
+        --field sha="$EXISTING_SHA" \
+        --field content=@-)
+else
+    # New file
+    echo "Creating new file..." >&2
+    RESPONSE=$(base64 -i "$IMAGE_FILE" | gh api --method PUT \
+        "/repos/$REPO/contents/$DEST_PATH" \
+        --field message="Add $(basename "$IMAGE_FILE")" \
+        --field content=@-)
+fi
+
+# Extract and return the raw URL
+if [ $? -eq 0 ]; then
+    URL="https://raw.githubusercontent.com/$REPO/$BRANCH/$DEST_PATH"
+    
+    # Wait for GitHub to propagate the file
+    echo "Waiting for GitHub to propagate..." >&2
+    for i in {1..10}; do
+        if curl -s -f "$URL" > /dev/null 2>&1; then
+            echo "✅ File ready!" >&2
+            break
+        fi
+        sleep 1
+        echo -n "." >&2
+    done
+    echo "" >&2
+    
+    # Return just the URL (clean output for piping/copying)
+    echo "$URL"
+else
+    echo "Upload failed. Response was:" >&2
+    echo "$RESPONSE" >&2
+    exit 1
+fi

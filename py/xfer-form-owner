@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""
+Google Form Ownership Transfer Script
+
+This script transfers ownership of a Google Form to a specified email address.
+
+Requirements:
+    - Google Cloud project with Drive API enabled
+    - Service account credentials (credentials.json) with Drive API access
+    - Required Python packages: google-api-python-client, google-auth
+
+Usage:
+    python xfer-form-owner <form_id> <new_owner_email>
+
+Example:
+    python xfer-form-owner 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms chris.wiggins@gmail.com
+
+Author: Generated for form ownership transfer
+Date: October 2025
+"""
+
+import argparse
+import sys
+from pathlib import Path
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+from google.auth.exceptions import GoogleAuthError
+import re
+
+
+def validate_email(email: str) -> str:
+    """
+    Validate email format.
+    """
+    email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    if not re.match(email_pattern, email):
+        raise argparse.ArgumentTypeError(f"'{email}' is not a valid email address")
+    return email
+
+
+def validate_form_id(form_input: str) -> str:
+    """
+    Extract and validate Google Form ID from either a form ID or full URL.
+
+    Accepts:
+    - Direct form ID: 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms
+    - Edit URL: https://docs.google.com/forms/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit
+    - View URL: https://docs.google.com/forms/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/viewform
+    """
+    if not form_input:
+        raise argparse.ArgumentTypeError("Form ID or URL cannot be empty")
+
+    # Check if it's a URL and extract form ID
+    if form_input.startswith("https://docs.google.com/forms/d/"):
+        # Extract form ID from URL pattern: /forms/d/{form_id}/...
+        url_pattern = r"https://docs\.google\.com/forms/d/([a-zA-Z0-9-_]+)"
+        match = re.match(url_pattern, form_input)
+        if match:
+            form_id = match.group(1)
+        else:
+            raise argparse.ArgumentTypeError(
+                f"Could not extract form ID from URL: {form_input}"
+            )
+    else:
+        # Assume it's already a form ID
+        form_id = form_input.strip()
+
+    # Validate the extracted/provided form ID
+    if not form_id or len(form_id) < 10:
+        raise argparse.ArgumentTypeError(
+            f"'{form_id}' does not appear to be a valid Google Form ID"
+        )
+
+    # Basic format check - Google IDs are typically alphanumeric with some special chars
+    if not re.match(r"^[a-zA-Z0-9-_]+$", form_id):
+        raise argparse.ArgumentTypeError(
+            f"'{form_id}' contains invalid characters for a Google Form ID"
+        )
+
+    return form_id
+
+
+def transfer_form_ownership(
+    form_id: str, new_owner_email: str, credentials_file: str = "credentials.json"
+) -> None:
+    """
+    Transfers ownership of a Google Form to the specified email address.
+
+    Args:
+        form_id (str): The Google Form ID
+        new_owner_email (str): Email address of the new owner
+        credentials_file (str): Path to the credentials.json file
+    """
+    try:
+        # Verify credentials file exists
+        creds_path = Path(credentials_file)
+        if not creds_path.exists():
+            print("\n" + "=" * 60)
+            print(f"ERROR: Missing required file: {credentials_file}")
+            print("=" * 60)
+            print("\nREQUIRED FILES FOR THIS SCRIPT:")
+            print("  1. Service account credentials file")
+            print("\nSETUP INSTRUCTIONS:")
+            print("  1. Go to https://console.cloud.google.com")
+            print("  2. Create/select a project")
+            print("  3. Enable: Google Drive API")
+            print("  4. Create service account & download credentials file")
+            print("  5. Use -c flag to specify credentials file location")
+            print("=" * 60)
+            sys.exit(1)
+
+        # Define required API scopes
+        SCOPES = [
+            "https://www.googleapis.com/auth/drive",
+        ]
+
+        try:
+            creds = service_account.Credentials.from_service_account_file(
+                str(creds_path), scopes=SCOPES
+            )
+        except GoogleAuthError as e:
+            print(f"Error with credentials: {e}")
+            sys.exit(1)
+
+        # Initialize Drive API client
+        try:
+            drive_service = build("drive", "v3", credentials=creds)
+        except Exception as e:
+            print(f"Error connecting to Google Drive API: {e}")
+            sys.exit(1)
+
+        # Verify the form exists and we have access
+        print(f"Verifying form access...", end="", flush=True)
+        try:
+            file_info = drive_service.files().get(fileId=form_id).execute()
+            print(" done")
+            print(f"Form title: {file_info.get('name', 'Unknown')}")
+        except Exception as e:
+            print(f"\nError: Could not access form {form_id}")
+            print(f"Details: {e}")
+            sys.exit(1)
+
+        # Try to transfer ownership first, fall back to editor access if consent required
+        print(
+            f"Attempting to transfer ownership to {new_owner_email}...",
+            end="",
+            flush=True,
+        )
+        ownership_transferred = False
+        try:
+            permission = {
+                "type": "user",
+                "role": "owner",
+                "emailAddress": new_owner_email,
+            }
+            drive_service.permissions().create(
+                fileId=form_id, body=permission, transferOwnership=True
+            ).execute()
+            print(" done")
+            ownership_transferred = True
+        except Exception as e:
+            if "consentRequiredForOwnershipTransfer" in str(e):
+                print(" consent required")
+                print(
+                    f"Granting editor access to {new_owner_email}...",
+                    end="",
+                    flush=True,
+                )
+                try:
+                    permission = {
+                        "type": "user",
+                        "role": "writer",
+                        "emailAddress": new_owner_email,
+                    }
+                    drive_service.permissions().create(
+                        fileId=form_id, body=permission
+                    ).execute()
+                    print(" done")
+                except Exception as e2:
+                    print(f"\nError granting access: {e2}")
+                    sys.exit(1)
+            else:
+                print(f"\nError transferring ownership: {e}")
+                sys.exit(1)
+
+        # Success output
+        if ownership_transferred:
+            print(f"\nOwnership transfer completed successfully!")
+            print(f"Form ID: {form_id}")
+            print(f"New owner: {new_owner_email}")
+        else:
+            print(f"\nEditor access granted successfully!")
+            print(f"Form ID: {form_id}")
+            print(f"Editor: {new_owner_email}")
+            print(
+                f"Note: Full ownership transfer requires consent from {new_owner_email}"
+            )
+        print(f"\nForm URL: https://docs.google.com/forms/d/{form_id}/edit")
+
+    except KeyboardInterrupt:
+        print("\nOperation cancelled by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        sys.exit(1)
+
+
+def main() -> None:
+    """
+    Main function to handle command-line arguments and execute ownership transfer.
+    """
+    parser = argparse.ArgumentParser(
+        description="Transfer ownership of a Google Form to a specified email address.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+REQUIRED FILES:
+  credentials.json  - Service account credentials from Google Cloud Console
+
+SETUP INSTRUCTIONS:
+  1. Create a Google Cloud project
+  2. Enable Google Drive API
+  3. Create a service account and download credentials.json
+  4. Place credentials.json in the same directory as this script
+
+Examples:
+  python xfer-form-owner 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms chris.wiggins@gmail.com
+  python xfer-form-owner https://docs.google.com/forms/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit chris.wiggins@gmail.com
+  python xfer-form-owner FORM_ID chris.wiggins@gmail.com /path/to/service-account.json
+        """,
+    )
+
+    parser.add_argument(
+        "form_id",
+        type=validate_form_id,
+        help="Google Form ID or full URL (e.g., https://docs.google.com/forms/d/FORM_ID/edit)",
+    )
+    parser.add_argument(
+        "new_owner_email", type=validate_email, help="Email address of the new owner"
+    )
+    parser.add_argument(
+        "credentials",
+        nargs="?",
+        default="credentials.json",
+        help="Path to the service account credentials file (default: credentials.json)",
+    )
+
+    args = parser.parse_args()
+    transfer_form_ownership(args.form_id, args.new_owner_email, args.credentials)
+
+
+if __name__ == "__main__":
+    main()

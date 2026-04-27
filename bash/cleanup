@@ -1,0 +1,173 @@
+#!/bin/bash
+# cleanup - Clean up messy text (typos, speech-to-text errors) via Claude
+# Usage: cat file.txt | cleanup [-s|-m|-l] [-f] [-d] > cleaned.txt
+#        echo "messy text" | cleanup
+#   -s  Use haiku (small/fast, default)
+#   -m  Use sonnet (medium)
+#   -l  Use opus (large)
+#   -f  Make tone one notch more formal
+#   -d  Debug: show raw model output to stderr
+# Text before "====" is cleaned; text after is context only (not in output)
+
+model="haiku"
+formalize=false
+debug=false
+
+while getopts "smlfd" opt; do
+    case $opt in
+        s) model="haiku" ;;
+        m) model="sonnet" ;;
+        l) model="opus" ;;
+        f) formalize=true ;;
+        d) debug=true ;;
+        *) echo "Usage: cleanup [-s|-m|-l] [-f] [-d] (pipe text in)" >&2; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+input=$(cat)
+
+if [ -z "$input" ]; then
+    echo "Error: No input provided" >&2
+    exit 1
+fi
+
+# Split on "====" - only pass text before separator to Claude
+text_to_clean="${input%%====*}"
+context=""
+if [ "$input" != "$text_to_clean" ]; then
+    context="${input#*====}"
+fi
+
+# Build tone instruction
+if [ "$formalize" = true ]; then
+    tone_instruction="- Shift tone ONE NOTCH more formal than the input (e.g., casual->conversational, conversational->professional, professional->formal). Do not over-formalize."
+else
+    tone_instruction="- Original tone (don't make casual text formal or vice versa)"
+fi
+
+# Build prompt
+prompt="Clean up the following text for sending to another person.
+
+Fix:
+- Typos and spelling errors
+- Speech-to-text errors (homonyms, misheard technical terms)
+- Run-on sentences, missing punctuation
+- Unclear phrasing
+
+Preserve:
+- Original meaning and intent
+$tone_instruction
+- Keep it concise
+
+Technical vocabulary context: computer science, programming, mathematics, physics, philosophy. Common speech-to-text substitutions: cash->cache, sequel->SQL, jason->JSON, get hub->GitHub, a sink->async, pie->Pi/py, no->node, bite->byte.
+
+IMPORTANT: Output ONLY the cleaned text, not the quoted thread below it. No preamble, no explanation, no commentary. Do not start with phrases like 'Here is' or 'Here's'. Just the cleaned text itself, nothing else.
+
+Text to clean:
+$text_to_clean"
+
+if [ -n "$context" ]; then
+    prompt="$prompt
+
+Context (do NOT include in output, just use to inform cleanup):
+$context"
+fi
+
+# Unset parent IDE / Agent detection vars
+for var in $(env | grep -oE '^(CLAUDE|VSCODE)[A-Z_]*'); do unset "$var"; done
+unset ELECTRON_RUN_AS_NODE OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE GIT_EDITOR
+
+# Model fallback chain: try requested model, then escalate
+case "$model" in
+    haiku)  fallbacks="sonnet opus" ;;
+    sonnet) fallbacks="opus" ;;
+    opus)   fallbacks="" ;;
+esac
+
+try_model="$model"
+while true; do
+    raw_output=$(cd /tmp && "${HOME}/.local/bin/claude" --model "$try_model" -p "$prompt" < /dev/null 2>/tmp/cleanup-err-$$)
+    claude_exit=$?
+    stderr_output=$(cat /tmp/cleanup-err-$$ 2>/dev/null)
+    rm -f /tmp/cleanup-err-$$
+
+    # If we got usable output, break
+    if [ $claude_exit -eq 0 ] && [ -n "$(echo "$raw_output" | tr -d '[:space:]')" ]; then
+        break
+    fi
+
+    # Try next model in fallback chain
+    next_model=$(echo "$fallbacks" | awk '{print $1}')
+    fallbacks=$(echo "$fallbacks" | awk '{$1=""; print}' | sed 's/^ //')
+
+    if [ -z "$next_model" ]; then
+        break
+    fi
+
+    if [ "$debug" = true ]; then
+        echo "=== $try_model returned empty, falling back to $next_model ===" >&2
+        [ -n "$stderr_output" ] && echo "stderr: $stderr_output" >&2
+    fi
+    try_model="$next_model"
+done
+
+if [ "$debug" = true ]; then
+    echo "=== CLAUDE EXIT CODE: $claude_exit ===" >&2
+    echo "=== RAW MODEL OUTPUT ===" >&2
+    echo "$raw_output" >&2
+    echo "=== END RAW ===" >&2
+    [ -n "$stderr_output" ] && echo "=== STDERR: $stderr_output ===" >&2
+fi
+
+if [ $claude_exit -ne 0 ]; then
+    echo "cleanup: claude exited with code $claude_exit" >&2
+    [ -n "$stderr_output" ] && echo "stderr: $stderr_output" >&2
+    exit 1
+fi
+
+# Strip model wrapper artifacts:
+# 1. Delimiters (<<<PBCLEAN_START>>>/<<<PBCLEAN_END>>>)
+# 2. Markdown code fences
+# 3. Leading "Here is/Here's..." preamble line
+# 4. Use raw output as-is
+
+extract_between_delimiters() {
+    echo "$1" | awk '/<<<PBCLEAN_START>>>/{found=1; next} /<<<PBCLEAN_END>>>/{found=0} found'
+}
+
+extract_from_code_fence() {
+    echo "$1" | awk '/^```/{if(found){found=0; next} else {found=1; next}} found'
+}
+
+strip_preamble() {
+    echo "$1" | sed '/./,$!d' | awk '
+        NR==1 && /^[Hh]ere[ '"'"'"]s? (the|your|is|are)/ { next }
+        { print }
+    '
+}
+
+cleaned=$(extract_between_delimiters "$raw_output")
+
+if [ -z "$cleaned" ]; then
+    cleaned=$(extract_from_code_fence "$raw_output")
+fi
+
+if [ -z "$cleaned" ]; then
+    cleaned=$(strip_preamble "$raw_output")
+fi
+
+if [ -z "$cleaned" ]; then
+    echo "cleanup: could not extract cleaned text from model output" >&2
+    [ -n "$raw_output" ] && echo "Raw output: $raw_output" >&2
+    exit 1
+fi
+
+# Strip leading/trailing blank lines (BSD sed compatible)
+cleaned=$(echo "$cleaned" | sed '/./,$!d' | awk '
+    { lines[NR]=$0 }
+    END { for(i=NR;i>=1;i--) if(lines[i]!="") { last=i; break }
+          for(i=1;i<=last;i++) print lines[i] }
+')
+
+echo "$cleaned"

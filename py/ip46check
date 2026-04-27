@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""
+ip46check - Diagnose IPv4 vs IPv6 connectivity issues.
+
+Tests connectivity over both protocols and provides diagnosis
+and remediation steps for common failure patterns.
+"""
+
+import subprocess
+import sys
+
+# Sites with good IPv6 support (test both protocols)
+DUAL_STACK_SITES = [
+    "https://google.com",
+    "https://cloudflare.com",
+]
+
+# Sites that are IPv4-only or commonly fail with IPv6 issues
+IPV4_ONLY_SITES = [
+    "https://americanexpress.com",
+    "https://x.com",
+]
+
+TIMEOUT = 8
+
+
+def curl_test(url: str, ipv_flag: str) -> tuple[bool, str]:
+    """Test URL with curl using -4 or -6 flag. Returns (success, detail)."""
+    try:
+        result = subprocess.run(
+            [
+                "curl", ipv_flag, "-s", "-o", "/dev/null",
+                "-w", "%{http_code}|%{remote_ip}|%{time_total}",
+                "--max-time", str(TIMEOUT),
+                url
+            ],
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT + 2
+        )
+        parts = result.stdout.strip().split("|")
+        if len(parts) == 3:
+            code, ip, time = parts
+            if code and code != "000":
+                return True, f"{ip} ({float(time):.2f}s)"
+            else:
+                return False, "timeout/no-route"
+        return False, "parse-error"
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except Exception as e:
+        return False, str(e)
+
+
+def test_site(url: str) -> dict:
+    """Test a site over both IPv4 and IPv6."""
+    v4_ok, v4_detail = curl_test(url, "-4")
+    v6_ok, v6_detail = curl_test(url, "-6")
+    return {"url": url, "v4": (v4_ok, v4_detail), "v6": (v6_ok, v6_detail)}
+
+
+def print_results(results: list[dict]) -> tuple[bool, bool]:
+    """Print results table and return (any_v4_ok, any_v6_ok)."""
+    any_v4 = False
+    any_v6 = False
+
+    for r in results:
+        host = r["url"].replace("https://", "")
+        v4_ok, v4_detail = r["v4"]
+        v6_ok, v6_detail = r["v6"]
+
+        any_v4 = any_v4 or v4_ok
+        any_v6 = any_v6 or v6_ok
+
+        v4_str = f"OK  {v4_detail}" if v4_ok else f"FAIL  {v4_detail}"
+        v6_str = f"OK  {v6_detail}" if v6_ok else f"FAIL  {v6_detail}"
+
+        print(f"{host}:")
+        print(f"  IPv4: {v4_str}")
+        print(f"  IPv6: {v6_str}")
+        print()
+
+    return any_v4, any_v6
+
+
+PRESCRIPTIONS = {
+    "ipv4_down_ipv6_up": """
+DIAGNOSIS: IPv4 is DOWN, IPv6 is UP
+
+SYMPTOMS:
+  - Google, YouTube, Cloudflare work (they have IPv6)
+  - Many other sites fail (AmEx, banks, older sites)
+  - "Some sites work, some don't"
+
+CAUSE:
+  Your router/modem's IPv4 WAN connection is down while IPv6 continues
+  to work. This is typically a modem or ISP issue, not your device.
+
+FIX (in order):
+  1. Reboot your MODEM (the ISP box, not your router/mesh)
+     - Unplug power, wait 30 seconds, plug back in
+     - Wait 2-3 minutes for full reconnection
+
+  2. If modem + router are separate, also reboot the router after modem is up
+
+  3. Check modem admin page (often 192.168.1.1 or 192.168.100.1)
+     - Look for WAN/Internet status
+     - IPv4 address should NOT be 0.0.0.0 or missing
+
+  4. If still broken, call your ISP
+     - Tell them: "IPv6 works but IPv4 is not routing"
+     - They may need to reset your connection on their end
+
+WORKAROUND (temporary):
+  Use phone tethering for IPv4-only sites until fixed.
+""",
+
+    "ipv6_down_ipv4_up": """
+DIAGNOSIS: IPv4 is UP, IPv6 is DOWN
+
+SYMPTOMS:
+  - Most sites work fine
+  - Occasional slowness on sites that prefer IPv6
+
+CAUSE:
+  IPv6 is not available or misconfigured. This is common and usually fine.
+
+FIX (usually not needed):
+  - Many networks are IPv4-only; this is normal
+  - If you need IPv6: check router settings, ensure IPv6 is enabled
+  - Some ISPs don't provide IPv6 yet
+
+STATUS: Usually not a problem. Most sites work fine over IPv4.
+""",
+
+    "both_down": """
+DIAGNOSIS: Both IPv4 and IPv6 are DOWN
+
+SYMPTOMS:
+  - No websites load at all
+  - Complete internet outage
+
+CAUSE:
+  No internet connectivity. Could be:
+  - WiFi connected but no internet (captive portal?)
+  - Modem/router is down
+  - ISP outage
+  - Cable/fiber physically disconnected
+
+FIX (in order):
+  1. Check if connected to correct WiFi network
+  2. Check for captive portal (try http://example.com)
+  3. Reboot modem and router
+  4. Check physical connections (cables, lights on modem)
+  5. Try a different network (phone tethering) to verify device is OK
+  6. Call ISP if outage persists
+""",
+
+    "both_up": """
+DIAGNOSIS: Both IPv4 and IPv6 are UP
+
+Network connectivity is normal. If you're still having issues with
+specific sites, the problem is likely:
+  - DNS issues (try: networksetup -setdnsservers Wi-Fi 8.8.8.8 1.1.1.1)
+  - Site-specific outage
+  - Firewall/VPN blocking
+  - Browser cache (try incognito mode)
+"""
+}
+
+
+def main():
+    print("ip46check - Testing IPv4 vs IPv6 connectivity\n")
+    print("=" * 50)
+
+    all_results = []
+
+    print("\nDual-stack sites (have both IPv4 and IPv6):")
+    print("-" * 50)
+    for url in DUAL_STACK_SITES:
+        all_results.append(test_site(url))
+
+    print("\nIPv4-primary sites (commonly fail when IPv4 is down):")
+    print("-" * 50)
+    for url in IPV4_ONLY_SITES:
+        all_results.append(test_site(url))
+
+    print()
+    any_v4, any_v6 = print_results(all_results)
+
+    print("=" * 50)
+
+    if not any_v4 and any_v6:
+        print(PRESCRIPTIONS["ipv4_down_ipv6_up"])
+        sys.exit(1)
+    elif any_v4 and not any_v6:
+        print(PRESCRIPTIONS["ipv6_down_ipv4_up"])
+        sys.exit(0)
+    elif not any_v4 and not any_v6:
+        print(PRESCRIPTIONS["both_down"])
+        sys.exit(2)
+    else:
+        print(PRESCRIPTIONS["both_up"])
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

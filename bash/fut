@@ -1,0 +1,12 @@
+#!/bin/bash
+
+if [ $# -lt 2 ]; then
+    echo "Usage: fut <timespec> <message>" >&2
+    exit 1
+fi
+
+timespec="$1"
+shift
+message="$*"
+
+echo "$message" | mutt -s "$message" "${timespec}@followupthen.com"

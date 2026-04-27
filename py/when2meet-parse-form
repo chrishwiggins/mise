@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""
+When2Meet Form Responses Parser
+
+Directly accesses Google Forms responses and analyzes availability.
+
+Usage:
+    python when2meet-parse-form <form_id_or_url>
+"""
+
+import sys
+import re
+import os
+import pickle
+from collections import Counter, defaultdict
+from typing import List, Dict
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+
+
+def get_credentials():
+    """Get OAuth credentials for Forms API."""
+    SCOPES = [
+        "https://www.googleapis.com/auth/forms.responses.readonly",
+        "https://www.googleapis.com/auth/forms.body.readonly",
+    ]
+
+    # Use existing token if available
+    token_path = "token_forms.pickle"
+    creds_path = "credentials.json"
+
+    # Check alternate locations
+    if not os.path.exists(creds_path):
+        alt_path = os.path.expanduser("~/.0/credentials.json")
+        if os.path.exists(alt_path):
+            creds_path = alt_path
+        else:
+            print("Error: credentials.json not found")
+            sys.exit(1)
+
+    creds = None
+
+    if os.path.exists(token_path):
+        with open(token_path, "rb") as token:
+            creds = pickle.load(token)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
+            creds = flow.run_local_server(port=8080, open_browser=True)
+
+        with open(token_path, "wb") as token:
+            pickle.dump(creds, token)
+
+    return creds
+
+
+def extract_form_id(input_string):
+    """Extract Google Form ID from URL or return if already an ID."""
+    input_string = input_string.strip()
+
+    if input_string.startswith("https://"):
+        match = re.search(r"/forms/d/([a-zA-Z0-9-_]+)", input_string)
+        if match:
+            return match.group(1)
+        raise ValueError(f"Could not extract form ID from URL: {input_string}")
+
+    return input_string
+
+
+def parse_time_slots(slots_list: List[str]) -> List[str]:
+    """Parse time slots from a list of checkbox responses."""
+    return [slot.strip() for slot in slots_list if slot.strip()]
+
+
+def analyze_availability(responses_data: List[Dict]) -> Dict:
+    """Analyze availability from form responses."""
+    slot_counter = Counter()
+    person_slots = {}
+    all_people = []
+
+    for response in responses_data:
+        name = response.get("name", "Anonymous")
+        if not name:
+            continue
+
+        all_people.append(name)
+        slots = response.get("slots", [])
+        person_slots[name] = slots
+
+        for slot in slots:
+            slot_counter[slot] += 1
+
+    # Group by availability count
+    availability_groups = defaultdict(list)
+    for slot, count in slot_counter.items():
+        availability_groups[count].append(slot)
+
+    # Sort slots
+    def sort_slot_key(slot):
+        parts = slot.lower().split()
+        day_order = {
+            "mon": 0,
+            "tue": 1,
+            "wed": 2,
+            "thu": 3,
+            "fri": 4,
+            "sat": 5,
+            "sun": 6,
+        }
+
+        day_val = 7
+        for day, val in day_order.items():
+            if day in slot.lower():
+                day_val = val
+                break
+
+        time_match = re.search(r"(\d{2}):(\d{2})", slot)
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2))
+            time_val = hour * 60 + minute
+        else:
+            time_val = 0
+
+        return (day_val, time_val)
+
+    for count in availability_groups:
+        availability_groups[count].sort(key=sort_slot_key)
+
+    return {
+        "total_respondents": len(all_people),
+        "respondents": all_people,
+        "slot_counts": slot_counter,
+        "availability_groups": dict(availability_groups),
+        "person_slots": person_slots,
+    }
+
+
+def print_analysis(analysis: Dict):
+    """Print formatted analysis results."""
+    print("\n" + "=" * 70)
+    print("WHEN2MEET FORM ANALYSIS RESULTS")
+    print("=" * 70)
+
+    print(f"\nTotal respondents: {analysis['total_respondents']}")
+    print("\nRespondents:")
+    for name in analysis["respondents"]:
+        print(f"  • {name}")
+
+    print("\n" + "-" * 70)
+    print("TIME SLOT AVAILABILITY")
+    print("-" * 70)
+
+    groups = analysis["availability_groups"]
+    for count in sorted(groups.keys(), reverse=True):
+        slots = groups[count]
+
+        if count == analysis["total_respondents"]:
+            print(
+                f"\n🌟 EVERYONE IS AVAILABLE ({count}/{analysis['total_respondents']} people):"
+            )
+        elif count >= analysis["total_respondents"] * 0.75:
+            print(
+                f"\n✅ HIGH AVAILABILITY ({count}/{analysis['total_respondents']} people):"
+            )
+        elif count >= analysis["total_respondents"] * 0.5:
+            print(
+                f"\n🔵 MODERATE AVAILABILITY ({count}/{analysis['total_respondents']} people):"
+            )
+        else:
+            print(
+                f"\n⚪ LOW AVAILABILITY ({count}/{analysis['total_respondents']} people):"
+            )
+
+        for slot in slots:
+            available_people = [
+                name
+                for name, person_slots in analysis["person_slots"].items()
+                if slot in person_slots
+            ]
+            people_str = ", ".join(available_people)
+            print(f"  • {slot}")
+            print(f"    Available: {people_str}")
+
+    print("\n" + "=" * 70)
+    print("TOP RECOMMENDATIONS")
+    print("=" * 70)
+
+    if groups:
+        max_count = max(groups.keys())
+        top_slots = groups[max_count][:5]
+
+        print(
+            f"\nBest time slots with {max_count}/{analysis['total_respondents']} people available:"
+        )
+        for slot in top_slots:
+            print(f"  ★ {slot}")
+
+
+def get_form_responses(form_id: str):
+    """Get responses from a Google Form."""
+    creds = get_credentials()
+    forms_service = build("forms", "v1", credentials=creds)
+
+    try:
+        # Get form structure
+        form = forms_service.forms().get(formId=form_id).execute()
+
+        # Get form responses
+        responses = forms_service.forms().responses().list(formId=form_id).execute()
+
+        if not responses.get("responses"):
+            print("No responses found for this form")
+            return []
+
+        # Find question IDs for name and time slots
+        name_question_id = None
+        slots_question_id = None
+
+        for item in form.get("items", []):
+            title = item.get("title", "").lower()
+            if "name" in title:
+                name_question_id = item["questionItem"]["question"]["questionId"]
+            elif "time" in title or "slot" in title or "available" in title:
+                slots_question_id = item["questionItem"]["question"]["questionId"]
+
+        # Parse responses
+        parsed_responses = []
+        for response in responses["responses"]:
+            answers = response.get("answers", {})
+
+            # Get name
+            name = "Anonymous"
+            if name_question_id and name_question_id in answers:
+                text_answers = answers[name_question_id].get("textAnswers", {})
+                if text_answers and "answers" in text_answers:
+                    name = text_answers["answers"][0]["value"]
+
+            # Get time slots
+            slots = []
+            if slots_question_id and slots_question_id in answers:
+                text_answers = answers[slots_question_id].get("textAnswers", {})
+                if text_answers and "answers" in text_answers:
+                    for answer in text_answers["answers"]:
+                        slots.append(answer["value"])
+
+            parsed_responses.append({"name": name, "slots": slots})
+
+        return parsed_responses
+
+    except Exception as e:
+        print(f"Error accessing form: {e}")
+        print("\nNote: Make sure you have access to view form responses.")
+        print(
+            "If this is not your form, you may need to request access from the owner."
+        )
+        return []
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python when2meet-parse-form <form_id_or_url>")
+        sys.exit(1)
+
+    form_input = sys.argv[1]
+    form_id = extract_form_id(form_input)
+
+    print(f"Accessing form: {form_id}")
+    responses = get_form_responses(form_id)
+
+    if not responses:
+        print("No data to analyze")
+        return
+
+    print(f"Found {len(responses)} responses")
+    analysis = analyze_availability(responses)
+    print_analysis(analysis)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,40 @@
+from googleapiclient.discovery import build
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.credentials import Credentials  # Add this line
+
+import os
+
+# Define the scope
+SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+# Authenticate the user
+creds = None
+if os.path.exists("token.json"):
+    creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+if not creds or not creds.valid:
+    flow = InstalledAppFlow.from_client_secrets_file("credentials.json", SCOPES)
+    creds = flow.run_local_server(port=0)
+    with open("token.json", "w") as token:
+        token.write(creds.to_json())
+
+# Build the Drive API service
+service = build("drive", "v3", credentials=creds)
+
+# Specify the folder ID
+folder_id = "1Rrlplxdio7LFZS85jmujDiepi8VvkYQg"
+
+# Call the files.list method
+results = (
+    service.files()
+    .list(q=f"'{folder_id}' in parents", fields="files(id, name, webViewLink)")
+    .execute()
+)
+
+# Get the list of files
+files = results.get("files", [])
+
+# Print file IDs and names
+for file in files:
+    print(
+        f"File Name: {file['name']}, File ID: {file['id']}, File URL: {file['webViewLink']}"
+    )
