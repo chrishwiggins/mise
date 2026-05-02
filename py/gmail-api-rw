@@ -67,7 +67,7 @@ def _import_heavy_modules():
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
         from email.utils import formataddr, formatdate, getaddresses, make_msgid, parseaddr, parsedate_to_datetime
-        
+
         _lazy_modules['heavy'] = {
             'base64': base64,
             'configparser': configparser,
@@ -98,7 +98,7 @@ def _import_google_modules():
         from google_auth import get_credentials
         from googleapiclient.discovery import build
         from googleapiclient.errors import HttpError
-        
+
         _lazy_modules['google'] = {
             'get_credentials': get_credentials,
             'build': build,
@@ -318,14 +318,15 @@ def parse_recipient(to_header):
 
 
 def parse_date(date_header):
-    """Parse email Date header to YYYY-MM-DD string."""
+    """Parse email Date header to DoW YYYY-MM-DD string."""
     if not date_header:
-        return "          "
+        return "               "
     try:
         dt = parsedate_to_datetime(date_header)
-        return dt.strftime("%Y-%m-%d")
+        dow = dt.strftime("%a")  # Mon, Tue, Wed, etc.
+        return dt.strftime(f"{dow} %Y-%m-%d")
     except Exception:
-        return date_header[:10]
+        return date_header[:15]
 
 
 def get_header(headers, name):
@@ -345,6 +346,8 @@ def _count_attachments_payload(payload):
         if "parts" in part:
             count += _count_attachments_payload(part)
     return count
+
+
 
 
 def sanitize_filename(s, max_len=60):
@@ -481,6 +484,79 @@ def save_attachments(raw_bytes, output_dir):
             saved.append(att_path)
 
     return saved
+
+
+def open_attachments_interactively(raw_bytes):
+    """Extract attachments and present interactive menu to open them."""
+    import subprocess
+    import tempfile
+
+    # Create attachments directory
+    att_dir = Path("/tmp/spool/attachments")
+    att_dir.mkdir(parents=True, exist_ok=True)
+
+    # Extract attachments
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    attachments = []
+
+    for part in msg.walk():
+        disp = part.get("Content-Disposition", "")
+        if "attachment" not in disp:
+            continue
+
+        filename = part.get_filename()
+        if not filename:
+            filename = f"attachment-{len(attachments) + 1}.bin"
+
+        payload = part.get_payload(decode=True)
+        if payload:
+            # Save to attachments directory
+            att_path = att_dir / filename
+            att_path.write_bytes(payload)
+            attachments.append((filename, att_path))
+
+    if not attachments:
+        print("No attachments found in this message.", file=sys.stderr)
+        return
+
+    # Interactive menu
+    print(f"\n📎 Found {len(attachments)} attachment(s):", file=sys.stderr)
+    for i, (filename, _) in enumerate(attachments, 1):
+        print(f"  {i}. {filename}", file=sys.stderr)
+
+    print("\nOptions:", file=sys.stderr)
+    print("  [1-9] Open specific attachment", file=sys.stderr)
+    print("  [a] Open all attachments", file=sys.stderr)
+    print("  [l] List attachments and exit", file=sys.stderr)
+    print("  [q] Quit without opening", file=sys.stderr)
+
+    try:
+        choice = input("\nChoice: ").strip().lower()
+
+        if choice == 'q':
+            print("Not opening any attachments.", file=sys.stderr)
+            return
+        elif choice == 'l':
+            print("Attachments saved to:", file=sys.stderr)
+            for filename, path in attachments:
+                print(f"  {path}", file=sys.stderr)
+            return
+        elif choice == 'a':
+            # Open all attachments
+            for filename, path in attachments:
+                print(f"Opening: {filename}", file=sys.stderr)
+                subprocess.run(["open", str(path)], check=False)
+        elif choice.isdigit() and 1 <= int(choice) <= len(attachments):
+            # Open specific attachment
+            idx = int(choice) - 1
+            filename, path = attachments[idx]
+            print(f"Opening: {filename}", file=sys.stderr)
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            print(f"Invalid choice: {choice}", file=sys.stderr)
+
+    except (KeyboardInterrupt, EOFError):
+        print("\nCanceled.", file=sys.stderr)
 
 
 CACHE_DIR = Path("/tmp/spool")
@@ -1008,7 +1084,7 @@ def _summarize_snippets(snippets):
 
 
 def do_list(service, count, query, account=None, sent=False, verbose=False,
-            summary=False, json_output=False):
+            summary=False, json_output=False, meta=False):
     """List recent messages as a numbered table."""
     kwargs = {"userId": "me", "maxResults": count}
     if query:
@@ -1127,13 +1203,57 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
         if unread:
             unread_count += 1
 
-        if len(person) > from_width:
-            person = person[: from_width - 1] + "\u2026"
+        # Count attachments for metadata
+        att_count = _count_attachments_payload(msg.get("payload", {}))
+
+        if meta:
+            # Full metadata mode: fetch CC/BCC (slower)
+            cc_bcc_count = 0
+            # Need to fetch full message for CC/BCC headers
+            try:
+                full_msg = service.users().messages().get(
+                    userId="me", id=msg["id"], format="metadata",
+                    metadataHeaders=["Cc", "Bcc"]
+                ).execute()
+                full_headers = full_msg.get("payload", {}).get("headers", [])
+                for field in ["Cc", "Bcc"]:
+                    header_value = get_header(full_headers, field)
+                    if header_value:
+                        addrs = [a.strip() for a in header_value.split(",") if a.strip()]
+                        cc_bcc_count += len(addrs)
+            except Exception:
+                cc_bcc_count = 0
+
+            # Format: {3+2}, {+2}, {3}, or nothing
+            if att_count > 0 and cc_bcc_count > 0:
+                metadata = f" {{{att_count}+{cc_bcc_count}}}"
+            elif att_count > 0:
+                metadata = f" {{{att_count}}}"
+            elif cc_bcc_count > 0:
+                metadata = f" {{+{cc_bcc_count}}}"
+            else:
+                metadata = ""
+        else:
+            # Fast mode: attachments only with . indicator
+            metadata = f" {{{att_count}.}}" if att_count > 0 else ""
+
+        # Truncate person name if needed, accounting for metadata
+        person_with_meta = person + metadata
+        if len(person_with_meta) > from_width:
+            # If person+metadata is too long, truncate person first
+            available_for_person = from_width - len(metadata)
+            if available_for_person > 1:
+                person = person[:available_for_person - 1] + "\u2026"
+                person_with_meta = person + metadata
+            else:
+                # Metadata too long, just truncate everything
+                person_with_meta = person_with_meta[:from_width - 1] + "\u2026"
+
         if len(subject) > subj_width:
-            subject = subject[: subj_width - 1] + "\u2026"
+            subject = subject[:subj_width - 1] + "\u2026"
 
         marker = "*" if unread else " "
-        emit(f"{i:>{idx_width}}.{marker}{date_str}  {person:<{from_width}}  {subject}")
+        emit(f"{i:>{idx_width}}.{marker}{date_str}  {person_with_meta:<{from_width}}  {subject}")
 
         if summary and keywords and i in keywords:
             emit(f"{'':{idx_width + 3}}{keywords[i]}")
@@ -1219,7 +1339,7 @@ def _resolve_message_id(service, index, count, query, account=None,
     return messages[index - 1]["id"]
 
 
-def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None, grab=False, headers_only=False):
+def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None, grab=False, headers_only=False, open_attachments=False):
     """Download a message by its 1-based index."""
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
@@ -1285,6 +1405,12 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
 
     att_note = f" + {len(attachments)} attachment(s)" if attachments else ""
     print(f"Saved: {output_path} (From: {sender}, Subject: {subject}){att_note}", file=sys.stderr)
+
+    # Interactive attachment opening
+    if open_attachments and attachments:
+        open_attachments_interactively(raw_bytes)
+    elif open_attachments:
+        print("No attachments found in this message.", file=sys.stderr)
 
     if grab:
         return str(output_path)
@@ -2081,6 +2207,7 @@ def parse_list_get_args(argv):
     parser.add_argument("-v", "--verbose", action="store_true", help="Show message snippet under each entry")
     parser.add_argument("-j", "--json", action="store_true", help="Output message list as JSON (for TUI/scripting)")
     parser.add_argument("--summary", action="store_true", help="Show AI-generated keywords (uses claude CLI)")
+    parser.add_argument("--meta", action="store_true", help="Show full metadata (attachments + CC/BCC) - slower")
     parser.add_argument("-F", "--config", default=None, help="Muttrc config for account isolation")
     parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
     parser.add_argument("-S", "--stdout", action="store_true", help="Write raw message to stdout (for piping)")
@@ -2091,6 +2218,7 @@ def parse_list_get_args(argv):
     parser.add_argument("--draft", action="store_true", help="Save reply/fwd as draft instead of sending")
     parser.add_argument("--all", action="store_true", help="Reply-all: include original To and Cc")
     parser.add_argument("-a", "--attach", action="append", default=None, help="Attach file (repeatable)")
+    parser.add_argument("--open-attachments", action="store_true", help="Interactively open message attachments")
     return parser.parse_args(argv)
 
 
@@ -2915,7 +3043,8 @@ def main():
             do_list(service, args.count, query, account=login_hint,
                     sent=sent_mode, verbose=args.verbose,
                     summary=args.summary,
-                    json_output=getattr(args, 'json', False))
+                    json_output=getattr(args, 'json', False),
+                    meta=getattr(args, 'meta', False))
         else:
             indices = parse_index_token(args.index)
             peek_paths = []
@@ -2923,7 +3052,8 @@ def main():
                 result = do_get(service, idx, args.count, query, args.output,
                                 stdout=args.stdout, text_view=args.text,
                                 account=login_hint, grab=grab_mode,
-                                headers_only=args.headers)
+                                headers_only=args.headers,
+                                open_attachments=getattr(args, 'open_attachments', False))
                 if result:
                     peek_paths.append(result)
             if peek_paths:
