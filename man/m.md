@@ -1,6 +1,6 @@
 # m - Multi-Account Email Dispatcher
 
-A unified command-line interface for managing multiple email accounts with intelligent routing between Gmail API and SMTP backends.
+A unified command-line interface for managing multiple email accounts with intelligent routing between Gmail API and SMTP backends. All email functionality consolidated into a single script with comprehensive helper utilities.
 
 ## Quick Start
 
@@ -121,10 +121,23 @@ m 5 # Read message #5 (with paging)
 m 5 -v # Read message #5 (full content, no paging)
 m 5 -save # Download message #5 to .eml file
 m 1-5 # Read messages 1 through 5
+m 1-5 -p # Save messages 1-5 and invoke /peek (Claude Code integration)
 m sent 3 # Read sent message #3
 ```
 
-### Searching
+### Claude Code Integration
+
+The `-p/--peek` flag enables seamless integration with Claude Code:
+
+```bash
+m 3 -p # Save message #3 and automatically run: claude /peek <file>
+m -q "from:alice" 2 -p # Search for alice, peek at result #2
+m u -q "urgent" 1-3 -p # Save multiple messages for batch analysis
+```
+
+This saves messages to `/tmp/spool/` and automatically invokes Claude Code's `/peek` skill for AI-powered email analysis.
+
+### Searching and Pagination
 
 ```bash
 m -q alice # Search for "alice"
@@ -132,6 +145,11 @@ m -q "from:bob" # Gmail search syntax
 m -q project 2 # Search "project", read result #2
 m -q urgent reply # Search "urgent", reply to first result
 m w -q meeting # Search work account for "meeting"
+
+# Pagination support
+m pp2 # Show page 2 of inbox (messages 21-40)
+m pp3 # Show page 3 of inbox (messages 41-60)
+m -q "from:alice" pp2 # Search results pagination
 ```
 
 ### Composing and Sending
@@ -324,6 +342,26 @@ m w -q "is:unread" | head -5
 - **OAuth tokens**: Managed by Google libraries, not exposed
 - **SMTP passwords**: Stored in neomutt config files (user responsibility)
 - **Multi-account**: Each Chrome profile isolated for security
+- **Email blocking hooks**: Claude Code integration prevents accidental sending
+- **Credential protection**: Config files in `~/.config/` protected by allowlist git repo
+
+### Email Blocking System
+
+Claude Code integration includes protective hooks to prevent accidental email sending:
+
+- **Hook location**: `~/.claude/hooks/block-email-send.sh`
+- **Patterns blocked**: `gmail-api-rw send`, `m send`, direct mutt calls with recipients
+- **Override**: Use `! command` prefix to bypass protection when intentional
+- **Purpose**: Prevents AI from sending emails without explicit user confirmation
+
+### Configuration Security
+
+Email configuration follows secure patterns:
+
+- **Config location**: `~/.config/mail-tools/accounts.json` (outside code repo)
+- **Credential isolation**: SMTP passwords in separate neomutt files
+- **OAuth separation**: Gmail API tokens managed independently
+- **Backup strategy**: Config backed up separately from credentials
 
 ## Performance
 
@@ -331,6 +369,183 @@ m w -q "is:unread" | head -5
 - **Lazy loading**: Only fetches messages when needed
 - **API efficiency**: Gmail API preferred for speed and reliability
 - **Smart routing**: Automatic backend selection per account
+
+## Code Organization (For Future Maintainers)
+
+### Directory Structure
+
+```
+~/mise/
+├── bash/
+│ └── m # Main email dispatcher script
+├── aux/
+│ └── m/ # All m-support utilities
+│ ├── m-install # Installation helper
+│ └── m-config.bash # Optional configuration
+├── py/
+│ ├── gmail-api-rw # Gmail API client
+│ └── other tools...
+└── man/
+    └── m.md # This documentation
+
+~/gd/local/seiton/ # Private scripts (not in mise)
+├── bash/
+│ ├── m -> ~/mise/bash/m # Symlink to main script
+│ ├── mutt # SMTP wrapper (private)
+│ └── other tools...
+└── aux/
+    └── m/ # Private m-support utilities
+        ├── m-doctor # Health checker
+        ├── m-queue # Offline queueing
+        ├── m-support # Main support utility
+        ├── m-completion.bash # Tab completion
+        └── 10+ other m-* tools
+```
+
+### Architecture After Consolidation (2026-05-02)
+
+**MAJOR CHANGE**: All email logic is now consolidated into the single `m` script. The previous `send` script has been eliminated.
+
+**Old Architecture** (Pre-2026-05-02):
+```
+m dispatcher → smart_send() → send script → account routing → backends
+```
+
+**New Architecture** (Current):
+```
+m dispatcher → direct_send() → account routing → backends
+```
+
+### Key Code Sections in `m` Script
+
+1. **Helper Paths Setup** (Lines 4-6):
+   ```bash
+   SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+   AUX_DIR="$(dirname "$SCRIPT_DIR")/aux/m"
+   ```
+
+2. **Dynamic Configuration Loading** (Lines 48-156):
+   - Loads accounts from `~/.config/mail-tools/accounts.json`
+   - Builds associative arrays: `EMAILS[]`, `LABELS[]`, `ACCTS[]`
+   - Keeps all PII in configuration, not code
+
+3. **Account Routing Functions** (Lines 158-215):
+   - `_lookup_muttrc()`: Maps account to muttrc path
+   - `_is_api_only()`: Decides Gmail API vs SMTP
+   - `direct_send()`: Consolidated send logic (replaces send script)
+
+4. **Inbox/Query Action** (Lines 617-694):
+   - Handles listing, searching, reading, peek functionality
+   - Peek integration: `-p` flag saves messages and invokes Claude Code
+   - Pagination support: `pp2`, `pp3` syntax
+
+5. **Send Action** (Lines 626-737):
+   - Detects advanced features (attachments, CC/BCC, headers)
+   - Routes to gmail-api-rw for advanced features
+   - Routes to direct_send() for simple sends
+
+### Configuration System
+
+**Primary Config**: `~/.config/mail-tools/accounts.json`
+```json
+{
+  "accounts": {
+    "g": {
+      "email": "user@gmail.com",
+      "chrome_profile": "Default",
+      "label": "Personal",
+      "gmail_flag": ""
+    },
+    "u": {
+      "email": "user@columbia.edu",
+      "chrome_profile": "Profile 1",
+      "label": "Work",
+      "gmail_flag": "cu"
+    }
+  }
+}
+```
+
+**Routing Decision**:
+- `gmail_flag=""` → Default Gmail account
+- `gmail_flag="cu"` → Specific backend routing (`-e cu` to gmail-api-rw)
+- Chrome profile determines web browser routing
+
+### Transport Backends
+
+1. **Gmail API** (gmail-api-rw):
+   - For API-only accounts (Columbia: `gmail_flag="cu"`)
+   - Supports attachments, advanced headers, threading
+   - OAuth authentication, appears in Gmail Sent folder
+
+2. **SMTP** (mutt wrapper → gmail-smtp-w):
+   - For traditional SMTP accounts
+   - Uses neomutt configuration files
+   - Good for non-Google email providers
+
+### Support Utilities
+
+**Location**: `~/mise/aux/m/` and `~/gd/local/seiton/aux/m/`
+
+Key utilities:
+- `m-support`: Main diagnostic and utility functions
+- `m-doctor`: Health checking and configuration validation
+- `m-queue`: Offline message queueing
+- `m-completion.bash`: Tab completion for bash
+- `m-config`: Configuration management
+
+**Access Pattern**: All utilities use the `$AUX_DIR` variable to find helpers, enabling easy reorganization.
+
+### Backward Compatibility
+
+**Deprecated**: `send` script (eliminated 2026-05-02)
+- Was a thin wrapper doing argument transformation
+- All functionality moved into `m` script's `direct_send()` function
+- External aliases updated to use `m send` directly
+
+**Preserved**: All user-facing commands work identically
+- `m u send file.eml` (same interface)
+- `m -q "from:alice" 3 -p` (same search + peek)
+- All account switching and flags unchanged
+
+### Development Guidelines
+
+1. **Single Source of Truth**: All email logic is in `m` script
+2. **Helper Organization**: Use `$AUX_DIR` for all support utilities
+3. **PII-Free Code**: All personal info stays in `~/.config/`
+4. **Extensive Comments**: Code is heavily documented for future maintenance
+5. **Testing**: Always test both API and SMTP account paths
+
+### Anti-Bloat Engineering Principles
+
+The email system follows strict consolidation principles learned from over-engineering:
+
+1. **Tool count monitoring**: >7 tools in email system = red flag
+2. **SWE reality check**: "Would user remember this exists in a week?"
+3. **Interface preservation**: User commands never change, backend consolidation is safe
+4. **Deletion over addition**: Remove duplicates before building new features
+5. **Evidence-based changes**: Every change must cite specific user complaint or failure
+
+### Invisible Dependencies Awareness
+
+Critical dependencies that must be preserved during any changes:
+
+- **Security hooks**: `~/.claude/hooks/block-email-send.sh` patterns
+- **Permission allowlists**: `~/.claude/settings.local.json` tool permissions
+- **Claude Code skills**: `/reply`, `/inbox`, `/egrab` commands expect specific interfaces
+- **Global instructions**: `~/.claude/CLAUDE.md` documents current tool behavior
+- **External aliases**: 500+ shell aliases depend on tool names and interfaces
+
+**Protocol**: Before any tool consolidation, audit all hardcoded tool references first.
+
+### Recent Major Changes
+
+- **2026-05-02**: Complete consolidation - eliminated `send` script
+- **2026-05-02**: Directory reorganization - `aux/m/` structure
+- **2026-05-02**: Fixed peek functionality and query parsing bugs
+- **2026-05-02**: Added comprehensive code documentation
+
+The system is now fully consolidated with excellent documentation for future maintenance.
 
 ## License
 
