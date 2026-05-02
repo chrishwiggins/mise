@@ -568,4 +568,3 @@ alias hideme-check 'scutil --nc status "hide.me VPN (Wireguard)" | head -1'
 alias claw 'ssh -i ~/.ssh/google_compute_engine root@23.95.164.201'
 
 # End of aliases - quiet startup skip point
-skip_verbose_startup:

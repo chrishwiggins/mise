@@ -6,7 +6,7 @@
 #   N (digits) -> Profile N
 #   slug       -> resolved against Local State (see -h for the list)
 #
-#        chrome-profile-open -h
+#        chrome-profile-open -h|--help|--list
 # Lists all Chrome profiles with a unique slug for each.
 
 _resolve_profile() {
@@ -97,7 +97,7 @@ for slug, (directory, name, email) in zip(slugs, rows):
 PY
 }
 
-if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+if [[ "$1" == "-h" || "$1" == "--help" || "$1" == "--list" ]]; then
     _resolve_profile list
     exit 0
 fi
