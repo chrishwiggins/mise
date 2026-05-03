@@ -318,15 +318,15 @@ def parse_recipient(to_header):
 
 
 def parse_date(date_header):
-    """Parse email Date header to DoW YYYY-MM-DD string."""
+    """Parse email Date header to DoW YYYY-MM-DD HH:MM string."""
     if not date_header:
-        return "               "
+        return "                    "
     try:
         dt = parsedate_to_datetime(date_header)
         dow = dt.strftime("%a")  # Mon, Tue, Wed, etc.
-        return dt.strftime(f"{dow} %Y-%m-%d")
+        return dt.strftime(f"{dow} %Y-%m-%d %H:%M")
     except Exception:
-        return date_header[:15]
+        return date_header[:20]
 
 
 def get_header(headers, name):
@@ -1339,7 +1339,7 @@ def _resolve_message_id(service, index, count, query, account=None,
     return messages[index - 1]["id"]
 
 
-def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None, grab=False, headers_only=False, open_attachments=False):
+def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None, grab=False, headers_only=False, open_attachments=False, save_attachments_only=False):
     """Download a message by its 1-based index."""
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
@@ -1347,6 +1347,27 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
         userId="me", id=msg_id, format="raw"
     ).execute()
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+
+    # -A flag: save attachments only without displaying email
+    if save_attachments_only:
+        # Determine output directory
+        if output is None:
+            att_dir = Path("/tmp/spool/attachments")
+        else:
+            att_dir = Path(output)
+            if not att_dir.is_dir():
+                att_dir = att_dir.parent
+
+        att_dir.mkdir(parents=True, exist_ok=True)
+        attachments = save_attachments(raw_bytes, att_dir)
+
+        if attachments:
+            print(f"Saved {len(attachments)} attachment(s) to {att_dir}/", file=sys.stderr)
+            for att_path in attachments:
+                print(f"  {att_path.name}", file=sys.stderr)
+        else:
+            print("No attachments found in this message.", file=sys.stderr)
+        return
 
     # -x flag: print essential headers only (no routing/authentication spam)
     if headers_only:
@@ -1948,7 +1969,7 @@ def do_open(service, index, count, query, account=None):
 # Thread view
 # ---------------------------------------------------------------------------
 
-def do_thread(service, index, count, query, account=None):
+def do_thread(service, index, count, query, account=None, text_view=False, headers_only=False):
     """Show all messages in the thread containing message at index."""
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
@@ -1988,12 +2009,30 @@ def do_thread(service, index, count, query, account=None):
         ):
             print(f"       {subject}")
 
-        # Show snippet (Gmail provides a text snippet)
-        snippet = msg.get("snippet", "")
-        if snippet:
-            if len(snippet) > term_width - 8:
-                snippet = snippet[: term_width - 11] + "..."
-            print(f"       {snippet}")
+        # Show content based on flags
+        if headers_only:
+            # Just show essential headers for this message
+            print(f"       From: {get_header(headers, 'From')}")
+            print(f"       Date: {date_str}")
+            print(f"       Subject: {subject}")
+        elif text_view:
+            # Show full text content for this message
+            raw_msg = service.users().messages().get(
+                userId="me", id=msg["id"], format="raw"
+            ).execute()
+            raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+            text_body = extract_text_body(raw_bytes)
+            # Indent the body content
+            for line in text_body.split('\n'):
+                if line.strip():
+                    print(f"       {line}")
+        else:
+            # Show snippet (default behavior)
+            snippet = msg.get("snippet", "")
+            if snippet:
+                if len(snippet) > term_width - 8:
+                    snippet = snippet[: term_width - 11] + "..."
+                print(f"       {snippet}")
         print()
 
 
@@ -2219,6 +2258,7 @@ def parse_list_get_args(argv):
     parser.add_argument("--all", action="store_true", help="Reply-all: include original To and Cc")
     parser.add_argument("-a", "--attach", action="append", default=None, help="Attach file (repeatable)")
     parser.add_argument("--open-attachments", action="store_true", help="Interactively open message attachments")
+    parser.add_argument("-A", "--save-attachments-only", action="store_true", help="Save attachments only (no email display)")
     return parser.parse_args(argv)
 
 
@@ -2288,6 +2328,7 @@ Download message(s):
   gmail-api-rw 3 -S | grep Subject            Pipe to other tools
   gmail-api-rw 3 -t                           Print text body inline (quick read)
   gmail-api-rw 3 -x                           Print headers only (no messy body)
+  gmail-api-rw 3 -A                           Save attachments only (no email display)
   gmail-api-rw 3 -peek                        Save and copy "/peek {path}" to clipboard
   gmail-api-rw -q "from:alice" 3 -peek        Works with any flag combo
 
@@ -2379,6 +2420,7 @@ Common options:
   -x, --headers         Print email headers only (no body content)
   -p, -peek             Copy "/peek {path}" to clipboard after saving (for Claude Code)
   -c, --just-count      Print message count only (for scripting)
+  -A, --save-attachments-only  Save attachments only (no email display)
   --all                 Reply-all: include original To and Cc recipients
   --draft               Save reply/fwd as draft instead of sending
   -a, --attach FILE     Attach file to reply/fwd (repeatable)
@@ -3009,7 +3051,8 @@ def main():
         elif mode == "open":
             do_open(service, indices[0], args.count, query, account=login_hint)
         else:
-            do_thread(service, indices[0], args.count, query, account=login_hint)
+            do_thread(service, indices[0], args.count, query, account=login_hint,
+                     text_view=args.text, headers_only=args.headers)
     else:
         args = parse_list_get_args(rest)
         scope = "gmail-readonly"
@@ -3053,7 +3096,8 @@ def main():
                                 stdout=args.stdout, text_view=args.text,
                                 account=login_hint, grab=grab_mode,
                                 headers_only=args.headers,
-                                open_attachments=getattr(args, 'open_attachments', False))
+                                open_attachments=getattr(args, 'open_attachments', False),
+                                save_attachments_only=getattr(args, 'save_attachments_only', False))
                 if result:
                     peek_paths.append(result)
             if peek_paths:

@@ -41,6 +41,40 @@ def format_precipitation(prob):
     return f"{prob if prob is not None else 0:03d}"
 
 
+def get_uv_index(latitude, longitude):
+    """Get UV index from CurrentUVIndex.com API (no API key required)"""
+    url = f"https://currentuvindex.com/api/v1/uvi?latitude={latitude}&longitude={longitude}"
+    try:
+        response = requests.get(url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("now", {}).get("uvi")
+    except requests.RequestException:
+        pass
+    return None
+
+
+def format_uv_index(uv_index):
+    """Format UV index with descriptive text"""
+    if uv_index is None:
+        return "UV: N/A"
+
+    uv_val = round(uv_index, 1)
+
+    if uv_val <= 2:
+        level = "Low"
+    elif uv_val <= 5:
+        level = "Moderate"
+    elif uv_val <= 7:
+        level = "High"
+    elif uv_val <= 10:
+        level = "Very High"
+    else:
+        level = "Extreme"
+
+    return f"UV: {uv_val} ({level})"
+
+
 def get_day_of_week(date_str):
     # Convert the date string to a datetime object
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
@@ -171,8 +205,18 @@ def main():
 
     temp_unit = "°C" if args.celsius else "°F"
     current = get_current_temp(point_data, args.celsius)
+
+    # Build current conditions output
+    current_output = []
     if current is not None:
-        print(f"Now: {format_temperature(current)}{temp_unit}")
+        current_output.append(f"Now: {format_temperature(current)}{temp_unit}")
+
+    # Always include UV index
+    uv_index = get_uv_index(latitude, longitude)
+    current_output.append(format_uv_index(uv_index))
+
+    if current_output:
+        print(" ; ".join(current_output))
 
     weather_forecast = get_weather_forecast(point_data)
     print_daily_forecast(weather_forecast, args.days, args.celsius)

@@ -291,7 +291,7 @@ alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
 alias pb2gist gist -o -P
 
-alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocket.com"
+alias pocket "pbpaste | m send add@getpocket.com -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`'"
 alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-bin/weather/weather.cgi?daysonly=0&maxdays=11&zipcode=10027' | asciify | fix | awk '/^Daily/,/^Sunset/'"
 alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms

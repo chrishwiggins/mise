@@ -153,7 +153,7 @@ if [[ -f "$config_file" ]] && command -v jq >/dev/null 2>&1; then
     fi
 
     # ERROR: Configuration required - no hardcoded fallback for PII-free operation
-    echo "m: ERROR - No email configuration found!" >&2
+    log_error "No email configuration found!"
     echo "m: Please create ~/.config/mail-tools/accounts.json" >&2
     echo "m: See SETUP.md for configuration instructions" >&2
     exit 1
@@ -308,7 +308,7 @@ direct_send() {
         for arg in "${args[@]}"; do
             if [[ "$arg" == *.eml ]]; then
                 if [[ ! -f "$arg" ]]; then
-                    echo "m: file not found: $arg" >&2
+                    log_error "file not found: $arg"
                     return 1
                 fi
 
@@ -348,7 +348,7 @@ direct_send() {
 if [[ -n "${M_DEFAULT_ACCOUNT:-}" ]]; then
     if [[ -z "${EMAILS[$M_DEFAULT_ACCOUNT]:-}" ]]; then
         valid_accts=$(printf '%s, ' "${!EMAILS[@]}" | sed 's/, $//')
-        echo "m: invalid M_DEFAULT_ACCOUNT='${M_DEFAULT_ACCOUNT}'. Valid: $valid_accts" >&2
+        log_error "invalid M_DEFAULT_ACCOUNT='${M_DEFAULT_ACCOUNT}'. Valid: $valid_accts"
         exit 1
     fi
 fi
@@ -569,7 +569,7 @@ while (( i < ${#args[@]} )); do
     elif [[ "$arg" =~ ^--help= ]]; then
         usage "${arg#--help=}"
     elif [[ "$arg" == "-q" ]]; then
-        echo "m: Don't use -q flag directly. Use: m q <search-term>" >&2
+        log_error "Don't use -q flag directly. Use: m q <search-term>"
         echo "Example: m q ramon  (not m -q ramon)" >&2
         exit 1
     elif [[ -z "$action" ]] && [[ " $ACTIONS_SHORT $ACTIONS_SEND $ACTIONS_PASSTHRU " == *" $arg "* ]]; then
@@ -594,7 +594,7 @@ action="${action:-i}"
 account="${account:-${M_DEFAULT_ACCOUNT:-g}}"
 
 # pagination
-page_offset=""; page_size=20; filtered_rest=()
+page_offset=""; page_size=10; filtered_rest=()
 for r in "${rest[@]+"${rest[@]}"}"; do
     if [[ "$r" =~ ^pp([0-9]+)$ ]]; then
         page_num="${BASH_REMATCH[1]}"
@@ -671,6 +671,7 @@ case "$action" in
             verbose_flag=0
             meta_flag=0
             open_attachments_flag=0
+            save_attachments_only_flag=0
             for i in "${!rest[@]}"; do
                 arg="${rest[i]}"
                 case "$arg" in
@@ -686,6 +687,9 @@ case "$action" in
                     --open-attachments)
                         open_attachments_flag=1
                         ;;
+                    -A|--save-attachments-only)
+                        save_attachments_only_flag=1
+                        ;;
                     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
                         # Single message number
                         message_numbers+=("$arg")
@@ -699,11 +703,11 @@ case "$action" in
                         if [[ "$action" == "q" && "$i" == "0" ]]; then
                             continue
                         fi
-                        # Skip action words and flags (already handled above)
-                        if [[ "$arg" == "$action_word" ]] || [[ "$arg" =~ ^(-v|--verbose)$ ]]; then
+                        # Skip action words and flags that are handled separately
+                        if [[ "$arg" == "$action_word" ]] || [[ "$arg" =~ ^(-v|--verbose|-A|--save-attachments-only|-p|--peek|--meta|--open-attachments)$ ]]; then
                             continue
                         fi
-                        # Other arguments (pass through to gmail-api-rw)
+                        # Pass through other flags to gmail-api-rw (-x, -S, -t, etc.)
                         filtered_args+=("$arg")
                         ;;
                 esac
@@ -726,14 +730,7 @@ case "$action" in
                     peek_command=$(pbpaste)
 
                     if [[ "$peek_command" =~ ^/peek ]]; then
-                        # Invoke Claude Code with the clipboard command
-                        if command -v claude >/dev/null 2>&1; then
-                            echo "✅ Saved messages, invoking Claude Code..." >&2
-                            claude "$peek_command"
-                        else
-                            echo "✅ Messages saved. To peek: $peek_command" >&2
-                            echo "⚠️ Claude Code not available - run command manually" >&2
-                        fi
+                        echo "✅ $peek_command is on your clipboard" >&2
                     else
                         echo "✅ Messages saved, but clipboard doesn't contain peek command" >&2
                         echo "Clipboard: $peek_command" >&2
@@ -750,14 +747,34 @@ case "$action" in
                     # Build command with optional attachment flag
                     read_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} ${page_offset:+-s "$page_offset"} "${message_numbers[@]}")
 
+                    # Add filtered flags
+                    if [[ ${#filtered_args[@]} -gt 0 ]]; then
+                        read_cmd+=("${filtered_args[@]}")
+                    fi
+
                     if (( open_attachments_flag )); then
                         read_cmd+=(--open-attachments)
                     fi
 
-                    read_cmd+=(-t)
-
-                    if ! "${read_cmd[@]}" | more; then
-                        exit 1
+                    if (( save_attachments_only_flag )); then
+                        read_cmd+=(-A)
+                        # For -A flag, just run the command without piping to less
+                        if ! "${read_cmd[@]}"; then
+                            exit 1
+                        fi
+                    else
+                        # Check if -S flag is in filtered_args (raw output to stdout)
+                        if [[ " ${filtered_args[*]} " =~ " -S " ]]; then
+                            # Don't add -t or pipe to less for raw output
+                            if ! "${read_cmd[@]}"; then
+                                exit 1
+                            fi
+                        else
+                            read_cmd+=(-t)
+                            if ! "${read_cmd[@]}" 2>&1 | less; then
+                                exit 1
+                            fi
+                        fi
                     fi
                 fi
             else
@@ -765,7 +782,16 @@ case "$action" in
                 # NORMAL MODE: Show message list
                 # ============================================
                 # Build command with optional flags
-                gmail_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} ${page_offset:+-s "$page_offset"} "${filtered_args[@]+"${filtered_args[@]}"}")
+                # For pagination, we need to fetch enough messages to show the requested page
+                if [[ -n "$page_offset" ]]; then
+                    # For page 2+, fetch (page_num * page_size) messages and filter later
+                    page_num=$(( page_offset / page_size + 1 ))
+                    total_needed=$(( page_num * page_size ))
+                    gmail_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$total_needed" ${query_string:+-q "$query_string"} "${filtered_args[@]+"${filtered_args[@]}"}")
+                else
+                    # Page 1: just show page_size messages
+                    gmail_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$page_size" ${query_string:+-q "$query_string"} "${filtered_args[@]+"${filtered_args[@]}"}")
+                fi
 
                 # Add flags based on what user requested
                 if (( meta_flag )); then
@@ -776,8 +802,18 @@ case "$action" in
                 fi
                 gmail_cmd+=(-t)
 
-                if ! "${gmail_cmd[@]}" | more; then
-                    exit 1
+                if [[ -n "$page_offset" ]]; then
+                    # For page 2+, filter output to show only the desired page
+                    start_line=$(( page_offset + 1 ))
+                    end_line=$(( page_offset + page_size ))
+                    if ! "${gmail_cmd[@]}" | sed -n "${start_line},${end_line}p"; then
+                        exit 1
+                    fi
+                else
+                    # Page 1: show normally
+                    if ! "${gmail_cmd[@]}"; then
+                        exit 1
+                    fi
                 fi
             fi
         fi
@@ -889,7 +925,7 @@ case "$action" in
                         gmail_cmd+=(--meta)
                     fi
                     gmail_cmd+=(-t)
-                    "${gmail_cmd[@]}" | more
+                    "${gmail_cmd[@]}" | less
                 fi
             else
                 # No message numbers: show listing
@@ -898,7 +934,7 @@ case "$action" in
                     gmail_cmd+=(--meta)
                 fi
                 gmail_cmd+=(-t)
-                "${gmail_cmd[@]}" | more
+                "${gmail_cmd[@]}"
             fi
         fi
         ;;
@@ -1016,7 +1052,13 @@ case "$action" in
         ;;
     draft|reply|reply-all|fwd|open|trash|archive|thread|read|unread|sfwd|sreply|sreply-all)
         # Pass-through to gmail-api-rw
-        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        # Special handling for reply/fwd actions: default to message #1 if no index provided
+        if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all)$ ]] && [[ ${#rest[@]} -eq 0 ]]; then
+            log_warn "No message index provided, assuming message #1"
+            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "1"
+        else
+            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        fi
         ;;
     urls)
         # Extract URLs from message
