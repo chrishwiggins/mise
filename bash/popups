@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# popups: toggle macOS notification banners (Do Not Disturb / Focus)
+# Usage:
+#   popups off      turn DND on  (silence popups)
+#   popups on       turn DND off (allow popups)
+#   popups status   show current state
+#   popups toggle   flip current state
+
+set -euo pipefail
+
+cmd="${1:-status}"
+
+# Read current Focus state from the assertions plist.
+# When DND/any Focus is active, com.apple.donotdisturb.mode.assertions.plist
+# contains a non-empty StoreAssertionRecords array.
+focus_active() {
+  local plist="$HOME/Library/DoNotDisturb/DB/Assertions.json"
+  if [[ -f "$plist" ]]; then
+    # data.storeAssertionRecords is non-empty when a Focus is on
+    if grep -q '"storeAssertionRecords"[[:space:]]*:[[:space:]]*\[[[:space:]]*{' "$plist" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+run_shortcut() {
+  local name="$1"
+  if ! command -v shortcuts >/dev/null 2>&1; then
+    echo "shortcuts CLI not found (needs macOS 12+)" >&2
+    return 1
+  fi
+  if ! shortcuts list 2>/dev/null | grep -qx "$name"; then
+    cat >&2 <<EOF
+Missing Shortcut: "$name"
+
+One-time setup (Apple does not allow scripting Focus directly; you have to
+create two trivial Shortcuts, then this script can call them):
+
+  1. Open the Shortcuts app
+  2. New Shortcut named exactly:  DND On
+       Add action: "Set Focus"  ->  Turn  Do Not Disturb  On
+  3. New Shortcut named exactly:  DND Off
+       Add action: "Set Focus"  ->  Turn  Do Not Disturb  Off
+
+Then re-run: popups $cmd
+EOF
+    return 1
+  fi
+  shortcuts run "$name"
+}
+
+case "$cmd" in
+  off|mute|silence)
+    run_shortcut "DND On"
+    echo "popups: OFF (Do Not Disturb on)"
+    ;;
+  on|unmute|allow)
+    run_shortcut "DND Off"
+    echo "popups: ON (Do Not Disturb off)"
+    ;;
+  status)
+    if focus_active; then
+      echo "popups: OFF (a Focus / DND is active)"
+    else
+      echo "popups: ON (no Focus active)"
+    fi
+    ;;
+  toggle)
+    if focus_active; then exec "$0" on; else exec "$0" off; fi
+    ;;
+  -h|--help|help)
+    sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    echo "unknown command: $cmd (try: on | off | status | toggle)" >&2
+    exit 2
+    ;;
+esac
