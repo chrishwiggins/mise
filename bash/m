@@ -5,35 +5,70 @@ SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 AUX_DIR="$(dirname "$SCRIPT_DIR")/aux/m"
 
 # ============================================================================
-# m - Multi-Account Email Dispatcher
+# m — multi-account email dispatcher (bash frontend)
 # ============================================================================
 #
-# ARCHITECTURAL OVERVIEW FOR FUTURE CLAUDE INSTANCES:
+# READ THIS BEFORE EDITING. Future Claude / future Chris: this is the map.
 #
-# This is the central dispatcher for a multi-account email system. It provides
-# a unified interface across 6+ email accounts while routing to appropriate
-# backends (Gmail API vs SMTP) based on account configuration.
+# § MENTAL MODEL
+#   m is the user-forgiving frontend. gmail-api-rw is the strict backend.
+#   Foibles go in m: argument flexibility, missing-index defaults, cache
+#   warming, comma-splitting recipients, auto-eml for API-only accounts.
+#   Infra goes in gmail-api-rw: OAuth, MIME, the actual API calls.
+#   Rule of thumb: if you find yourself writing "be nice about X" code,
+#   it belongs here, not in gmail-api-rw.
 #
-# KEY DESIGN PRINCIPLES:
-# 1. **Account Abstraction**: Users think in account letters (g,j,u,l,h,n,z)
-#    not email addresses. This script maps letters to emails via JSON config.
-# 2. **Transport Agnostic**: Automatically routes to Gmail API or SMTP based
-#    on account config (muttrc: "/dev/null" = API, real path = SMTP)
-# 3. **Mode Consistency**: All actions support -save/-v/default(more) modes
-# 4. **Web/CLI Duality**: Every action works in both web browser and CLI
-# 5. **PII-Free**: No hardcoded email addresses; all config external
+# § PUBLIC API (do NOT break — colleagues' aliases call this)
+#   Account aliases: g j u cu l h hNY n z (resolved via accounts.json)
+#   Actions:         i sent q d x urls send c draft reply reply-all fwd
+#                    open trash archive thread read unread sfwd sreply
+#                    sreply-all peek
+#   Flags:           -w/--web -N/--no-cache --quiet -h/--help --version
+#                    --dry-run --urls --cal -p/--peek -v --meta -S -t -x
+#                    -A --save-attachments-only -a -c -b -s -d/--done
+#                    -H --outbox
+#   Pagination:      ppN tokens (e.g. pp2 = page 2)
+#   This file lives in ~/mise (public). NEVER reference seiton paths here.
 #
-# CRITICAL EXTERNAL DEPENDENCIES:
-# - ~/.config/mail-tools/accounts.json (account config, created by setup)
-# - gmail-api-rw (Gmail API client, handles OAuth, caching, etc)
-# - gmail-smtp-w / neomutt wrapper (SMTP sending for non-API accounts)
-# - send script (smart routing layer that chooses API vs SMTP per account)
+# § SECTION MAP (anchor strings; grep for "§ <name>")
+#   § DEPENDENCY CHECKS         — startup validation (jq, python3, .venv)
+#   § CONFIG                    — load accounts.json into ACCTS/EMAILS/LABELS
+#   § ROUTING HELPERS           — _lookup_muttrc, _is_api_only
+#   § DIRECT SEND               — direct_send() unified send pipeline
+#   § LOGGING                   — log_info/log_warn/log_error (emoji convention)
+#   § PARSE_ACTION_ARGS         — shared arg-walker for inbox+sent handlers
+#   § USAGE                     — help text
+#   § PARSING & DISPATCH        — top-level argv → action+account+rest
+#   § ACTION ROUTER             — case "$action" in i|q|sent|send|...
+#
+# § LANDMINES (things that have bitten us; tread carefully)
+#   - The `${array[@]+"${array[@]}"}` idiom guards against unbound array
+#     errors under `set -u`. Don't "simplify" it; bash's empty-array semantics
+#     differ between releases.
+#   - The m parser will eat any positional that matches an account alias.
+#     New flags that take a value (like --outbox <alias>) MUST be recognized
+#     in § PARSING & DISPATCH before the account-resolution branch, or their
+#     value gets stolen as the account.
+#   - Numeric arg after `q` is the QUERY, not an index.
+#     `m q 31` searches for "31"; the q-skip-rest[0] rule lives in
+#     parse_action_args. Keep it.
+#   - `M_LIST_CACHE_TTL` is declared but currently unused. The cache-by-key
+#     strategy in gmail-api-rw doesn't use TTL; this var is here for forward
+#     compat. Don't rely on it expiring anything.
+#   - Yellow ⚠️ via log_warn is the "I'm being forgiving" signal. Use it
+#     when m fills in a missing arg or auto-corrects user input. Don't
+#     silently fix things — always announce.
+#
+# § NON-GOALS (don't add these without asking)
+#   - Tests. Real Gmail OAuth + state makes them either fake or fragile.
+#   - Type-of-message filtering. Use Gmail search syntax via -q instead.
+#   - Removing CLI flags. Public API; colleagues depend on them.
 
 set -euo pipefail
 
 # --- config ---
 MAIL_TOOLS_CONFIG="${MAIL_TOOLS_CONFIG:-$HOME/.config/mail-tools/accounts.json}"
-M_LIST_CACHE_TTL="${M_LIST_CACHE_TTL:-30}" # cache listings for 30s
+M_LIST_CACHE_TTL="${M_LIST_CACHE_TTL:-30}" # NOTE: declared, not yet used; gmail-api-rw caches by (count, query, account) without TTL
 M_QUIET_MODE="${M_QUIET_MODE:-0}"
 
 # Source optional user config
@@ -41,6 +76,80 @@ if [[ -f "$HOME/.config/m/config" ]]; then
     source "$HOME/.config/m/config"
 elif [[ -f "$AUX_DIR/m-config.bash" ]]; then
     source "$AUX_DIR/m-config.bash"
+fi
+
+# ========================================================================
+# § DEPENDENCY CHECKS — startup validation with actionable errors
+# ========================================================================
+
+check_dependencies() {
+    local missing_deps=()
+    local config_issues=()
+
+    # Check for required commands
+    if ! command -v jq >/dev/null 2>&1; then
+        missing_deps+=("jq: Install with 'brew install jq' or 'apt-get install jq'")
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        missing_deps+=("python3: Install Python 3 from python.org or your package manager")
+    fi
+
+    # Check for configuration file
+    if [[ ! -f "$MAIL_TOOLS_CONFIG" ]]; then
+        config_issues+=("Configuration file missing: $MAIL_TOOLS_CONFIG")
+        config_issues+=("  Create with: mkdir -p \$(dirname '$MAIL_TOOLS_CONFIG')")
+        config_issues+=("  See SETUP.md for configuration instructions")
+    else
+        # Validate JSON syntax
+        if ! jq empty "$MAIL_TOOLS_CONFIG" 2>/dev/null; then
+            config_issues+=("Invalid JSON in: $MAIL_TOOLS_CONFIG")
+            config_issues+=("  Check syntax with: jq . '$MAIL_TOOLS_CONFIG'")
+        fi
+    fi
+
+    # Check for gmail-api-rw executable
+    local gmail_api_rw="/Users/wiggins/mise/py/gmail-api-rw"
+    if [[ ! -x "$gmail_api_rw" ]]; then
+        config_issues+=("Gmail API client not executable: $gmail_api_rw")
+        config_issues+=("  Fix with: chmod +x '$gmail_api_rw'")
+    fi
+
+    # Check for .venv (needed for gmail-api-rw)
+    local venv_python="/Users/wiggins/mise/py/.venv/bin/python3"
+    if [[ ! -x "$venv_python" ]]; then
+        config_issues+=("Python virtual environment missing: $venv_python")
+        config_issues+=("  Setup with: cd /Users/wiggins/mise/py && python3 -m venv .venv")
+        config_issues+=("  Install deps: .venv/bin/pip install google-api-python-client google-auth-oauthlib")
+    fi
+
+    # Report errors with clear action steps
+    if (( ${#missing_deps[@]} > 0 || ${#config_issues[@]} > 0 )); then
+        echo "⚠️  Email system dependency check failed:" >&2
+        echo >&2
+
+        if (( ${#missing_deps[@]} > 0 )); then
+            echo "Missing required commands:" >&2
+            printf "  %s\n" "${missing_deps[@]}" >&2
+            echo >&2
+        fi
+
+        if (( ${#config_issues[@]} > 0 )); then
+            echo "Configuration issues:" >&2
+            printf "  %s\n" "${config_issues[@]}" >&2
+            echo >&2
+        fi
+
+        echo "Fix the above issues and try again." >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# Check dependencies on startup (but allow override for testing)
+if [[ "${M_SKIP_DEPENDENCY_CHECK:-0}" == "0" ]]; then
+    check_dependencies || exit 1
 fi
 
 # Initialize configuration
@@ -51,7 +160,7 @@ declare -A LABELS=()
 # Function to load account configuration from external files
 load_mail_config() {
 # ========================================================================
-# LOAD_MAIL_CONFIG: Dynamic account configuration system
+# § CONFIG — load accounts.json into ACCTS / EMAILS / LABELS
 # ========================================================================
 #
 # PURPOSE:
@@ -162,62 +271,68 @@ if [[ -f "$config_file" ]] && command -v jq >/dev/null 2>&1; then
 load_mail_config
 
 # ========================================================================
-# ACCOUNT ROUTING FUNCTIONS (CONSOLIDATED FROM SEND SCRIPT)
+# § ROUTING HELPERS — core API-vs-SMTP decision
 # ========================================================================
-# These functions handle the core routing decision: API vs SMTP
-# Previously in separate send script, now integrated into m for simplicity
+# An account is "API-only" iff its muttrc field is "/dev/null" or absent
+# (or the file doesn't exist). Real muttrc path = SMTP. The `_is_api_only`
+# helper centralizes this check; callers should never compare paths inline.
 
 # Look up muttrc path for an account slug or email substring
-# Reads ~/.config/gmails/accounts to find account configuration
+# Uses the unified JSON config at ~/.config/mail-tools/accounts.json
 # Returns muttrc path, or empty string if no match
 _lookup_muttrc() {
-    local needle
-    needle=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-    local match_path=""
-    local match_count=0
-    local accounts_file="$HOME/.config/gmails/accounts"
+    local needle="$1"
 
-    [[ ! -f "$accounts_file" ]] && return
-
-    # First pass: find all partial matches
-    while IFS=' ' read -r acct path; do
-        [[ -z "$acct" || "$acct" == \#* ]] && continue
-        local acct_lower
-        acct_lower=$(printf '%s' "$acct" | tr '[:upper:]' '[:lower:]')
-        if [[ "$acct_lower" == *"$needle"* ]]; then
-            match_path="$path"
-            ((match_count++))
-        fi
-    done < "$accounts_file"
-
-    # If multiple matches, prefer exact match
-    if (( match_count > 1 )); then
-        while IFS=' ' read -r acct path; do
-            [[ -z "$acct" || "$acct" == \#* ]] && continue
-            local acct_lower
-            acct_lower=$(printf '%s' "$acct" | tr '[:upper:]' '[:lower:]')
-            if [[ "$acct_lower" == "$needle" ]]; then
-                match_path="$path"
-                break
-            fi
-        done < "$accounts_file"
+    # Check if we have this account in our loaded config
+    if [[ -n "${EMAILS[$needle]}" ]]; then
+        # Direct alias match - extract muttrc from JSON config
+        jq -r ".accounts.\"$needle\".muttrc // empty" "$MAIL_TOOLS_CONFIG" 2>/dev/null
+        return
     fi
 
-    echo "$match_path"
+    # Try partial matching on any field (alias, email)
+    local needle_lower
+    needle_lower=$(printf '%s' "$needle" | tr '[:upper:]' '[:lower:]')
+    local match_alias=""
+
+    # Search through all accounts for partial matches
+    for alias in "${!EMAILS[@]}"; do
+        local email="${EMAILS[$alias]}"
+        local alias_lower email_lower
+        alias_lower=$(printf '%s' "$alias" | tr '[:upper:]' '[:lower:]')
+        email_lower=$(printf '%s' "$email" | tr '[:upper:]' '[:lower:]')
+
+        if [[ "$alias_lower" == *"$needle_lower"* || "$email_lower" == *"$needle_lower"* ]]; then
+            match_alias="$alias"
+            break
+        fi
+    done
+
+    if [[ -n "$match_alias" ]]; then
+        jq -r ".accounts.\"$match_alias\".muttrc // empty" "$MAIL_TOOLS_CONFIG" 2>/dev/null
+    fi
 }
 
-# Get the default account's muttrc (first account with @ in name)
+# Get the default account's muttrc from JSON config
 _default_muttrc() {
-    local accounts_file="$HOME/.config/gmails/accounts"
-    [[ ! -f "$accounts_file" ]] && return
+    local default_alias
+    default_alias=$(jq -r '.default_account // empty' "$MAIL_TOOLS_CONFIG" 2>/dev/null)
 
-    while IFS=' ' read -r acct path; do
-        [[ -z "$acct" || "$acct" == \#* ]] && continue
-        if [[ "$acct" == *@* ]]; then
-            echo "$path"
-            return
-        fi
-    done < "$accounts_file"
+    if [[ -n "$default_alias" ]]; then
+        jq -r ".accounts.\"$default_alias\".muttrc // empty" "$MAIL_TOOLS_CONFIG" 2>/dev/null
+        return
+    fi
+
+    # Fall back to first account if no default specified
+    local first_alias
+    for alias in "${!EMAILS[@]}"; do
+        first_alias="$alias"
+        break
+    done
+
+    if [[ -n "$first_alias" ]]; then
+        jq -r ".accounts.\"$first_alias\".muttrc // empty" "$MAIL_TOOLS_CONFIG" 2>/dev/null
+    fi
 }
 
 # CORE ROUTING DECISION: API vs SMTP
@@ -230,9 +345,11 @@ _is_api_only() {
 }
 
 # ========================================================================
-# DIRECT SEND IMPLEMENTATION (REPLACES SEND SCRIPT)
+# § DIRECT SEND — unified send pipeline (file mode + compose mode)
 # ========================================================================
-# This function contains the core logic from the send script
+# direct_send() decides between two paths based on whether any arg ends
+# in .eml (file mode) or not (compose mode). For API-only accounts in
+# compose mode, it auto-builds a .eml from stdin and ships via API.
 # Handles file sending, attachment processing, and backend routing
 
 direct_send() {
@@ -241,6 +358,9 @@ direct_send() {
     # Parse arguments (simplified version of send script's parsing)
     local account=""
     local done_flag=0
+    local subject=""
+    local -a cc_addrs=()
+    local -a bcc_addrs=()
     local -a args=()
     local -a attachments=()
 
@@ -260,12 +380,34 @@ direct_send() {
                 attachments+=("${send_args[i+1]}")
                 ((i+=2))
                 ;;
+            -s|--subject)
+                subject="${send_args[i+1]}"
+                ((i+=2))
+                ;;
+            -c|--cc)
+                cc_addrs+=("${send_args[i+1]}")
+                ((i+=2))
+                ;;
+            -b|--bcc)
+                bcc_addrs+=("${send_args[i+1]}")
+                ((i+=2))
+                ;;
             -d|--done)
                 done_flag=1
                 ((i++))
                 ;;
             *)
-                args+=("${send_args[i]}")
+                # Check if this argument contains comma-separated recipients
+                if [[ "${send_args[i]}" =~ .+@.+,.+@.+ ]]; then
+                    # Split comma-separated recipients for separate emails
+                    IFS=',' read -ra recipients <<< "${send_args[i]}"
+                    # Add all recipients to args - we'll send separate emails to each
+                    for recipient in "${recipients[@]}"; do
+                        args+=("$recipient")
+                    done
+                else
+                    args+=("${send_args[i]}")
+                fi
                 ((i++))
                 ;;
         esac
@@ -276,6 +418,7 @@ direct_send() {
     for att in "${attachments[@]+"${attachments[@]}"}"; do
         attach_args+=(-a "$att")
     done
+
 
     # Resolve muttrc for account
     local muttrc
@@ -288,7 +431,7 @@ direct_send() {
     else
         muttrc=$(_default_muttrc)
         if [[ -z "$muttrc" ]]; then
-            echo "m: no default account configured in ~/.config/gmails/accounts" >&2
+            echo "m: no default account configured in $MAIL_TOOLS_CONFIG" >&2
             return 1
         fi
     fi
@@ -318,8 +461,9 @@ direct_send() {
                     echo "m: ${account:-default} via gmail API" >&2
                     gmail-api-rw ${account:+-e "$account"} send --via-send -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}"
                 else
-                    echo "m: ${account:-default} via mutt" >&2
-                    echo | /Users/wiggins/gd/local/seiton/bash/mutt -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}"
+                    echo "m: ${account:-default} via SMTP" >&2
+                    # Direct neomutt call - optimize by removing process hop
+                    echo | neomutt -e 'unset record' -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}"
                 fi
 
                 echo "$abspath sent"
@@ -334,13 +478,80 @@ direct_send() {
     else
         # Compose mode
         if _is_api_only "$muttrc"; then
-            echo "m: compose mode not supported for API-only accounts; write a .eml file instead" >&2
-            return 1
+            # API-only account (e.g. Columbia, hackNY): there's no SMTP
+            # muttrc, so we can't open neomutt interactively. Build a .eml
+            # from stdin + flags and ship it through gmail-api-rw send -H.
+            #
+            # Stdin contract: the body MUST be piped or redirected. Bare
+            # `cat` waits silently for terminal input, which looks like the
+            # command is hung. Refuse early with a clear message.
+            if [[ -t 0 ]]; then
+                log_error "send to API-only account needs a piped body or a .eml file"
+                echo "  e.g.  echo 'hi' | m send $account user@example.com -s 'hello'" >&2
+                echo "  or    m send $account file.eml" >&2
+                return 1
+            fi
+
+            local datestr eml_path
+            datestr=$(date +%Y%m%d-%H%M%S)
+            eml_path="/tmp/m-send-via-eml-${datestr}.eml"
+
+            # Collect recipients from args (anything containing @)
+            local -a recipients=()
+            for arg in "${args[@]}"; do
+                if [[ "$arg" =~ @ ]]; then
+                    recipients+=("$arg")
+                fi
+            done
+
+            if [[ ${#recipients[@]} -eq 0 ]]; then
+                echo "m: no recipient specified" >&2
+                return 1
+            fi
+
+            # Build .eml file: To, Cc, Bcc, Subject headers, blank line, body from stdin
+            {
+                printf 'To: %s\n' "$(IFS=,; echo "${recipients[*]}")"
+                if [[ ${#cc_addrs[@]} -gt 0 ]]; then
+                    printf 'Cc: %s\n' "$(IFS=,; echo "${cc_addrs[*]}")"
+                fi
+                if [[ ${#bcc_addrs[@]} -gt 0 ]]; then
+                    printf 'Bcc: %s\n' "$(IFS=,; echo "${bcc_addrs[*]}")"
+                fi
+                printf 'Subject: %s\n' "${subject:-(no subject)}"
+                printf '\n'
+                cat
+            } > "$eml_path"
+
+            echo "⚠️  m: API-only account; auto-created .eml at $eml_path" >&2
+            echo "m: ${account:-default} via gmail API" >&2
+            gmail-api-rw ${account:+-e "$account"} send --via-send -H "$eml_path" "${attach_args[@]+"${attach_args[@]}"}"
+            return $?
         fi
 
-        # Use mutt for compose mode
-        /Users/wiggins/gd/local/seiton/bash/mutt -F "$muttrc" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
-        echo "m: ${account:-default} via mutt" >&2
+        # Handle multiple recipients by sending separate emails
+        # Find email addresses in args (anything containing @)
+        local -a recipients=()
+        local -a other_args=()
+        for arg in "${args[@]}"; do
+            if [[ "$arg" =~ @ ]]; then
+                recipients+=("$arg")
+            else
+                other_args+=("$arg")
+            fi
+        done
+
+        if [[ ${#recipients[@]} -eq 0 ]]; then
+            # No recipients found, use neomutt in compose mode (user will enter recipient)
+            echo "m: ${account:-default} via SMTP" >&2
+            neomutt -e 'unset record' -F "$muttrc" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
+        else
+            # Send separate email to each recipient
+            for recipient in "${recipients[@]}"; do
+                echo "m: sending to $recipient via ${account:-default} SMTP" >&2
+                neomutt -e 'unset record' -F "$muttrc" "$recipient" "${other_args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
+            done
+        fi
     fi
 }
 
@@ -357,8 +568,13 @@ if [[ "${M_RANGE_WARNING_LIMIT:-50}" -lt 1 ]]; then
     M_RANGE_WARNING_LIMIT=50
 fi
 
-# --- helper functions ---
-
+# ========================================================================
+# § LOGGING — emoji-tagged stderr (color signals intent)
+# ========================================================================
+# Convention: blue ℹ = info, green ✅ = ok, yellow ⚠️ = forgiving warning,
+# red ❌ = real error. The yellow ⚠️ is the "m is being lenient about your
+# input" signal (e.g. defaulting a missing index to 1). Use it any time m
+# fills in or auto-corrects something — never silently fix things.
 log_info() { (( M_QUIET_MODE )) || echo -e "\033[0;34mℹ\033[0m $*" >&2; }
 log_ok() { (( M_QUIET_MODE )) || echo -e "\033[0;32m✅\033[0m $*" >&2; }
 log_warn() { echo -e "\033[0;33m⚠️\033[0m $*" >&2; }
@@ -377,6 +593,116 @@ open_web() {
     log_info "Opening Gmail ($folder) in browser (profile $profile)..."
     log_command "$@"
     exec gmail_web "$profile" "$folder" "$@"
+}
+
+# ========================================================================
+# § PARSE_ACTION_ARGS — shared arg-walker for inbox/q/sent handlers
+# ========================================================================
+# Walks an array of positional args looking for an "action word" (reply,
+# fwd, etc.), parses message-number indices before it, and collects
+# everything after it. Centralizes the rules that used to be duplicated
+# across the i|q and sent handlers.
+#
+# Why two query modes: the i|q action takes the query as a positional
+# (`m q sophie 1 reply` — query is rest[0]), while the sent action takes
+# the query via a literal `q <query>` pair (`m g sent q sophie 1 reply` —
+# 'q' is a marker word, query is what follows). These reflect how users
+# actually type the commands; don't try to unify them.
+#
+# Inputs:
+#   $1: query mode -- "positional-q" (rest[0] is query if action=q),
+#       "literal-q" (rest contains "q <query>" pair to extract), or "none"
+#   $2: caller's $action (used by positional-q mode)
+#   $3: space-separated list of action words to recognize (e.g.
+#       "reply reply-all fwd draft open trash archive thread read unread urls")
+#   $4+: the rest array (positional args after account/action stripped)
+#
+# Outputs (via global vars; arrays must be declared by caller):
+#   PA_ACTION_WORD   - action word found, or ""
+#   PA_QUERY         - parsed query string, or ""
+#   PA_MESSAGE_NUMBERS - array of indices found before action word
+#   PA_TRAILING_ARGS   - array of args after the action word
+#   PA_REMAINING       - array equal to input rest minus consumed query tokens
+parse_action_args() {
+    local query_mode="$1"; shift
+    local caller_action="$1"; shift
+    local allowed_actions="$1"; shift
+    local -a input=("$@")
+
+    PA_ACTION_WORD=""
+    PA_QUERY=""
+    PA_MESSAGE_NUMBERS=()
+    PA_TRAILING_ARGS=()
+    PA_REMAINING=()
+
+    # Step 1: query extraction
+    if [[ "$query_mode" == "literal-q" ]]; then
+        # Drop "q <query>" pair from input, write rest into PA_REMAINING
+        local _qi=0
+        while (( _qi < ${#input[@]} )); do
+            if [[ "${input[_qi]}" == "q" && $((_qi + 1)) -lt ${#input[@]} ]]; then
+                PA_QUERY="${input[_qi+1]}"
+                _qi=$((_qi + 2))
+                continue
+            fi
+            PA_REMAINING+=("${input[_qi]}")
+            _qi=$((_qi + 1))
+        done
+    else
+        # positional-q or none: rest is unchanged
+        PA_REMAINING=("${input[@]+"${input[@]}"}")
+        if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" ]]; then
+            PA_QUERY="${PA_REMAINING[0]:-}"
+        fi
+    fi
+
+    # Step 2: find the action word
+    # Match against the caller-supplied list — different handlers (i|q vs sent)
+    # support different sets of actions, so we don't hardcode a union.
+    local action_word_index=-1
+    local i
+    for i in "${!PA_REMAINING[@]}"; do
+        if [[ " $allowed_actions " == *" ${PA_REMAINING[i]} "* ]]; then
+            PA_ACTION_WORD="${PA_REMAINING[i]}"
+            action_word_index=$i
+            break
+        fi
+    done
+
+    # Step 3: parse message numbers before action word, collect trailing args after
+    if [[ -n "$PA_ACTION_WORD" ]]; then
+        for ((i=0; i<action_word_index; i++)); do
+            local arg="${PA_REMAINING[i]}"
+            case "$arg" in
+                [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
+                    # Skip query string for positional-q mode (rest[0] is query)
+                    if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
+                        continue
+                    fi
+                    PA_MESSAGE_NUMBERS+=("$arg")
+                    ;;
+                [0-9]-[0-9]|[0-9]-[0-9][0-9]|[0-9][0-9]-[0-9][0-9])
+                    if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
+                        continue
+                    fi
+                    PA_MESSAGE_NUMBERS+=("$arg")
+                    ;;
+            esac
+        done
+        for ((i=action_word_index+1; i<${#PA_REMAINING[@]}; i++)); do
+            PA_TRAILING_ARGS+=("${PA_REMAINING[i]}")
+        done
+
+        # m is the user-forgiving layer: default missing index to 1 for actions that need one
+        if [[ ${#PA_MESSAGE_NUMBERS[@]} -eq 0 ]]; then
+            case "$PA_ACTION_WORD" in
+                reply|reply-all|fwd|sfwd|sreply|sreply-all|draft|open|thread|urls)
+                    log_warn "no index given for '$PA_ACTION_WORD'; assuming message #1"
+                    PA_MESSAGE_NUMBERS=("1")
+                    ;;
+            esac
+        fi
+    fi
 }
 
 # smart_send() function removed - logic consolidated into direct_send()
@@ -535,7 +861,19 @@ EOF
     exit 0
 }
 
-# --- parse args ---
+# ========================================================================
+# § PARSING & DISPATCH — top-level argv → (account, action, rest[])
+# ========================================================================
+# This walks $@ once. The order of the elif chain matters:
+#   1. Boolean flags (-w, --dry-run, etc.) — consumed in place
+#   2. Value-taking flags (--outbox <alias>) — consume next arg too
+#      (CRUCIAL: must come BEFORE the account-resolution branch, or the
+#      flag's value will be stolen as an account alias)
+#   3. The first matching action keyword sets $action
+#   4. The first single-letter that matches a known account alias
+#      sets $account
+#   5. Anything else accumulates in `rest`
+# After the loop, the action router (case "$action") consumes `rest`.
 web=0; dry_run=0; urls_flag=0; cal_flag=0; no_cache=0
 action=""; account=""; rest=()
 i=0; args=("$@")
@@ -572,6 +910,18 @@ while (( i < ${#args[@]} )); do
         log_error "Don't use -q flag directly. Use: m q <search-term>"
         echo "Example: m q ramon  (not m -q ramon)" >&2
         exit 1
+    elif [[ "$arg" == "--outbox" ]]; then
+        # --outbox <alias>: read uses main account, send uses outbox account.
+        # Both args pass through to gmail-api-rw via rest.
+        # CRITICAL: this branch must consume the value (the alias) here.
+        # If we let the next loop iteration handle it, the alias gets eaten
+        # by the account-resolution branch below (because 'h' looks like a
+        # valid account alias). That bug bit us before this branch existed.
+        rest+=("--outbox")
+        if (( i + 1 < ${#args[@]} )); then
+            i=$((i + 1))
+            rest+=("${args[i]}")
+        fi
     elif [[ -z "$action" ]] && [[ " $ACTIONS_SHORT $ACTIONS_SEND $ACTIONS_PASSTHRU " == *" $arg "* ]]; then
         action="$arg"
     elif [[ "$arg" == "m" ]] && [[ -z "$action" ]]; then
@@ -588,6 +938,20 @@ while (( i < ${#args[@]} )); do
     fi
     i=$((i + 1))
 done
+
+# Infer 'send' if no action was given but rest contains an email recipient.
+# This is the m-is-forgiving layer doing its job: `m foo@bar.com -c baz@qux.com`
+# is unambiguously a send (no other action takes a bare email positional), so
+# we save the user typing 'send' and announce the inference with a yellow ⚠️.
+if [[ -z "$action" ]] && (( ${#rest[@]} > 0 )); then
+    for _r in "${rest[@]}"; do
+        if [[ "$_r" =~ ^[^[:space:]]+@[^[:space:]]+\.[^[:space:]]+$ ]]; then
+            action="send"
+            log_warn "no action given; inferring 'send' from recipient '$_r'"
+            break
+        fi
+    done
+fi
 
 # defaults
 action="${action:-i}"
@@ -612,10 +976,23 @@ IFS=: read -r gmail_flag chrome_profile <<< "${ACCTS[$account]}"
 if [[ "$gmail_flag" == "!" ]]; then web=1; gmail_flag=""; fi
 
 # build gmail-api-rw -e flag
+# gmail_acct is the per-call account flag passed to gmail-api-rw.
+# Stays empty when no account is selected (gmail-api-rw then uses its own
+# default). When set, expands to (-e "<flag>"). Callers reference it as
+# "${gmail_acct[@]+"${gmail_acct[@]}"}" — that idiom expands to nothing
+# when the array is empty AND prevents `set -u` from screaming. Don't
+# replace with a plain "${gmail_acct[@]}"; under `set -u` an unbound
+# array reference fails, and on macOS bash 3 the empty-vs-unset
+# distinction is fragile.
 gmail_acct=()
 [[ -n "$gmail_flag" ]] && gmail_acct=(-e "$gmail_flag")
 
-# --- action router ---
+# ========================================================================
+# § ACTION ROUTER — dispatch on $action
+# ========================================================================
+# Each branch handles one action verb. Branches that route to gmail-api-rw
+# do so via `exec`, so anything after the exec call in that branch is dead.
+# Branches that may fall through to listing logic must NOT exec early.
 case "$action" in
     i|q)
         if (( web )); then
@@ -624,47 +1001,21 @@ case "$action" in
             # ================================================
             # INBOX/QUERY ACTION: List messages with optional peek
             # ================================================
-            # Parse arguments to extract query, message numbers, and peek flag
-
-            query_string=""
+            # Delegate arg parsing to the shared helper; q-action treats rest[0] as query.
+            # Inbox/query handler accepts the full action set (excluding "peek"
+            # and "forward" which only the sent handler treats as standalone).
+            parse_action_args "positional-q" "$action" \
+                "reply reply-all fwd draft open trash archive thread read unread sfwd sreply sreply-all urls" \
+                "${rest[@]+"${rest[@]}"}"
+            query_string="$PA_QUERY"
             peek_flag=0
-            message_numbers=()
+            message_numbers=("${PA_MESSAGE_NUMBERS[@]+"${PA_MESSAGE_NUMBERS[@]}"}")
             filtered_args=()
-
-            # Extract query string for 'q' action
-            [[ "$action" == "q" ]] && query_string="${rest[0]:-}"
-
-            # Check if there's an action word in the arguments (reply, fwd, draft, etc.)
-            action_word=""
-            action_word_index=-1
-            for i in "${!rest[@]}"; do
-                case "${rest[i]}" in
-                    reply|reply-all|fwd|draft|open|trash|archive|thread|read|unread|sfwd|sreply|sreply-all)
-                        action_word="${rest[i]}"
-                        action_word_index=$i
-                        break
-                        ;;
-                esac
-            done
+            action_word="$PA_ACTION_WORD"
 
             # If we found an action word, route to gmail-api-rw immediately
-            if [[ -n "$action_word" && ${#message_numbers[@]} -eq 0 ]]; then
-                # Parse message numbers before the action word
-                for ((i=0; i<action_word_index; i++)); do
-                    arg="${rest[i]}"
-                    case "$arg" in
-                        [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                            # Skip query string for 'q' action
-                            if [[ "$action" == "q" && "$i" == "0" ]]; then
-                                continue
-                            fi
-                            message_numbers+=("$arg")
-                            ;;
-                    esac
-                done
-
-                # Execute the action on the specified message(s)
-                exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" "$action_word"
+            if [[ -n "$action_word" ]]; then
+                exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
             fi
 
             # Parse remaining arguments to find peek flags, verbose flags, meta flag, and message numbers
@@ -691,11 +1042,18 @@ case "$action" in
                         save_attachments_only_flag=1
                         ;;
                     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                        # Single message number
+                        # Single message number — but if action is 'q' and this
+                        # is rest[0], it's the query string (e.g. 'm q 31'), not an index.
+                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                            continue
+                        fi
                         message_numbers+=("$arg")
                         ;;
                     [0-9]-[0-9]|[0-9]-[0-9][0-9]|[0-9][0-9]-[0-9][0-9])
-                        # Message range (e.g., 1-5)
+                        # Message range (e.g., 1-5) — same q-action exception
+                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                            continue
+                        fi
                         message_numbers+=("$arg")
                         ;;
                     *)
@@ -721,7 +1079,14 @@ case "$action" in
                 echo "m: saving messages for peek..." >&2
 
                 # Build and execute gmail-api-rw command with -peek flag
-                peek_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} ${page_offset:+-s "$page_offset"} "${message_numbers[@]}" -peek)
+                # For pagination with peek, we need to fetch enough messages and let pagination filter later
+                if [[ -n "$page_offset" ]]; then
+                    page_num=$(( page_offset / page_size + 1 ))
+                    total_needed=$(( page_num * page_size ))
+                    peek_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$total_needed" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -peek)
+                else
+                    peek_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -peek)
+                fi
 
                 # Execute command - it will save files and copy "/peek {path}" to clipboard
                 # Redirect output to suppress message display during peek
@@ -745,7 +1110,14 @@ case "$action" in
                     # ============================================
                     # When message numbers are specified without peek, read the messages
                     # Build command with optional attachment flag
-                    read_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} ${page_offset:+-s "$page_offset"} "${message_numbers[@]}")
+                    # For pagination, fetch enough messages to cover the page
+                    if [[ -n "$page_offset" ]]; then
+                        page_num=$(( page_offset / page_size + 1 ))
+                        total_needed=$(( page_num * page_size ))
+                        read_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$total_needed" ${query_string:+-q "$query_string"} "${message_numbers[@]}")
+                    else
+                        read_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}")
+                    fi
 
                     # Add filtered flags
                     if [[ ${#filtered_args[@]} -gt 0 ]]; then
@@ -822,39 +1194,21 @@ case "$action" in
         if (( web )); then
             open_web sent "${rest[@]+"${rest[@]}"}"
         else
-            # Use the same argument parsing logic as main inbox action
-            action_word=""
-            action_word_index=-1
-            query_string=""
-            message_numbers=()
+            # Delegate arg parsing to shared helper; sent uses literal "q <query>" form
+            # Sent handler historically supports compose actions plus "peek".
+            parse_action_args "literal-q" "$action" \
+                "reply reply-all fwd forward draft peek" \
+                "${rest[@]+"${rest[@]}"}"
+            query_string="$PA_QUERY"
+            action_word="$PA_ACTION_WORD"
+            message_numbers=("${PA_MESSAGE_NUMBERS[@]+"${PA_MESSAGE_NUMBERS[@]}"}")
+            rest=("${PA_REMAINING[@]+"${PA_REMAINING[@]}"}")
             peek_flag=0
             save_flag=0
 
-            # Check for action words (reply, fwd, draft, etc.)
-            for i in "${!rest[@]}"; do
-                case "${rest[i]}" in
-                    reply|reply-all|fwd|forward|draft|peek)
-                        action_word="${rest[i]}"
-                        action_word_index=$i
-                        break
-                        ;;
-                esac
-            done
-
             # If we found an action word, route to gmail-api-rw immediately
-            if [[ -n "$action_word" && ${#message_numbers[@]} -eq 0 ]]; then
-                # Parse message numbers before the action word
-                for ((i=0; i<action_word_index; i++)); do
-                    arg="${rest[i]}"
-                    case "$arg" in
-                        [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                            message_numbers+=("$arg")
-                            ;;
-                    esac
-                done
-
-                # Execute the action on the specified message(s)
-                exec gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" "${message_numbers[@]}" "$action_word"
+            if [[ -n "$action_word" ]]; then
+                exec gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
             fi
 
             # Parse remaining arguments to find peek flags, verbose flags, meta flag, and message numbers
@@ -876,11 +1230,18 @@ case "$action" in
                         save_flag=1
                         ;;
                     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                        # Single message number
+                        # Single message number — but if action is 'q' and this
+                        # is rest[0], it's the query string (e.g. 'm q 31'), not an index.
+                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                            continue
+                        fi
                         message_numbers+=("$arg")
                         ;;
                     [0-9]-[0-9]|[0-9]-[0-9][0-9]|[0-9][0-9]-[0-9][0-9])
-                        # Message range (e.g., 1-5)
+                        # Message range (e.g., 1-5) — same q-action exception
+                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                            continue
+                        fi
                         message_numbers+=("$arg")
                         ;;
                 esac
@@ -895,7 +1256,7 @@ case "$action" in
                     echo "m: saving messages for peek..." >&2
 
                     # Build and execute gmail-api-rw command with -peek flag
-                    peek_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" "${message_numbers[@]}" -peek)
+                    peek_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -peek)
 
                     # Execute command - it will save files and copy "/peek {path}" to clipboard
                     # Redirect output to suppress message display during peek
@@ -914,13 +1275,13 @@ case "$action" in
                     fi
                 elif (( save_flag )); then
                     # Save mode
-                    gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" "${message_numbers[@]}" -save
+                    gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -save
                 elif (( verbose_flag )); then
                     # Verbose mode (no paging)
-                    gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" "${message_numbers[@]}" -v
+                    gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -v
                 else
                     # Default: view with paging
-                    gmail_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" "${message_numbers[@]}")
+                    gmail_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}")
                     if (( meta_flag )); then
                         gmail_cmd+=(--meta)
                     fi
@@ -929,7 +1290,7 @@ case "$action" in
                 fi
             else
                 # No message numbers: show listing
-                gmail_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}")
+                gmail_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"})
                 if (( meta_flag )); then
                     gmail_cmd+=(--meta)
                 fi
@@ -968,7 +1329,7 @@ case "$action" in
         # - This could be consolidated to eliminate the send script entirely
         # - All routing logic from send script could move here
         # - Would need to preserve external compatibility (ejk, noemie aliases)
-        # - Key insight: m could read ~/.config/gmails/accounts directly
+        # - Key insight: m now uses unified ~/.config/mail-tools/accounts.json
         #
         if (( web )); then
             # Web mode: open Gmail compose in browser

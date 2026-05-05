@@ -35,6 +35,81 @@ Designed for the !! workflow:
     % !! 3 reply.eml                    # expands to: gmail-api-rw -n 5 -q "from:alice" 3 reply.eml
 """
 
+# ============================================================================
+# ARCHITECTURE — read this before editing
+# ============================================================================
+#
+# § MENTAL MODEL
+#   This is the strict backend. The user-friendly forgiveness layer is
+#   `bash/m`. Foibles (default-to-1, comma-splitting, --outbox-flag-eating)
+#   live there. Here we do auth, MIME, the API, and clear errors.
+#   Rule: if a feature would weaken our error messages or invite ambiguity,
+#   it belongs in m, not here.
+#
+# § PUBLIC API (do NOT break — `m` and colleagues' aliases call this)
+#   Modes (positional after flags):
+#     send draft reply reply-all fwd trash archive open thread read unread
+#     inbox urls   (also: bare list/get when no mode keyword present)
+#   Flags (parse_list_get_args / parse_send_draft_args / parse_inbox_args):
+#     -n -q -v -j --summary --meta -F -e -S -t -x -c -Q --draft --all
+#     -a --open-attachments -A --outbox -s -H -b --done --via-send
+#   Hidden contract flag:
+#     --via-send   `m` sets this on direct API sends so we know to bypass
+#                  the legacy "use the send script" guard. Removing this
+#                  flag breaks `m send` to API-only accounts. Keep it.
+#   Cache files:   /tmp/spool/.gmail-api-rw-last-list-{slug}.json
+#   This file lives in ~/mise (public). NEVER reference seiton paths here.
+#
+# § SECTION MAP (anchors — grep for "§ <NAME>")
+#   § VENV REEXEC               — top of file; not labeled with anchor
+#   § LAZY IMPORTS              — _import_heavy_modules / LazyModule / proxies
+#   § DEPENDENCY CHECKS         — check_dependencies()
+#   § RETRY & CONFIG            — _retry_api_call, _load_config, _config_get
+#   § CONTACTS                  — resolve_recipient, _resolve_address_list
+#   § HELPERS                   — header parsing, filename sanitize, etc.
+#   § CACHE                     — _cache_path, _load_cached_ids
+#   § TEXT EXTRACTION           — extract_text_body, _strip_html
+#   § ACCOUNTS                  — _load_accounts_config, _alias_for_email,
+#                                 resolve_account, _authenticated_service
+#   § SWAP_OR_RECOVER           — multi-account OAuth swap with draft recovery
+#   § EDITOR TEMPLATE           — edit_headers_and_body
+#   § ACTION FUNCTIONS          — do_list, do_get, do_reply, do_forward,
+#                                 do_trash, do_archive, do_thread, do_urls,
+#                                 do_send, do_draft, do_inbox
+#   § ARG PARSERS               — parse_*_args
+#   § MAIN                      — mode dispatch
+#
+# § LANDMINES
+#   - LAZY IMPORTS: only `argparse json os sys time pathlib.Path` at module
+#     level. Don't add `import email` or `import google.*` at the top — first
+#     run drops from <0.1s to ~5s. New code that needs heavy deps should call
+#     _import_heavy_modules() / _import_google_modules() and pull from the
+#     returned dict.
+#   - CACHE INVALIDATION: caches keyed by (count, query, account). NO TTL.
+#     Same query+count returns the same list until the cache file is deleted
+#     or the key changes. This is intentional for the !! workflow — index 3
+#     means index 3 of the listing you just saw, even minutes later. If you
+#     want fresh data, change the count or pass -N from m.
+#   - _resolve_message_id(verify=True): defensive path that re-confirms the
+#     cached message ID still resolves. Currently no caller uses verify=True.
+#     Keep it: cheap insurance for future multi-account drift scenarios.
+#   - --via-send: hidden flag (argparse.SUPPRESS). m's direct-send path sets
+#     it. If you remove the flag, m breaks for API-only sends. If you remove
+#     m's setter, gmail-api-rw refuses to send. Both must move together.
+#   - swap_service_account RAISES on failure. _swap_or_recover catches and
+#     saves the draft. Don't put a bare swap_service_account call in new
+#     code paths — use _swap_or_recover so drafts aren't lost.
+#   - do_reply takes service AND send_service. service reads the original
+#     message; send_service sends the reply. Equal by default; differ when
+#     --outbox is set. Don't conflate them.
+#   - print_message_preview / -t: when -t is set, do_reply returns BEFORE
+#     touching the API. Don't add API calls before that branch.
+#
+# § NON-GOALS
+#   - Tests via real OAuth — too fragile.
+#   - User-friendly defaults that paper over ambiguous input. That goes in m.
+#   - Replacing the cache with TTL-based logic without first updating the
+#     !! workflow contract.
 
 # PERFORMANCE OPTIMIZATION: Lazy imports for 90% faster startup
 # Only core modules loaded initially - heavy modules loaded on demand
@@ -91,6 +166,51 @@ def _import_heavy_modules():
             'parsedate_to_datetime': parsedate_to_datetime
         }
     return _lazy_modules['heavy']
+
+def check_dependencies():
+    """Check for required dependencies with actionable error messages."""
+    errors = []
+
+    # Check for virtual environment Python
+    venv_python = Path(__file__).parent / ".venv" / "bin" / "python3"
+    if not venv_python.exists():
+        errors.append("Python virtual environment missing")
+        errors.append(f"  Setup with: cd {Path(__file__).parent} && python3 -m venv .venv")
+        errors.append("  Install deps: .venv/bin/pip install google-api-python-client google-auth-oauthlib")
+
+    # Check for configuration
+    if not MAIL_TOOLS_CONFIG.exists():
+        errors.append(f"No configuration found at {MAIL_TOOLS_CONFIG}")
+        errors.append("  Create JSON config - see SETUP.md for format")
+
+    # Test Google API imports
+    try:
+        import googleapiclient
+    except ImportError:
+        errors.append("Google API client library not installed")
+        errors.append("  Install with: pip install google-api-python-client google-auth-oauthlib")
+
+    # Check for OAuth credentials setup
+    try:
+        from google_auth import get_credentials
+        # Try to get credentials - will fail if not set up, which is OK for now
+    except ImportError:
+        errors.append("OAuth helper module missing: google_auth.py")
+        errors.append("  This should be in the same directory as gmail-api-rw")
+    except Exception:
+        # OAuth not set up yet, that's fine - user can run 'm login <account>'
+        pass
+
+    if errors:
+        print("⚠️  Gmail API dependency check failed:", file=sys.stderr)
+        print(file=sys.stderr)
+        for error in errors:
+            print(f"  {error}", file=sys.stderr)
+        print(file=sys.stderr)
+        print("Fix the above issues. For OAuth setup, run 'm login <account>'", file=sys.stderr)
+        return False
+
+    return True
 
 def _import_google_modules():
     """Import Google API modules only when needed."""
@@ -559,6 +679,27 @@ def open_attachments_interactively(raw_bytes):
         print("\nCanceled.", file=sys.stderr)
 
 
+# ============================================================================
+# § CACHE — per-account message-id cache (no TTL by design)
+# ============================================================================
+#
+# Why no TTL: the !! workflow is the contract. User runs `m q sophie`, sees
+# a list, then runs `!! 3 reply` which must reference the SAME index 3 they
+# saw, even minutes later. A TTL would invalidate the cache mid-session and
+# misroute commands.
+#
+# Invalidation happens implicitly when the cache key changes. Key is
+# (count, query, account). Different query → different file? No — same
+# file, content rewritten. _load_cached_ids checks the saved key matches
+# the current key before returning entries.
+#
+# To force a fresh fetch, callers pass `-N` from m, or unlink the cache
+# file (do_trash/do_archive do this after destructive operations so a
+# stale index doesn't refer to a now-trashed message).
+#
+# Cache files live in CACHE_DIR (/tmp/spool). Filenames embed the account
+# slug so different accounts don't collide.
+
 CACHE_DIR = Path("/tmp/spool")
 
 
@@ -569,7 +710,12 @@ def _cache_path(account=None):
 
 
 def _listing_cache_path(account=None):
-    """Return per-account rendered-listing cache (text)."""
+    """Return per-account rendered-listing cache (text).
+
+    Currently unused (do_list re-renders directly). Kept because the
+    rendered-text cache is occasionally useful for debugging cache misses.
+    Safe to remove if a cleanup pass also removes any callers.
+    """
     slug = (account or "default").replace("@", "-at-").replace(".", "-")
     return CACHE_DIR / f".gmail-api-rw-last-listing-{slug}.txt"
 
@@ -622,8 +768,14 @@ def _strip_html(html_text):
     text = re.sub(r"<[^>]+>", "", text)
     # Decode HTML entities
     text = html_mod.unescape(text)
-    # Collapse runs of blank lines
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Remove excessive whitespace and normalize spacing
+    text = re.sub(r"[ \t]+", " ", text)  # Multiple spaces/tabs to single space
+    text = re.sub(r"\n[ \t]*\n", "\n\n", text)  # Remove spaces/tabs between newlines
+    # Remove lines that contain only whitespace
+    lines = text.split('\n')
+    cleaned_lines = [line.rstrip() for line in lines if line.strip()]
+    text = '\n'.join(cleaned_lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)  # Collapse runs of blank lines
     return text.strip()
 
 
@@ -638,7 +790,13 @@ def _clean_unicode_noise(text):
                      or char in ['\n', '\r', '\t'])
     # Remove multiple consecutive spaces while preserving intentional formatting
     import re
-    return re.sub(r' {3,}', '  ', cleaned)
+    cleaned = re.sub(r' {3,}', '  ', cleaned)
+
+    # Fix whitespace around colons and other punctuation
+    cleaned = re.sub(r':(\S)', r': \1', cleaned)  # Add space after colon if missing
+    cleaned = re.sub(r'(\w):$', r'\1:', cleaned.rstrip())  # Clean trailing colon
+
+    return cleaned
 
 def extract_text_body(raw_bytes):
     """Extract text/plain body from raw email bytes, falling back to stripped HTML."""
@@ -688,53 +846,23 @@ def print_message_preview(raw_bytes):
     print(extract_text_body(raw_bytes))
 
 
-# Configuration files - try new JSON format first, fall back to legacy
+# Configuration file: unified JSON config used by m and gmail-api-rw
 MAIL_TOOLS_CONFIG = Path(os.environ.get("MAIL_TOOLS_CONFIG", "~/.config/mail-tools/accounts.json")).expanduser()
-ACCOUNTS_FILE = Path("~/.config/gmail-api-rw/accounts").expanduser()
 
 
 def _load_accounts_config():
-    """Load account configuration from JSON or legacy file format.
+    """Load account configuration from the unified JSON config.
 
     Returns dict with account info or None if no config found.
     JSON format: {"accounts": {"alias": {"email": "...", "muttrc": "...", "chrome_profile": "..."}}}
-    Legacy format: email /path/to/muttrc (one per line)
     """
-    # Try new JSON format first
     if MAIL_TOOLS_CONFIG.exists():
         try:
             with open(MAIL_TOOLS_CONFIG) as f:
                 return json.load(f)
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"Warning: Invalid JSON config at {MAIL_TOOLS_CONFIG}: {e}", file=sys.stderr)
-            print(f"Falling back to legacy config at {ACCOUNTS_FILE}", file=sys.stderr)
-
-    # Fall back to legacy format
-    if ACCOUNTS_FILE.exists():
-        config = {"accounts": {}, "default_account": None}
-        with open(ACCOUNTS_FILE) as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split(None, 1)
-                if len(parts) != 2:
-                    continue
-                email, muttrc_path = parts
-                # Create alias as first part of email domain
-                if "@" in email:
-                    alias = email.split("@")[0][:1]  # First letter of username
-                else:
-                    alias = f"legacy_{line_num}"
-                config["accounts"][alias] = {
-                    "email": email,
-                    "muttrc": muttrc_path,
-                    "chrome_profile": "0"  # Default
-                }
-                if config["default_account"] is None:
-                    config["default_account"] = alias
-        return config if config["accounts"] else None
-
+            print(f"Invalid JSON config at {MAIL_TOOLS_CONFIG}: {e}", file=sys.stderr)
+            return None
     return None
 
 
@@ -758,6 +886,29 @@ def _default_from_email():
     return None
 
 
+def _alias_for_email(email):
+    """Reverse-lookup: given an email, return a usable `m` account alias.
+
+    Why: error messages that suggest "Retry with: m <alias> ..." need a real
+    alias (e.g. 'h'), not the email's local-part (which would be 'chris' for
+    x@example.com and is not a valid alias).
+
+    Strategy: prefer the shortest matching alias (so 'h' wins over 'hNY').
+    If no match, return the email itself — `m -e <email>` accepts substring
+    matches via _lookup_config_for_email, so this is still a working command.
+    """
+    if not email:
+        return email
+    cfg = _load_accounts_config() or {}
+    matches = [
+        alias for alias, acct in cfg.get("accounts", {}).items()
+        if acct.get("email", "").lower() == email.lower()
+    ]
+    if matches:
+        return min(matches, key=len)
+    return email
+
+
 def _default_from_addr():
     """Build a From header value from config default_name + default account email."""
     email_addr = _default_from_email()
@@ -770,20 +921,41 @@ def _default_from_addr():
 
 
 def do_list_accounts():
-    """Print configured accounts from ~/.config/gmail-api-rw/accounts."""
-    if not ACCOUNTS_FILE.exists():
-        print(f"No accounts file at {ACCOUNTS_FILE}", file=sys.stderr)
-        print("Create it with lines like: user@example.com /path/to/muttrc", file=sys.stderr)
+    """Print configured accounts from unified JSON configuration."""
+    config = _load_accounts_config()
+    if not config:
+        print(f"No accounts configuration found", file=sys.stderr)
+        print(f"Create JSON config at {MAIL_TOOLS_CONFIG}", file=sys.stderr)
         sys.exit(1)
-    with open(ACCOUNTS_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split(None, 1)
-            if len(parts) == 2:
-                print(f"  {parts[0]}")
+
+    accounts = config.get("accounts", {})
+    for alias, account_info in accounts.items():
+        email = account_info.get("email", "")
+        print(f"  {alias}: {email}")
     sys.exit(0)
+
+
+def _authenticated_service(args, scope, email_override=None, handle_show_account=True):
+    """Resolve account, get OAuth credentials, build a Gmail service object.
+
+    Centralizes the resolve_account → get_credentials → build pattern that
+    appears in every dispatch branch of main(). Returns (service, login_hint).
+
+    args:
+        args: argparse Namespace (must have .config, .email; .show_account optional)
+        scope: OAuth scope string ("gmail-readonly" or "gmail-send")
+        email_override: if set, use this instead of args.email (for --outbox)
+        handle_show_account: if True and args.show_account is set, print account and exit
+    """
+    email_addr = email_override if email_override is not None else getattr(args, "email", None)
+    token_name, login_hint = resolve_account(args.config, email_addr, scope)
+    if handle_show_account and getattr(args, "show_account", False):
+        print(login_hint or "(default account)")
+        sys.exit(0)
+    creds = get_credentials(service="gmail", scopes=scope,
+                            token_name=token_name, login_hint=login_hint)
+    service = build("gmail", "v1", credentials=creds)
+    return service, login_hint
 
 
 def resolve_account(config_path, email_addr, scope_prefix):
@@ -821,8 +993,8 @@ def _lookup_config_for_email(email_addr):
     """
     config = _load_accounts_config()
     if not config:
-        print(f"No accounts configuration found at {MAIL_TOOLS_CONFIG} or {ACCOUNTS_FILE}", file=sys.stderr)
-        print(f"Create JSON config at {MAIL_TOOLS_CONFIG} or legacy format at {ACCOUNTS_FILE}", file=sys.stderr)
+        print(f"No accounts configuration found at {MAIL_TOOLS_CONFIG}", file=sys.stderr)
+        print(f"Create the JSON config - see SETUP.md", file=sys.stderr)
         sys.exit(1)
 
     accounts = config.get("accounts", {})
@@ -847,12 +1019,120 @@ def _lookup_config_for_email(email_addr):
         sys.exit(1)
 
     if len(matches) > 1:
+        # If all matches resolve to the same email, they're equivalent aliases - pick first
+        unique_emails = {acct["email"].lower() for _, acct in matches}
+        if len(unique_emails) == 1:
+            alias, account = matches[0]
+            return account["email"], account["muttrc"]
         print(f"Multiple matches for '{email_addr}': {[alias for alias, _ in matches]}", file=sys.stderr)
         print(f"Be more specific or use exact alias", file=sys.stderr)
         sys.exit(1)
 
     alias, account = matches[0]
     return account["email"], account["muttrc"]
+
+
+def _add_peek_metadata_headers(raw_bytes):
+    """Add agent-friendly metadata headers to peek files for immediate context.
+
+    Prepends key headers (Subject, From, Date) at the top for agent visibility.
+    """
+    # Parse the original message
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+
+    # Extract key metadata
+    subject = msg.get("Subject", "(no subject)")
+    from_addr = msg.get("From", "(unknown sender)")
+    date_str = msg.get("Date", "(no date)")
+
+    # Create metadata header block
+    metadata_headers = [
+        f"X-Claude-Subject: {subject}",
+        f"X-Claude-From: {from_addr}",
+        f"X-Claude-Date: {date_str}",
+        f"X-Claude-Peek-Context: Agent context headers for immediate message understanding",
+        ""  # Blank line separator
+    ]
+
+    # Prepend metadata to original message
+    metadata_block = "\r\n".join(metadata_headers).encode('utf-8')
+    enhanced_message = metadata_block + raw_bytes
+
+    return enhanced_message
+
+
+def _create_combined_peek_file(peek_paths):
+    """Combine multiple message files into single batch analysis file.
+
+    Returns path to combined file for agent analysis.
+    """
+    if not peek_paths:
+        return None
+
+    # Create output path
+    spool = Path("/tmp/spool")
+    spool.mkdir(exist_ok=True)
+    timestamp = time.strftime("%Y-%m-%d-%H%M%S")
+    combined_path = spool / f"combined-peek-{timestamp}.eml"
+
+    # Combine messages with clear separators
+    combined_content = []
+
+    # Add batch metadata header
+    combined_content.extend([
+        "X-Claude-Batch-Analysis: Combined message batch for agent analysis",
+        f"X-Claude-Batch-Count: {len(peek_paths)}",
+        f"X-Claude-Batch-Timestamp: {timestamp}",
+        "",
+        "=" * 80,
+        "BATCH PEEK: Multiple messages combined for agent analysis",
+        "=" * 80,
+        ""
+    ])
+
+    for i, path in enumerate(peek_paths, 1):
+        try:
+            with open(path, 'rb') as f:
+                msg_bytes = f.read()
+
+            # Parse message to extract key info for separator
+            msg = email.message_from_bytes(msg_bytes, policy=email.policy.default)
+            subject = msg.get("Subject", "(no subject)")
+            from_addr = msg.get("From", "(unknown sender)")
+            date_str = msg.get("Date", "(no date)")
+
+            # Add message separator with metadata
+            separator = [
+                f"--- MESSAGE {i}/{len(peek_paths)} ---",
+                f"Source file: {Path(path).name}",
+                f"Subject: {subject}",
+                f"From: {from_addr}",
+                f"Date: {date_str}",
+                "-" * 50,
+                ""
+            ]
+            combined_content.extend(separator)
+
+            # Add the message content (decode if needed)
+            try:
+                combined_content.append(msg_bytes.decode('utf-8', errors='replace'))
+            except UnicodeDecodeError:
+                combined_content.append(msg_bytes.decode('latin1'))
+
+            # Add spacing between messages
+            combined_content.extend(["", "=" * 80, ""])
+
+        except Exception as e:
+            combined_content.extend([
+                f"--- ERROR reading {path}: {e} ---",
+                ""
+            ])
+
+    # Write combined file
+    combined_text = "\n".join(combined_content)
+    combined_path.write_text(combined_text, encoding='utf-8')
+
+    return str(combined_path)
 
 
 def _save_draft_recovery(src_path, kind):
@@ -882,8 +1162,28 @@ def get_body_interactive(recipient, subject):
     return body
 
 
+# ============================================================================
+# § SWAP_OR_RECOVER — multi-account OAuth swap with draft recovery
+# ============================================================================
+#
+# Why this exists: when a user composes a reply and edits the From: line in
+# the editor (or sets --outbox), we need to authenticate as a different
+# account before sending. Earlier code silently caught swap failures and
+# returned the original service object, then the send proceeded with
+# mismatched credentials. Gmail rejected the message and the user's draft
+# body was lost. This module enforces the failure-saves-draft contract.
+
+class AccountSwapError(Exception):
+    """Raised when swap_service_account fails. Caller should recover the draft."""
+    pass
+
+
 def swap_service_account(current_service, new_token_name, new_login_hint):
-    """Swap OAuth credentials to use a different account. Returns new service object."""
+    """Swap OAuth credentials to use a different account. Returns new service object.
+
+    Raises AccountSwapError on failure so the caller can preserve the user's draft
+    rather than silently sending with mismatched credentials.
+    """
     try:
         # Use gmail-send scope to ensure we can send emails
         new_credentials = get_credentials(service="gmail", scopes="gmail-send",
@@ -891,8 +1191,48 @@ def swap_service_account(current_service, new_token_name, new_login_hint):
         new_service = build("gmail", "v1", credentials=new_credentials)
         return new_service
     except Exception as e:
-        print(f"Error swapping to account {new_login_hint}: {e}", file=sys.stderr)
-        return current_service
+        raise AccountSwapError(f"Could not switch to account {new_login_hint}: {e}") from e
+
+
+def _save_failed_draft(action_name, body, headers):
+    """Save an unsendable draft to /tmp so the user can recover it."""
+    from datetime import datetime
+    datestr = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = f"/tmp/m-{action_name}-failed-{datestr}.eml"
+    lines = []
+    for key in ("From", "To", "Cc", "Subject"):
+        val = headers.get(key, "")
+        if val:
+            lines.append(f"{key}: {val}")
+    lines.append("")
+    lines.append(body)
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    return path
+
+
+def _swap_or_recover(service, new_account_info, action_name, body, headers):
+    """Try to swap OAuth credentials; on failure save draft and exit.
+
+    Returns (new_service, new_login_hint) on success. Calls sys.exit(1) on failure
+    after saving the draft to /tmp and printing a retry command.
+    """
+    new_token_name, new_login_hint = new_account_info
+    try:
+        new_service = swap_service_account(service, new_token_name, new_login_hint)
+        return new_service, new_login_hint
+    except AccountSwapError as e:
+        path = _save_failed_draft(action_name, body, headers)
+        print(f"\n{e}", file=sys.stderr)
+        print(f"Your draft is saved at: {path}", file=sys.stderr)
+        # Reverse-lookup a real alias so the suggested command actually works.
+        # If no alias matches, fall back to `m -e <email>` (also valid).
+        alias_hint = _alias_for_email(new_login_hint)
+        if alias_hint == new_login_hint:
+            print(f"Retry with: m -e {alias_hint} send -H {path}", file=sys.stderr)
+        else:
+            print(f"Retry with: m {alias_hint} send -H {path}", file=sys.stderr)
+        sys.exit(1)
 
 
 def edit_headers_and_body(initial_headers, body_template, current_account, max_retries=3):
@@ -909,32 +1249,33 @@ def edit_headers_and_body(initial_headers, body_template, current_account, max_r
         (final_headers_dict, body_text, new_account_info)
         where new_account_info is (token_name, login_hint) if account changed, or None
     """
-    # Build available accounts comment with enumeration
+    # Build available accounts comment from the unified JSON config.
+    # Uses _load_accounts_config() so config errors are reported consistently
+    # with the rest of the codebase (no silent swallow).
     available_accounts = []
-    if ACCOUNTS_FILE.exists():
-        try:
-            with open(ACCOUNTS_FILE) as f:
-                seen_emails = set()
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        email = line.split(None, 1)[0]
-                        if "@" in email and email not in seen_emails:
-                            available_accounts.append(email)
-                            seen_emails.add(email)
-        except OSError:
-            pass
+    seen_emails = set()
+    cfg = _load_accounts_config() or {}
+    for _alias, acct in cfg.get("accounts", {}).items():
+        email = acct.get("email", "")
+        if "@" in email and email not in seen_emails:
+            available_accounts.append(email)
+            seen_emails.add(email)
 
+    accounts_lines = [
+        "# To reply from a different account, EXIT WITHOUT SAVING and re-run:",
+        "#   m <read-acct> q <query> <N> reply --outbox <send-acct>",
+        "# Editing From: here is ignored when --outbox is set on the command line.",
+    ]
     if available_accounts:
-        accounts_lines = ["# Available outboxes (copy/paste any line below):"]
+        accounts_lines.append("# Available outboxes (copy/paste any line below):")
         for email in available_accounts:
             if email == current_account:
                 accounts_lines.append(f"# From: {email}  # (current)")
             else:
                 accounts_lines.append(f"# From: {email}")
-        accounts_comment = "\n".join(accounts_lines)
     else:
-        accounts_comment = "# No accounts configured"
+        accounts_lines.append("# (no other accounts configured)")
+    accounts_comment = "\n".join(accounts_lines)
 
     editor = os.environ.get("EDITOR", "vim")
     original_from = initial_headers.get("From", current_account)
@@ -1348,6 +1689,10 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
     ).execute()
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
 
+    # For peek mode, add metadata headers for agent context
+    if grab:
+        raw_bytes = _add_peek_metadata_headers(raw_bytes)
+
     # -A flag: save attachments only without displaying email
     if save_attachments_only:
         # Determine output directory
@@ -1442,8 +1787,19 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
 # ---------------------------------------------------------------------------
 
 def do_reply(service, index, count, query, args, as_draft=False, account=None,
-             sent=False):
-    """Download message by index, extract headers, open $EDITOR for reply."""
+             sent=False, send_service=None, send_account=None):
+    """Download message by index, extract headers, open $EDITOR for reply.
+
+    service / account: used for reading the original message (the inbox we're
+    replying TO).
+    send_service / send_account: used for sending the reply. If None, defaults
+    to service / account (single-account case). When set, the From: header is
+    fixed to send_account and in-editor From: editing is disabled.
+    """
+    if send_service is None:
+        send_service = service
+    if send_account is None:
+        send_account = account
     msg_id = _resolve_message_id(service, index, count, query, account=account,
                                  verify=True)
     raw_msg = service.users().messages().get(
@@ -1478,16 +1834,13 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
     self_addrs = set()
     if account:
         self_addrs.add(account.lower())
-    # Also load all configured account emails
-    if ACCOUNTS_FILE.exists():
-        with open(ACCOUNTS_FILE) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                acct_email = line.split(None, 1)[0]
-                if "@" in acct_email:
-                    self_addrs.add(acct_email.lower())
+    # Also load all configured account emails from the unified JSON config
+    _cfg = _load_accounts_config()
+    if _cfg:
+        for _alias, _acct in _cfg.get("accounts", {}).items():
+            _email = _acct.get("email", "")
+            if "@" in _email:
+                self_addrs.add(_email.lower())
 
     # Reply-all: collect To and Cc, excluding self and reply_addr
     reply_all = getattr(args, 'all', False)
@@ -1542,16 +1895,22 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
             as_draft = True
         body = (stdin_body + "\n" if stdin_body else "") + template
     else:
-        # Edit headers + body together using new helper
+        # Edit headers + body together using new helper.
+        # If --outbox set a separate send account, fix From: to it and ignore
+        # any in-editor From: changes (the user already chose the outbox).
         initial_headers = {
             "To": reply_addr,
             "Cc": cc_addrs,
             "Subject": re_subject,
-            "From": account or "Unknown account"
+            "From": send_account or account or "Unknown account"
         }
         final_headers, body, new_account_info = edit_headers_and_body(
-            initial_headers, template, account or ""
+            initial_headers, template, send_account or account or ""
         )
+        if send_account and send_service is not service:
+            # Outbox is fixed; do not honor any From: edits the user typed
+            new_account_info = None
+            final_headers["From"] = send_account
 
         # Update variables from editor results
         reply_addr = final_headers["To"]
@@ -1560,9 +1919,9 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
 
         # Handle account switching if From: was changed
         if new_account_info:
-            new_token_name, new_login_hint = new_account_info
-            service = swap_service_account(service, new_token_name, new_login_hint)
-            account = new_login_hint  # Update account variable for confirmation display
+            service, account = _swap_or_recover(
+                service, new_account_info, "reply", body, final_headers
+            )
 
     if not body.strip():
         print("Empty body, aborting.", file=sys.stderr)
@@ -1629,9 +1988,9 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
 
                 # Handle account switching if From: was changed
                 if new_account_info:
-                    new_token_name, new_login_hint = new_account_info
-                    service = swap_service_account(service, new_token_name, new_login_hint)
-                    account = new_login_hint
+                    service, account = _swap_or_recover(
+                        service, new_account_info, "reedit", body, final_headers
+                    )
                 continue
             else:
                 print("Please answer y(es), n(o), or e(dit) to re-edit.", file=sys.stderr)
@@ -1642,6 +2001,8 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
     if cc_addrs:
         reply["Cc"] = cc_addrs
     reply["Subject"] = re_subject
+    if send_account and send_account != account:
+        reply["From"] = send_account
     if orig_msg_id:
         reply["In-Reply-To"] = orig_msg_id
     if refs:
@@ -1651,12 +2012,12 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
     raw_reply = base64.urlsafe_b64encode(reply.as_bytes()).decode()
 
     if as_draft:
-        result = service.users().drafts().create(
+        result = send_service.users().drafts().create(
             userId="me", body={"message": {"raw": raw_reply}}
         ).execute()
         print(f"Draft reply saved: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}", file=sys.stderr)
     else:
-        result = service.users().messages().send(
+        result = send_service.users().messages().send(
             userId="me", body={"raw": raw_reply}
         ).execute()
         print(f"Sent reply: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}", file=sys.stderr)
@@ -1737,9 +2098,9 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
 
         # Handle account switching if From: was changed
         if new_account_info:
-            new_token_name, new_login_hint = new_account_info
-            service = swap_service_account(service, new_token_name, new_login_hint)
-            account = new_login_hint  # Update account variable for confirmation display
+            service, account = _swap_or_recover(
+                service, new_account_info, "fwd", body, final_headers
+            )
 
     if not body.strip():
         print("Empty body, aborting.", file=sys.stderr)
@@ -1801,9 +2162,9 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
 
                 # Handle account switching if From: was changed
                 if new_account_info:
-                    new_token_name, new_login_hint = new_account_info
-                    service = swap_service_account(service, new_token_name, new_login_hint)
-                    account = new_login_hint
+                    service, account = _swap_or_recover(
+                        service, new_account_info, "reedit", body, final_headers
+                    )
                 continue
             else:
                 print("Please answer y(es), n(o), or e(dit) to re-edit.", file=sys.stderr)
@@ -1963,6 +2324,45 @@ def do_open(service, index, count, query, account=None):
         url = f"https://mail.google.com/mail/u/0/#all/{msg_id}"
     print(f"Opening: {url}", file=sys.stderr)
     webbrowser.open(url)
+
+
+# ---------------------------------------------------------------------------
+# Extract URLs from message
+# ---------------------------------------------------------------------------
+
+def do_urls(service, index, count, query, account=None):
+    """Extract and display URLs from a message."""
+    import re
+
+    msg_id = _resolve_message_id(service, index, count, query, account=account)
+
+    raw_msg = service.users().messages().get(
+        userId="me", id=msg_id, format="raw"
+    ).execute()
+    raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+
+    # Extract text content from the email
+    text_body = extract_text_body(raw_bytes)
+
+    # Find URLs using regex - matches http(s) URLs
+    url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+    urls = re.findall(url_pattern, text_body)
+
+    if not urls:
+        print("No URLs found in message", file=sys.stderr)
+        return
+
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_urls = []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            unique_urls.append(url)
+
+    # Print URLs one per line
+    for url in unique_urls:
+        print(url)
 
 
 # ---------------------------------------------------------------------------
@@ -2228,6 +2628,12 @@ def parse_send_draft_args(argv):
                         help="Preview the built message without sending")
     parser.add_argument("--done", action="store_true",
                         help="Copy /sent <path> to clipboard after sending (for Claude /sent skill)")
+    # --via-send is the contract flag from `m`. m's direct_send sets it on
+    # the API path; do_send refuses to send without it (see do_send body).
+    # This prevents a user from accidentally bypassing m's safety checks
+    # by invoking gmail-api-rw send directly from the shell. Hidden via
+    # SUPPRESS so it doesn't clutter --help. Removing this flag breaks
+    # m's API send path; both must move together.
     parser.add_argument("--via-send", action="store_true", default=False,
                         help=argparse.SUPPRESS)
     return parser.parse_args(argv[1:])
@@ -2259,6 +2665,8 @@ def parse_list_get_args(argv):
     parser.add_argument("-a", "--attach", action="append", default=None, help="Attach file (repeatable)")
     parser.add_argument("--open-attachments", action="store_true", help="Interactively open message attachments")
     parser.add_argument("-A", "--save-attachments-only", action="store_true", help="Save attachments only (no email display)")
+    parser.add_argument("--outbox", default=None,
+                        help="Account alias to send FROM (read uses -e, send uses --outbox)")
     return parser.parse_args(argv)
 
 
@@ -2806,10 +3214,22 @@ def _date_range(messages):
 
 
 def main():
+    # Check dependencies early (skip for certain flags that don't need full setup)
+    if not any(flag in sys.argv for flag in ["-h", "--help", "-E", "--list-accounts"]):
+        if not check_dependencies():
+            sys.exit(1)
+
     # Strip -peek / --peek (and legacy -grab / --grab) from argv before any parsing
     peek_flags = {"-p", "-peek", "--peek", "-grab", "--grab"}
     grab_mode = bool(peek_flags & set(sys.argv))
     sys.argv = [a for a in sys.argv if a not in peek_flags]
+
+    # Strip --peek-combined: combine multiple messages into single file for batch analysis
+    combined_peek_flags = {"--peek-combined", "--combined"}
+    combined_peek_mode = bool(combined_peek_flags & set(sys.argv))
+    if combined_peek_mode:
+        grab_mode = True  # Enable grab mode for combined peek
+    sys.argv = [a for a in sys.argv if a not in combined_peek_flags]
 
     # Strip -w / --web: open Gmail in browser and exit
     web_flags = {"-w", "--web"}
@@ -2889,7 +3309,7 @@ def main():
         if arg in ("-F", "--config", "-e", "--email", "-n", "--count", "-q", "--query"):
             skip_next = True  # next arg is the flag's value
             continue
-        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "open", "thread", "read", "unread", "inbox"):
+        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "open", "thread", "read", "unread", "inbox", "urls"):
             mode = arg
             mode_index = i
             break
@@ -2911,16 +3331,14 @@ def main():
     if mode in ("send", "draft"):
         args = parse_send_draft_args(rest)
         # -t preview: just build bytes locally, no Gmail API call needed
-        token_name, login_hint = resolve_account(args.config, args.email, "gmail-send")
-        if args.show_account:
-            print(login_hint or "(default account)")
-            sys.exit(0)
         if args.text:
+            _, login_hint = resolve_account(args.config, args.email, "gmail-send")
+            if args.show_account:
+                print(login_hint or "(default account)")
+                sys.exit(0)
             service = None
         else:
-            creds = get_credentials(service="gmail", scopes="gmail-send",
-                                    token_name=token_name, login_hint=login_hint)
-            service = build("gmail", "v1", credentials=creds)
+            service, login_hint = _authenticated_service(args, "gmail-send")
         if mode == "send":
             do_send(service, args, from_addr=login_hint)
         else:
@@ -2947,15 +3365,29 @@ def main():
         elif not query:
             query = "in:inbox"
         reply_scope = "gmail-readonly" if args.text else "gmail-send"
-        token_name, login_hint = resolve_account(args.config, args.email, reply_scope)
-        if args.show_account:
-            print(login_hint or "(default account)")
-            sys.exit(0)
-        creds = get_credentials(service="gmail", scopes=reply_scope,
-                                token_name=token_name, login_hint=login_hint)
-        service = build("gmail", "v1", credentials=creds)
+        service, login_hint = _authenticated_service(args, reply_scope)
+
+        # --outbox: read from one account, send from another
+        send_service = None
+        send_account = None
+        if getattr(args, "outbox", None):
+            if args.outbox.startswith("-"):
+                print(f"--outbox got '{args.outbox}', which looks like a flag. "
+                      f"Did you forget the account alias? Usage: --outbox <alias>",
+                      file=sys.stderr)
+                sys.exit(1)
+            try:
+                send_service, send_account = _authenticated_service(
+                    args, "gmail-send", email_override=args.outbox, handle_show_account=False
+                )
+                print(f"Reading from {login_hint}, sending from {send_account}", file=sys.stderr)
+            except Exception as e:
+                print(f"Could not authenticate outbox '{args.outbox}': {e}", file=sys.stderr)
+                sys.exit(1)
+
         do_reply(service, reply_idx, args.count, query, args,
-                 as_draft=args.draft, account=login_hint, sent=sent_mode)
+                 as_draft=args.draft, account=login_hint, sent=sent_mode,
+                 send_service=send_service, send_account=send_account)
         sys.exit(0)  # Prevent fallthrough to else block
     elif mode == "fwd":
         fwd_rest = [a for a in rest if a != "fwd"]
@@ -2971,13 +3403,7 @@ def main():
         fwd_idx = indices[0]
         recipient = args.output  # the "output" positional is the recipient for fwd
         fwd_scope = "gmail-readonly" if args.text else "gmail-send"
-        token_name, login_hint = resolve_account(args.config, args.email, fwd_scope)
-        if args.show_account:
-            print(login_hint or "(default account)")
-            sys.exit(0)
-        creds = get_credentials(service="gmail", scopes=fwd_scope,
-                                token_name=token_name, login_hint=login_hint)
-        service = build("gmail", "v1", credentials=creds)
+        service, login_hint = _authenticated_service(args, fwd_scope)
         # Apply same query defaults as listing, so cache keys match
         query = args.query
         if sent_mode:
@@ -2992,8 +3418,9 @@ def main():
         inbox_rest = [a for a in rest if a != "inbox"]
         # Prepend common flags that were before "inbox" in argv
         args = parse_inbox_args(inbox_rest)
-        token_name, login_hint = resolve_account(args.config, args.email, "gmail-readonly")
+        # Resolve account first so --show-account can short-circuit before file IO
         if args.show_account:
+            _, login_hint = resolve_account(args.config, args.email, "gmail-readonly")
             print(login_hint or "(default account)")
             sys.exit(0)
         team_file = args.team_file
@@ -3008,9 +3435,7 @@ def main():
         for name, addr in team:
             print(f"  {name} <{addr}>", file=sys.stderr)
         print(file=sys.stderr)
-        creds = get_credentials(service="gmail", scopes="gmail-readonly",
-                                token_name=token_name, login_hint=login_hint)
-        service = build("gmail", "v1", credentials=creds)
+        service, login_hint = _authenticated_service(args, "gmail-readonly", handle_show_account=False)
         do_inbox(service, team, args.days, args.output, dry_run=args.dry_run,
                  account=login_hint, resume=args.resume)
     elif mode in ("trash", "archive", "open", "thread", "read", "unread"):
@@ -3027,13 +3452,7 @@ def main():
             sys.exit(1)
         # trash/archive/read/unread need write access; open and thread only need read
         scope = "gmail-send" if mode in ("trash", "archive", "read", "unread") else "gmail-readonly"
-        token_name, login_hint = resolve_account(args.config, args.email, scope)
-        if args.show_account:
-            print(login_hint or "(default account)")
-            sys.exit(0)
-        creds = get_credentials(service="gmail", scopes=scope,
-                                token_name=token_name, login_hint=login_hint)
-        service = build("gmail", "v1", credentials=creds)
+        service, login_hint = _authenticated_service(args, scope)
         # Apply same query defaults as listing, so cache keys match
         query = args.query
         if sent_mode:
@@ -3053,16 +3472,28 @@ def main():
         else:
             do_thread(service, indices[0], args.count, query, account=login_hint,
                      text_view=args.text, headers_only=args.headers)
+    elif mode == "urls":
+        mode_rest = [a for a in rest if a != mode]
+        indices, filtered_rest = collect_indices(mode_rest)
+        args = parse_list_get_args(filtered_rest)
+        if not indices:
+            print("Usage: gmail-api-rw urls INDEX (e.g., gmail-api-rw urls 3)", file=sys.stderr)
+            sys.exit(1)
+        if len(indices) > 1:
+            print(f"urls only works with a single message, got "
+                  f"{len(indices)} indices: {indices}", file=sys.stderr)
+            sys.exit(1)
+        service, login_hint = _authenticated_service(args, "gmail-readonly")
+        # Apply same query defaults as listing, so cache keys match
+        query = args.query
+        if sent_mode:
+            query = f"in:sent {query}" if query else "in:sent"
+        elif not query:
+            query = "in:inbox"
+        do_urls(service, indices[0], args.count, query, account=login_hint)
     else:
         args = parse_list_get_args(rest)
-        scope = "gmail-readonly"
-        token_name, login_hint = resolve_account(args.config, args.email, scope)
-        if args.show_account:
-            print(login_hint or "(default account)")
-            sys.exit(0)
-        creds = get_credentials(service="gmail", scopes=scope,
-                                token_name=token_name, login_hint=login_hint)
-        service = build("gmail", "v1", credentials=creds)
+        service, login_hint = _authenticated_service(args, "gmail-readonly")
         query = args.query
         if sent_mode:
             query = f"in:sent {query}" if query else "in:sent"
@@ -3101,7 +3532,15 @@ def main():
                 if result:
                     peek_paths.append(result)
             if peek_paths:
-                peek_cmd = "/peek " + " ".join(peek_paths)
+                if combined_peek_mode and len(peek_paths) > 1:
+                    # Combine multiple messages into single file for batch analysis
+                    combined_path = _create_combined_peek_file(peek_paths)
+                    peek_cmd = f"/peek {combined_path}"
+                    print(f"Combined {len(peek_paths)} messages into: {combined_path}", file=sys.stderr)
+                else:
+                    # Standard multi-file peek
+                    peek_cmd = "/peek " + " ".join(peek_paths)
+
                 subprocess.run(["pbcopy"], input=peek_cmd.encode(), check=True)
                 print(f"Copied to clipboard: {peek_cmd}", file=sys.stderr)
 
