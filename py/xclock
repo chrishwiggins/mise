@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""
+XClock Emulator - A graphical analog clock similar to X11 xclock
+
+This application creates an analog clock with hour, minute, and second hands
+that update in real-time.
+"""
+
+import tkinter as tk
+from tkinter import ttk
+import math
+import time
+import threading
+
+
+class XClockEmulator:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("XClock Emulator")
+        self.root.geometry("300x350")
+        self.root.resizable(True, True)
+
+        # Configure the main frame
+        self.main_frame = ttk.Frame(root, padding="10")
+        self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        # Configure grid weights for resizing
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+        self.main_frame.columnconfigure(0, weight=1)
+        self.main_frame.rowconfigure(0, weight=1)
+
+        # Create canvas for the clock
+        self.canvas_size = 250
+        self.canvas = tk.Canvas(
+            self.main_frame,
+            width=self.canvas_size,
+            height=self.canvas_size,
+            bg='white',
+            highlightthickness=2,
+            highlightbackground='black'
+        )
+        self.canvas.grid(row=0, column=0, pady=5)
+
+        # Clock center and radius
+        self.center_x = self.canvas_size // 2
+        self.center_y = self.canvas_size // 2
+        self.radius = min(self.center_x, self.center_y) - 20
+
+        # Digital time display
+        self.time_label = ttk.Label(
+            self.main_frame,
+            text="",
+            font=("Courier", 12),
+            anchor="center"
+        )
+        self.time_label.grid(row=1, column=0, pady=5)
+
+        # Control buttons frame
+        self.button_frame = ttk.Frame(self.main_frame)
+        self.button_frame.grid(row=2, column=0, pady=10)
+
+        # Quit button
+        self.quit_button = ttk.Button(
+            self.button_frame,
+            text="Quit",
+            command=self.root.quit
+        )
+        self.quit_button.pack(side=tk.LEFT, padx=5)
+
+        # About button
+        self.about_button = ttk.Button(
+            self.button_frame,
+            text="About",
+            command=self.show_about
+        )
+        self.about_button.pack(side=tk.LEFT, padx=5)
+
+        # Initialize clock
+        self.running = True
+        self.draw_clock_face()
+        self.update_clock()
+
+    def draw_clock_face(self):
+        """Draw the static elements of the clock face"""
+        # Clear canvas
+        self.canvas.delete("all")
+
+        # Draw outer circle
+        self.canvas.create_oval(
+            self.center_x - self.radius,
+            self.center_y - self.radius,
+            self.center_x + self.radius,
+            self.center_y + self.radius,
+            outline='black',
+            width=3
+        )
+
+        # Draw hour markers
+        for i in range(12):
+            angle = math.radians(i * 30 - 90)  # -90 to start at 12 o'clock
+
+            # Major hour marks
+            inner_radius = self.radius - 15
+            outer_radius = self.radius - 5
+
+            x1 = self.center_x + inner_radius * math.cos(angle)
+            y1 = self.center_y + inner_radius * math.sin(angle)
+            x2 = self.center_x + outer_radius * math.cos(angle)
+            y2 = self.center_y + outer_radius * math.sin(angle)
+
+            self.canvas.create_line(x1, y1, x2, y2, width=3, fill='black')
+
+            # Hour numbers
+            number_radius = self.radius - 25
+            num_x = self.center_x + number_radius * math.cos(angle)
+            num_y = self.center_y + number_radius * math.sin(angle)
+
+            hour = 12 if i == 0 else i
+            self.canvas.create_text(
+                num_x, num_y,
+                text=str(hour),
+                font=("Arial", 12, "bold"),
+                fill='black'
+            )
+
+        # Draw minute markers
+        for i in range(60):
+            if i % 5 != 0:  # Skip hour positions
+                angle = math.radians(i * 6 - 90)
+
+                inner_radius = self.radius - 10
+                outer_radius = self.radius - 5
+
+                x1 = self.center_x + inner_radius * math.cos(angle)
+                y1 = self.center_y + inner_radius * math.sin(angle)
+                x2 = self.center_x + outer_radius * math.cos(angle)
+                y2 = self.center_y + outer_radius * math.sin(angle)
+
+                self.canvas.create_line(x1, y1, x2, y2, width=1, fill='gray')
+
+        # Draw center dot
+        self.canvas.create_oval(
+            self.center_x - 4,
+            self.center_y - 4,
+            self.center_x + 4,
+            self.center_y + 4,
+            fill='black'
+        )
+
+    def draw_hand(self, angle, length, width, color, tag):
+        """Draw a clock hand"""
+        # Convert angle to radians (subtract 90 to start at 12 o'clock)
+        angle_rad = math.radians(angle - 90)
+
+        end_x = self.center_x + length * math.cos(angle_rad)
+        end_y = self.center_y + length * math.sin(angle_rad)
+
+        self.canvas.create_line(
+            self.center_x, self.center_y,
+            end_x, end_y,
+            width=width,
+            fill=color,
+            tags=tag,
+            capstyle=tk.ROUND
+        )
+
+    def update_clock(self):
+        """Update the clock hands based on current time"""
+        if not self.running:
+            return
+
+        # Get current time
+        current_time = time.localtime()
+        hours = current_time.tm_hour % 12
+        minutes = current_time.tm_min
+        seconds = current_time.tm_sec
+
+        # Calculate angles (360 degrees = full circle)
+        second_angle = seconds * 6  # 60 seconds = 360 degrees
+        minute_angle = minutes * 6 + seconds * 0.1  # Smooth minute movement
+        hour_angle = hours * 30 + minutes * 0.5  # Smooth hour movement
+
+        # Remove old hands
+        self.canvas.delete("hands")
+
+        # Draw hands (from longest to shortest to layer properly)
+        # Second hand (red, thin, longest)
+        self.draw_hand(second_angle, self.radius - 20, 1, 'red', 'hands')
+
+        # Minute hand (black, medium)
+        self.draw_hand(minute_angle, self.radius - 30, 3, 'black', 'hands')
+
+        # Hour hand (black, thick, shortest)
+        self.draw_hand(hour_angle, self.radius - 50, 5, 'black', 'hands')
+
+        # Update digital time display
+        time_str = time.strftime("%H:%M:%S", current_time)
+        date_str = time.strftime("%Y-%m-%d", current_time)
+        self.time_label.config(text=f"{time_str}\n{date_str}")
+
+        # Schedule next update (1000ms = 1 second)
+        self.root.after(1000, self.update_clock)
+
+    def show_about(self):
+        """Show about dialog"""
+        about_window = tk.Toplevel(self.root)
+        about_window.title("About XClock Emulator")
+        about_window.geometry("300x150")
+        about_window.resizable(False, False)
+
+        # Center the about window
+        about_window.transient(self.root)
+        about_window.grab_set()
+
+        about_text = """XClock Emulator v1.0
+
+A Python implementation of the classic
+X11 xclock utility.
+
+Features analog clock display with
+real-time updates.
+
+© 2026 - Created with Claude Code"""
+
+        label = ttk.Label(
+            about_window,
+            text=about_text,
+            justify=tk.CENTER,
+            padding=20
+        )
+        label.pack(expand=True)
+
+        close_button = ttk.Button(
+            about_window,
+            text="Close",
+            command=about_window.destroy
+        )
+        close_button.pack(pady=10)
+
+    def stop(self):
+        """Stop the clock updates"""
+        self.running = False
+
+
+def main():
+    """Main function to run the XClock emulator"""
+    root = tk.Tk()
+
+    # Set minimum window size
+    root.minsize(250, 300)
+
+    try:
+        app = XClockEmulator(root)
+
+        # Handle window close event
+        def on_closing():
+            app.stop()
+            root.quit()
+            root.destroy()
+
+        root.protocol("WM_DELETE_WINDOW", on_closing)
+
+        # Start the GUI event loop
+        root.mainloop()
+
+    except KeyboardInterrupt:
+        print("\nExiting...")
+        root.quit()
+
+
+if __name__ == "__main__":
+    main()
