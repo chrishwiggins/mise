@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""
+Generalized Countdown Timer - Counts down to ANY specified time
+
+Usage:
+    countdown-any 14:30          # Count down to 2:30 PM today
+    countdown-any 09:15          # Count down to 9:15 AM today/tomorrow
+    countdown-any "2026-05-05 16:45"  # Count down to specific date/time
+    countdown-any 30m            # Count down 30 minutes from now
+    countdown-any 2h             # Count down 2 hours from now
+    countdown-any 45s            # Count down 45 seconds from now
+"""
+
+import tkinter as tk
+import datetime
+import time
+import sys
+import re
+import argparse
+
+class GeneralizedCountdownTimer:
+    def __init__(self, root, target_time, target_description):
+        self.root = root
+        self.target_time = target_time
+        self.target_description = target_description
+
+        self.root.title(f"Countdown to {target_description}")
+        self.root.geometry("450x350")
+        self.root.resizable(True, True)
+        self.root.configure(bg="white")
+
+        # Configure the main frame with white background
+        self.main_frame = tk.Frame(root, bg="white")
+        self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=20, pady=20)
+
+        # Configure grid weights for resizing
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+        self.main_frame.columnconfigure(0, weight=1)
+
+        # Font size control
+        self.font_size = 48  # Start with large font
+
+        # Title label
+        self.title_label = tk.Label(
+            self.main_frame,
+            text=f"Countdown to {target_description}",
+            font=("Arial", 16, "bold"),
+            anchor="center",
+            bg="white",
+            fg="black",
+            wraplength=400
+        )
+        self.title_label.grid(row=0, column=0, pady=10)
+
+        # Current time display
+        self.current_time_label = tk.Label(
+            self.main_frame,
+            text="",
+            font=("Courier", 14),
+            anchor="center",
+            bg="white",
+            fg="black"
+        )
+        self.current_time_label.grid(row=1, column=0, pady=5)
+
+        # Target time display
+        self.target_time_label = tk.Label(
+            self.main_frame,
+            text="",
+            font=("Arial", 12),
+            anchor="center",
+            bg="white",
+            fg="black",
+            wraplength=400
+        )
+        self.target_time_label.grid(row=2, column=0, pady=5)
+
+        # Countdown display (large) - RED text for better visibility
+        self.countdown_label = tk.Label(
+            self.main_frame,
+            text="",
+            font=("Courier", self.font_size, "bold"),
+            anchor="center",
+            bg="white",
+            fg="red"
+        )
+        self.countdown_label.grid(row=3, column=0, pady=20)
+
+        # Status message
+        self.status_label = tk.Label(
+            self.main_frame,
+            text="",
+            font=("Arial", 10),
+            anchor="center",
+            bg="white",
+            fg="black"
+        )
+        self.status_label.grid(row=4, column=0, pady=5)
+
+        # Progress bar (we'll calculate this based on a reasonable timeframe)
+        from tkinter import ttk
+        self.progress = ttk.Progressbar(
+            self.main_frame,
+            length=300,
+            mode='determinate'
+        )
+        self.progress.grid(row=5, column=0, pady=10)
+
+        # Font size controls
+        self.font_frame = tk.Frame(self.main_frame, bg="white")
+        self.font_frame.grid(row=6, column=0, pady=10)
+
+        tk.Label(self.font_frame, text="Font Size:", bg="white", fg="black").pack(side=tk.LEFT, padx=5)
+
+        self.font_smaller_button = tk.Button(
+            self.font_frame,
+            text="−",
+            command=self.decrease_font,
+            width=3
+        )
+        self.font_smaller_button.pack(side=tk.LEFT, padx=2)
+
+        self.font_size_label = tk.Label(
+            self.font_frame,
+            text=str(self.font_size),
+            bg="white", fg="black",
+            width=3
+        )
+        self.font_size_label.pack(side=tk.LEFT, padx=5)
+
+        self.font_larger_button = tk.Button(
+            self.font_frame,
+            text="+",
+            command=self.increase_font,
+            width=3
+        )
+        self.font_larger_button.pack(side=tk.LEFT, padx=2)
+
+        # Control buttons frame
+        self.button_frame = tk.Frame(self.main_frame, bg="white")
+        self.button_frame.grid(row=7, column=0, pady=20)
+
+        # Pause/Resume button
+        self.pause_resume_button = tk.Button(
+            self.button_frame,
+            text="Pause",
+            command=self.toggle_pause
+        )
+        self.pause_resume_button.pack(side=tk.LEFT, padx=5)
+
+        # Reset button
+        self.reset_button = tk.Button(
+            self.button_frame,
+            text="Reset",
+            command=self.reset_timer
+        )
+        self.reset_button.pack(side=tk.LEFT, padx=5)
+
+        # Quit button
+        self.quit_button = tk.Button(
+            self.button_frame,
+            text="Quit",
+            command=self.root.quit
+        )
+        self.quit_button.pack(side=tk.LEFT, padx=5)
+
+        # Initialize state
+        self.running = True
+        self.paused = False
+        self.start_time = datetime.datetime.now()
+        self.total_seconds = (self.target_time - self.start_time).total_seconds()
+
+        # Update target time display
+        self.update_target_display()
+        self.update_timer()
+
+    def update_target_display(self):
+        """Update the target time display"""
+        target_str = self.target_time.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        self.target_time_label.config(text=f"Target: {target_str}")
+
+    def format_time_remaining(self, seconds):
+        """Format seconds into a readable countdown string"""
+        if seconds <= 0:
+            return "00:00:00"
+
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        else:
+            return f"{minutes:02d}:{secs:02d}"
+
+    def update_timer(self):
+        """Update the countdown display"""
+        if not self.running or self.paused:
+            if not self.running:
+                return
+            # If paused, schedule next update but don't change display
+            self.root.after(1000, self.update_timer)
+            return
+
+        now = datetime.datetime.now()
+
+        # Update current time display
+        current_time_str = now.strftime("%H:%M:%S")
+        current_date_str = now.strftime("%A, %B %d, %Y")
+        self.current_time_label.config(text=f"{current_time_str}\\n{current_date_str}")
+
+        # Calculate time remaining
+        time_diff = self.target_time - now
+        seconds_remaining = time_diff.total_seconds()
+
+        if seconds_remaining <= 0:
+            # Time reached!
+            self.countdown_label.config(
+                text="TIME'S UP!",
+                fg="red"
+            )
+            self.status_label.config(text=f"It's {self.target_description}!")
+            self.progress['value'] = 100
+
+            # Flash the display
+            self.flash_display()
+            return
+
+        # Update countdown display
+        countdown_text = self.format_time_remaining(seconds_remaining)
+        self.countdown_label.config(
+            text=countdown_text,
+            fg="red"
+        )
+
+        # Update status
+        if seconds_remaining > 86400:  # More than 24 hours
+            days = int(seconds_remaining // 86400)
+            self.status_label.config(text=f"{days} day(s) and counting...")
+        elif seconds_remaining > 3600:  # More than 1 hour
+            hours = int(seconds_remaining // 3600)
+            minutes = int((seconds_remaining % 3600) // 60)
+            self.status_label.config(text=f"{hours}h {minutes}m remaining")
+        else:
+            minutes = int(seconds_remaining // 60)
+            self.status_label.config(text=f"{minutes} minute(s) remaining")
+
+        # Update progress bar
+        if self.total_seconds > 0:
+            progress_percent = ((self.total_seconds - seconds_remaining) / self.total_seconds) * 100
+            self.progress['value'] = min(max(progress_percent, 0), 100)
+
+        # Schedule next update
+        self.root.after(1000, self.update_timer)
+
+    def flash_display(self):
+        """Flash the display when time is up"""
+        current_color = self.countdown_label.cget("fg")
+        new_color = "orange" if current_color == "red" else "red"
+        self.countdown_label.config(fg=new_color)
+
+        # Continue flashing for a few seconds
+        if self.countdown_label.cget("text") == "TIME'S UP!":
+            self.root.after(500, self.flash_display)
+
+    def toggle_pause(self):
+        """Pause or resume the countdown"""
+        self.paused = not self.paused
+        if self.paused:
+            self.pause_resume_button.config(text="Resume")
+            self.status_label.config(text="Timer paused")
+        else:
+            self.pause_resume_button.config(text="Pause")
+
+    def reset_timer(self):
+        """Reset the timer"""
+        self.paused = False
+        self.pause_resume_button.config(text="Pause")
+        self.countdown_label.config(fg="red")
+        self.progress['value'] = 0
+        self.start_time = datetime.datetime.now()
+        self.total_seconds = (self.target_time - self.start_time).total_seconds()
+
+    def increase_font(self):
+        """Increase countdown font size"""
+        if self.font_size < 120:  # Set reasonable maximum
+            self.font_size += 6
+            self.update_font_size()
+
+    def decrease_font(self):
+        """Decrease countdown font size"""
+        if self.font_size > 12:  # Set reasonable minimum
+            self.font_size -= 6
+            self.update_font_size()
+
+    def update_font_size(self):
+        """Update the countdown label font size"""
+        self.countdown_label.config(font=("Courier", self.font_size, "bold"))
+        self.font_size_label.config(text=str(self.font_size))
+
+    def stop(self):
+        """Stop the timer updates"""
+        self.running = False
+
+
+def parse_target_time(target_str):
+    """Parse various time formats into a datetime object"""
+    now = datetime.datetime.now()
+
+    # Relative time (30m, 2h, 45s)
+    relative_match = re.match(r'^(\\d+)([smh])$', target_str.lower())
+    if relative_match:
+        amount = int(relative_match.group(1))
+        unit = relative_match.group(2)
+
+        if unit == 's':
+            delta = datetime.timedelta(seconds=amount)
+            description = f"{amount} seconds from now"
+        elif unit == 'm':
+            delta = datetime.timedelta(minutes=amount)
+            description = f"{amount} minutes from now"
+        elif unit == 'h':
+            delta = datetime.timedelta(hours=amount)
+            description = f"{amount} hours from now"
+
+        return now + delta, description
+
+    # Full datetime string
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%m/%d/%Y %H:%M", "%m/%d/%y %H:%M"]:
+        try:
+            target_dt = datetime.datetime.strptime(target_str, fmt)
+            return target_dt, target_dt.strftime("%B %d, %Y at %I:%M %p")
+        except ValueError:
+            continue
+
+    # Time only (HH:MM or H:MM)
+    time_match = re.match(r'^(\\d{1,2}):(\\d{2})$', target_str)
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2))
+
+        # Create target for today
+        target_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+        # If it's already passed today, target tomorrow
+        if now >= target_today:
+            target_today += datetime.timedelta(days=1)
+            day_desc = "tomorrow"
+        else:
+            day_desc = "today"
+
+        time_desc = target_today.strftime("%I:%M %p")
+        return target_today, f"{time_desc} {day_desc}"
+
+    raise ValueError(f"Could not parse time format: {target_str}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generalized countdown timer for any target time",
+        epilog="""
+Examples:
+  countdown-any 14:30              # Count to 2:30 PM today/tomorrow
+  countdown-any "2026-05-05 16:45" # Count to specific date/time
+  countdown-any 30m                # Count down 30 minutes from now
+  countdown-any 2h                 # Count down 2 hours from now
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+
+    parser.add_argument("target", help="Target time (see examples)")
+
+    args = parser.parse_args()
+
+    try:
+        target_time, description = parse_target_time(args.target)
+    except ValueError as e:
+        print(f"Error: {e}")
+        print("\\nSupported formats:")
+        print("  14:30              # Time today/tomorrow")
+        print("  30m, 2h, 45s       # Relative time from now")
+        print("  '2026-05-05 16:45' # Full date and time")
+        sys.exit(1)
+
+    # Check if target is in the past
+    if target_time <= datetime.datetime.now():
+        print(f"Error: Target time {description} is in the past!")
+        sys.exit(1)
+
+    root = tk.Tk()
+    root.minsize(400, 300)
+
+    try:
+        app = GeneralizedCountdownTimer(root, target_time, description)
+
+        # Handle window close event
+        def on_closing():
+            app.stop()
+            root.quit()
+            root.destroy()
+
+        root.protocol("WM_DELETE_WINDOW", on_closing)
+
+        # Start the GUI event loop
+        root.mainloop()
+
+    except KeyboardInterrupt:
+        print("\\nExiting...")
+        root.quit()
+
+
+if __name__ == "__main__":
+    main()
