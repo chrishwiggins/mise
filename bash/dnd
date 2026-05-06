@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
-# popups: toggle macOS notification banners (Do Not Disturb / Focus)
+# dnd: toggle macOS Do Not Disturb (Focus)
 # Usage:
-#   popups off      turn DND on  (silence popups)
-#   popups on       turn DND off (allow popups)
-#   popups status   show current state
-#   popups toggle   flip current state
+#   dnd on        turn DND on  (silence popups)
+#   dnd off       turn DND off (allow popups)
+#   dnd status    show current state
+#   dnd toggle    flip current state
 
 set -euo pipefail
 
-cmd="${1:-status}"
+cmd="${1:-toggle}"
 
 # Read current Focus state from the assertions plist.
-# When DND/any Focus is active, com.apple.donotdisturb.mode.assertions.plist
-# contains a non-empty StoreAssertionRecords array.
+# When DND/any Focus is active, Assertions.json contains a non-empty
+# storeAssertionRecords array.
 focus_active() {
   local plist="$HOME/Library/DoNotDisturb/DB/Assertions.json"
   if [[ -f "$plist" ]]; then
-    # data.storeAssertionRecords is non-empty when a Focus is on
     if grep -q '"storeAssertionRecords"[[:space:]]*:[[:space:]]*\[[[:space:]]*{' "$plist" 2>/dev/null; then
       return 0
     fi
@@ -43,7 +42,7 @@ create two trivial Shortcuts, then this script can call them):
   3. New Shortcut named exactly:  DND Off
        Add action: "Set Focus"  ->  Turn  Do Not Disturb  Off
 
-Then re-run: popups $cmd
+Then re-run: dnd $cmd
 EOF
     return 1
   fi
@@ -51,23 +50,23 @@ EOF
 }
 
 case "$cmd" in
-  off|mute|silence)
+  on|mute|silence)
     run_shortcut "DND On"
-    echo "popups: OFF (Do Not Disturb on)"
+    echo "dnd: ON (Do Not Disturb on, popups silenced)"
     ;;
-  on|unmute|allow)
+  off|unmute|allow)
     run_shortcut "DND Off"
-    echo "popups: ON (Do Not Disturb off)"
+    echo "dnd: OFF (Do Not Disturb off, popups allowed)"
     ;;
   status)
     if focus_active; then
-      echo "popups: OFF (a Focus / DND is active)"
+      echo "dnd: ON (a Focus / DND is active)"
     else
-      echo "popups: ON (no Focus active)"
+      echo "dnd: OFF (no Focus active)"
     fi
     ;;
   toggle)
-    if focus_active; then exec "$0" on; else exec "$0" off; fi
+    if focus_active; then exec "$0" off; else exec "$0" on; fi
     ;;
   -h|--help|help)
     sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
