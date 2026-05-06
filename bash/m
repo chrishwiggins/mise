@@ -358,6 +358,7 @@ direct_send() {
     # Parse arguments (simplified version of send script's parsing)
     local account=""
     local done_flag=0
+    local dry_run=0
     local subject=""
     local -a cc_addrs=()
     local -a bcc_addrs=()
@@ -394,7 +395,11 @@ direct_send() {
                 ;;
             -d|--done)
                 done_flag=1
-                ((i++))
+                i=$((i+1))
+                ;;
+            -n|--dry-run)
+                dry_run=1
+                i=$((i+1))
                 ;;
             *)
                 # Check if this argument contains comma-separated recipients
@@ -408,7 +413,7 @@ direct_send() {
                 else
                     args+=("${send_args[i]}")
                 fi
-                ((i++))
+                i=$((i+1))
                 ;;
         esac
     done
@@ -457,16 +462,27 @@ direct_send() {
 
                 local abspath="$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")"
 
-                if _is_api_only "$muttrc"; then
+                local send_rc=0
+                if (( dry_run )); then
+                    if _is_api_only "$muttrc"; then
+                        echo "DRY-RUN: gmail-api-rw ${account:+-e $account} send --via-send -H $abspath ${attach_args[*]+${attach_args[*]}}"
+                    else
+                        echo "DRY-RUN: echo | neomutt -e 'unset record' -F $muttrc -H $abspath ${attach_args[*]+${attach_args[*]}}"
+                    fi
+                elif _is_api_only "$muttrc"; then
                     echo "m: ${account:-default} via gmail API" >&2
-                    gmail-api-rw ${account:+-e "$account"} send --via-send -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}"
+                    gmail-api-rw ${account:+-e "$account"} send --via-send -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
                 else
                     echo "m: ${account:-default} via SMTP" >&2
                     # Direct neomutt call - optimize by removing process hop
-                    echo | neomutt -e 'unset record' -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}"
+                    echo | neomutt -e 'unset record' -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
                 fi
 
-                echo "$abspath sent"
+                if (( send_rc != 0 )); then
+                    echo "$abspath FAILED (exit $send_rc)" >&2
+                    return $send_rc
+                fi
+                (( dry_run )) || echo "$abspath sent"
 
                 if (( done_flag )); then
                     local clip="/sent $abspath"
@@ -524,6 +540,10 @@ direct_send() {
             } > "$eml_path"
 
             echo "⚠️  m: API-only account; auto-created .eml at $eml_path" >&2
+            if (( dry_run )); then
+                echo "DRY-RUN: gmail-api-rw ${account:+-e $account} send --via-send -H $eml_path ${attach_args[*]+${attach_args[*]}}"
+                return 0
+            fi
             echo "m: ${account:-default} via gmail API" >&2
             gmail-api-rw ${account:+-e "$account"} send --via-send -H "$eml_path" "${attach_args[@]+"${attach_args[@]}"}"
             return $?
@@ -542,12 +562,20 @@ direct_send() {
         done
 
         if [[ ${#recipients[@]} -eq 0 ]]; then
+            if (( dry_run )); then
+                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${args[*]} ${attach_args[*]+${attach_args[*]}}"
+                return 0
+            fi
             # No recipients found, use neomutt in compose mode (user will enter recipient)
             echo "m: ${account:-default} via SMTP" >&2
             neomutt -e 'unset record' -F "$muttrc" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
         else
             # Send separate email to each recipient
             for recipient in "${recipients[@]}"; do
+                if (( dry_run )); then
+                    echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc $recipient ${other_args[*]+${other_args[*]}} ${attach_args[*]+${attach_args[*]}}"
+                    continue
+                fi
                 echo "m: sending to $recipient via ${account:-default} SMTP" >&2
                 neomutt -e 'unset record' -F "$muttrc" "$recipient" "${other_args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
             done
@@ -1391,6 +1419,10 @@ case "$action" in
                     fi
                 done
 
+                if (( dry_run )); then
+                    echo "DRY-RUN: gmail-api-rw ${gmail_acct[*]+${gmail_acct[*]}} send --via-send ${fixed_args[*]+${fixed_args[*]}}"
+                    exit 0
+                fi
                 # Execute gmail-api-rw with fixed arguments
                 # exec replaces current process (no return to m script)
                 exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" send --via-send "${fixed_args[@]+"${fixed_args[@]}"}"
@@ -1406,8 +1438,10 @@ case "$action" in
                 #
                 # FLOW: m → direct_send() → account routing → backend
                 #
-                echo "m: send via ${gmail_flag:-default}" >&2
-                direct_send ${gmail_flag:+-e "$gmail_flag"} "${rest[@]+"${rest[@]}"}"
+                dry_pass=()
+                (( dry_run )) && dry_pass=(--dry-run)
+                echo "m: send via ${gmail_flag:-default}$( (( dry_run )) && echo ' (dry-run)')" >&2
+                direct_send ${gmail_flag:+-e "$gmail_flag"} "${dry_pass[@]+"${dry_pass[@]}"}" "${rest[@]+"${rest[@]}"}"
             fi
         fi
         ;;
