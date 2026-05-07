@@ -345,6 +345,122 @@ _is_api_only() {
 }
 
 # ========================================================================
+# § ATTACHMENT PROMPT — interactive add/delete/edit before send
+# ========================================================================
+# Mutates the named array in place. Returns 0 to proceed, 1 to cancel.
+# Skipped (returns 0) on non-tty so scripted callers send silently.
+_attachment_prompt() {
+    local arr_name="$1"
+    local context="${2:-}"
+
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        return 0
+    fi
+
+    local -n _atts="$arr_name"
+
+    while true; do
+        echo >&2
+        if [[ -n "$context" ]]; then
+            echo "$context" >&2
+        fi
+        if (( ${#_atts[@]} == 0 )); then
+            echo "Attachments: (none)" >&2
+        else
+            echo "Attachments:" >&2
+            local idx=1
+            for a in "${_atts[@]}"; do
+                printf "  %d. %s\n" "$idx" "$a" >&2
+                idx=$((idx+1))
+            done
+        fi
+
+        local reply
+        printf "[a]dd  [d]elete N  [e]dit list  [y]send  [n]cancel > " >&2
+        if ! IFS= read -r reply; then
+            echo >&2
+            return 1
+        fi
+
+        local cmd="${reply%% *}"
+        local rest="${reply#"$cmd"}"
+        rest="${rest# }"
+
+        case "$cmd" in
+            ""|y|Y|yes)
+                return 0
+                ;;
+            n|N|no|q|Q)
+                echo "send cancelled" >&2
+                return 1
+                ;;
+            a|A|add)
+                local path="$rest"
+                if [[ -z "$path" ]]; then
+                    printf "  path > " >&2
+                    IFS= read -r -e path || continue
+                fi
+                path="${path/#~/$HOME}"
+                if [[ -z "$path" ]]; then
+                    continue
+                fi
+                if [[ ! -e "$path" ]]; then
+                    echo "  not found: $path" >&2
+                    continue
+                fi
+                _atts+=("$path")
+                ;;
+            d|D|del|delete|rm)
+                local n="$rest"
+                if [[ -z "$n" ]]; then
+                    printf "  number > " >&2
+                    IFS= read -r n || continue
+                fi
+                if ! [[ "$n" =~ ^[0-9]+$ ]] || (( n < 1 || n > ${#_atts[@]} )); then
+                    echo "  not a valid index: $n" >&2
+                    continue
+                fi
+                local -a _new=()
+                local i=0
+                for a in "${_atts[@]}"; do
+                    i=$((i+1))
+                    [[ $i -eq $n ]] && continue
+                    _new+=("$a")
+                done
+                _atts=("${_new[@]+"${_new[@]}"}")
+                ;;
+            e|E|edit)
+                local tmp
+                tmp=$(mktemp -t m-attach.XXXXXX)
+                {
+                    echo "# One attachment path per line. Lines starting with # are ignored."
+                    echo "# Save and quit to apply; quit without saving to keep current list."
+                    for a in "${_atts[@]+"${_atts[@]}"}"; do
+                        echo "$a"
+                    done
+                } > "$tmp"
+                "${EDITOR:-vi}" "$tmp" </dev/tty >/dev/tty 2>&1 || { rm -f "$tmp"; continue; }
+                local -a _edited=()
+                while IFS= read -r line; do
+                    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+                    line="${line/#~/$HOME}"
+                    if [[ ! -e "$line" ]]; then
+                        echo "  warning: not found, skipping: $line" >&2
+                        continue
+                    fi
+                    _edited+=("$line")
+                done < "$tmp"
+                rm -f "$tmp"
+                _atts=("${_edited[@]+"${_edited[@]}"}")
+                ;;
+            *)
+                echo "  unknown command: $cmd" >&2
+                ;;
+        esac
+    done
+}
+
+# ========================================================================
 # § DIRECT SEND — unified send pipeline (file mode + compose mode)
 # ========================================================================
 # direct_send() decides between two paths based on whether any arg ends
@@ -463,6 +579,18 @@ direct_send() {
                 local abspath="$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")"
 
                 local send_rc=0
+                if (( ! dry_run )); then
+                    local _transport="SMTP"
+                    _is_api_only "$muttrc" && _transport="gmail API"
+                    if ! _attachment_prompt attachments "Sending $abspath via ${account:-default} ($_transport)"; then
+                        return 1
+                    fi
+                    attach_args=()
+                    for att in "${attachments[@]+"${attachments[@]}"}"; do
+                        attach_args+=(-a "$att")
+                    done
+                fi
+
                 if (( dry_run )); then
                     if _is_api_only "$muttrc"; then
                         echo "DRY-RUN: gmail-api-rw ${account:+-e $account} send --via-send -H $abspath ${attach_args[*]+${attach_args[*]}}"
