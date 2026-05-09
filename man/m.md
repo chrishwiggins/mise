@@ -388,15 +388,9 @@ Email configuration follows secure patterns:
 └── man/
     └── m.md # This documentation
 
-~/gd/local/seiton/ # Private scripts (not in mise)
-├── bash/
-│ ├── m -> ~/mise/bash/m # Symlink to main script
-│ ├── mutt # SMTP wrapper (private)
-│ └── other tools...
-└── aux/
-    └── m/ # Private m-support utilities
-        ├── m-doctor # Health checker
-        ├── m-queue # Offline queueing
+# Private companion tree (not in mise) may also contribute:
+# bash/ - private m wrapper, SMTP wrapper, etc.
+# aux/m/ - private m-support utilities (m-doctor, m-queue, ...)
         ├── m-support # Main support utility
         ├── m-completion.bash # Tab completion
         └── 10+ other m-* tools
@@ -485,7 +479,7 @@ m dispatcher → direct_send() → account routing → backends
 
 ### Support Utilities
 
-**Location**: `~/mise/aux/m/` and `~/gd/local/seiton/aux/m/`
+**Location**: `~/mise/aux/m/` (and an optional private companion `aux/m/` tree)
 
 Key utilities:
 - `m-support`: Main diagnostic and utility functions
