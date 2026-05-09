@@ -1297,6 +1297,12 @@ case "$action" in
                             if ! "${read_cmd[@]}"; then
                                 exit 1
                             fi
+                        elif [[ " ${filtered_args[*]} " =~ " -x " || " ${filtered_args[*]} " =~ " --headers " ]]; then
+                            # Headers-only: dump straight to stdout, no pager
+                            read_cmd+=(-t)
+                            if ! "${read_cmd[@]}"; then
+                                exit 1
+                            fi
                         else
                             read_cmd+=(-t)
                             if ! "${read_cmd[@]}" 2>&1 | less; then
@@ -1370,6 +1376,7 @@ case "$action" in
             # Parse remaining arguments to find peek flags, verbose flags, meta flag, and message numbers
             verbose_flag=0
             meta_flag=0
+            headers_flag=0
             for i in "${!rest[@]}"; do
                 arg="${rest[i]}"
                 case "$arg" in
@@ -1381,6 +1388,9 @@ case "$action" in
                         ;;
                     --meta)
                         meta_flag=1
+                        ;;
+                    -x|--headers)
+                        headers_flag=1
                         ;;
                     -save)
                         save_flag=1
@@ -1441,12 +1451,20 @@ case "$action" in
                     if (( meta_flag )); then
                         gmail_cmd+=(--meta)
                     fi
+                    if (( headers_flag )); then
+                        gmail_cmd+=(-x)
+                    fi
                     gmail_cmd+=(-t)
-                    "${gmail_cmd[@]}" | less
+                    if (( headers_flag )); then
+                        # Headers-only: dump straight to stdout, no pager
+                        "${gmail_cmd[@]}"
+                    else
+                        "${gmail_cmd[@]}" | less
+                    fi
                 fi
             else
                 # No message numbers: show listing
-                gmail_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"})
+                gmail_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$page_size" ${query_string:+-q "$query_string"})
                 if (( meta_flag )); then
                     gmail_cmd+=(--meta)
                 fi
