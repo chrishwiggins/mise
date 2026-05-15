@@ -2331,8 +2331,9 @@ def do_open(service, index, count, query, account=None):
 # ---------------------------------------------------------------------------
 
 def do_urls(service, index, count, query, account=None):
-    """Extract and display URLs from a message."""
+    """Extract URLs from a message and provide interactive menu to open them."""
     import re
+    import webbrowser
 
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
@@ -2343,6 +2344,14 @@ def do_urls(service, index, count, query, account=None):
 
     # Extract text content from the email
     text_body = extract_text_body(raw_bytes)
+
+    # Clean up HTML entities and normalize whitespace
+    heavy = _import_heavy_modules()
+    text_body = heavy['html_mod'].unescape(text_body)
+
+    # Remove line breaks within URLs by looking for split URLs
+    # Pattern: "https: //domain" or "http: //domain"
+    text_body = re.sub(r'https?\s*:\s*//', 'https://', text_body)
 
     # Find URLs using regex - matches http(s) URLs
     url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
@@ -2360,9 +2369,39 @@ def do_urls(service, index, count, query, account=None):
             seen.add(url)
             unique_urls.append(url)
 
-    # Print URLs one per line
-    for url in unique_urls:
-        print(url)
+    # Show interactive menu
+    print(f"Found {len(unique_urls)} URL(s):", file=sys.stderr)
+    for i, url in enumerate(unique_urls, 1):
+        # Truncate very long URLs for display
+        display_url = url if len(url) <= 80 else url[:77] + "..."
+        print(f"  {i}. {display_url}", file=sys.stderr)
+
+    # Check if we're in an interactive terminal
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        # Non-interactive mode: just print URLs for now
+        for i, url in enumerate(unique_urls, 1):
+            print(f"{i}. {url}")
+        return
+
+    try:
+        print("Select URL to open (1-{}, q to quit): ".format(len(unique_urls)), end="", file=sys.stderr)
+        sys.stderr.flush()
+        choice = sys.stdin.readline().strip()
+
+        if choice.lower() in ('q', 'quit', ''):
+            return
+
+        choice_num = int(choice)
+        if 1 <= choice_num <= len(unique_urls):
+            url_to_open = unique_urls[choice_num - 1]
+            print(f"Opening: {url_to_open}", file=sys.stderr)
+            webbrowser.open(url_to_open)
+        else:
+            print(f"Invalid choice. Please enter 1-{len(unique_urls)}", file=sys.stderr)
+
+    except (ValueError, KeyboardInterrupt, EOFError):
+        print("\nCanceled", file=sys.stderr)
+        return
 
 
 # ---------------------------------------------------------------------------
