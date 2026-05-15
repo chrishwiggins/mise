@@ -1,0 +1,247 @@
+#!/bin/bash
+
+# pink - Generate pink noise for background sound, sleep, and focus
+# Usage: pink [duration] [options]
+
+set -euo pipefail
+
+# Default values
+DEFAULT_DURATION="60:00"  # 1 hour
+VOLUME_LEVEL="-10"        # Safe volume level in dB
+CHANNELS="2"              # Stereo
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Help function
+show_help() {
+    cat << 'EOF'
+pink - Pink noise generator for background sound, sleep, and focus
+
+USAGE:
+    pink [duration] [options]
+
+ARGUMENTS:
+    duration    Duration in format MM:SS or seconds (default: 60:00)
+
+OPTIONS:
+    -h, --help     Show this help message
+    -q, --quiet    Quiet mode (reduce output)
+    -v, --volume   Volume level in dB (default: -10)
+    -m, --mono     Mono output instead of stereo
+    -s, --save     Save to file instead of playing
+    -f, --file     Output filename (requires -s)
+    -e, --enhanced Use enhanced pink noise with reverb and filters
+
+EXAMPLES:
+    pink                    # Play pink noise for 1 hour
+    pink 30:00              # Play for 30 minutes
+    pink 1800               # Play for 1800 seconds (30 minutes)
+    pink -e                 # Enhanced pink noise with reverb
+    pink -s -f sleep.wav    # Save to file
+    pink --quiet 45:00      # Quiet mode for 45 minutes
+
+ABOUT PINK NOISE:
+Pink noise emphasizes lower frequencies, creating a deeper, more soothing
+sound like gentle rainfall. It's excellent for:
+- Improving sleep quality and deep sleep transitions
+- Enhancing focus and productivity
+- Masking distracting environmental sounds
+- Reducing stress and anxiety
+
+Pink noise matches natural brain wave patterns better than white noise,
+making it more stabilizing and relaxing.
+
+REQUIREMENTS:
+- sox (Sound eXchange) must be installed
+- For playback: 'play' command from sox package
+EOF
+}
+
+# Check if sox is installed
+check_dependencies() {
+    if ! command -v sox >/dev/null 2>&1; then
+        echo -e "${RED}Error: sox is not installed${NC}" >&2
+        echo "Install with: brew install sox (macOS) or sudo apt-get install sox (Ubuntu)" >&2
+        exit 1
+    fi
+
+    if ! command -v play >/dev/null 2>&1; then
+        echo -e "${RED}Error: play command not found${NC}" >&2
+        echo "The 'play' command should come with sox installation" >&2
+        exit 1
+    fi
+}
+
+# Parse command line arguments
+parse_args() {
+    DURATION="$DEFAULT_DURATION"
+    QUIET=false
+    SAVE_TO_FILE=false
+    OUTPUT_FILE=""
+    ENHANCED=false
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -q|--quiet)
+                QUIET=true
+                shift
+                ;;
+            -v|--volume)
+                VOLUME_LEVEL="$2"
+                shift 2
+                ;;
+            -m|--mono)
+                CHANNELS="1"
+                shift
+                ;;
+            -s|--save)
+                SAVE_TO_FILE=true
+                shift
+                ;;
+            -f|--file)
+                OUTPUT_FILE="$2"
+                SAVE_TO_FILE=true
+                shift 2
+                ;;
+            -e|--enhanced)
+                ENHANCED=true
+                shift
+                ;;
+            -*)
+                echo -e "${RED}Error: Unknown option $1${NC}" >&2
+                echo "Use 'pink --help' for usage information" >&2
+                exit 1
+                ;;
+            *)
+                DURATION="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Validate duration format
+    if [[ ! "$DURATION" =~ ^[0-9]+(:?[0-9]+)?$ ]]; then
+        echo -e "${RED}Error: Invalid duration format. Use MM:SS or seconds${NC}" >&2
+        exit 1
+    fi
+
+    # Set default filename if saving but no filename provided
+    if [[ "$SAVE_TO_FILE" == true && -z "$OUTPUT_FILE" ]]; then
+        OUTPUT_FILE="pink_noise_$(date +%Y%m%d_%H%M%S).wav"
+    fi
+}
+
+# Generate basic pink noise command
+generate_basic_command() {
+    local base_cmd
+
+    if [[ "$SAVE_TO_FILE" == true ]]; then
+        base_cmd="sox -n \"$OUTPUT_FILE\" synth $DURATION pinknoise"
+    else
+        base_cmd="play -V0 -c$CHANNELS -n synth $DURATION pinknoise"
+    fi
+
+    # Add volume control
+    base_cmd="$base_cmd gain $VOLUME_LEVEL"
+
+    echo "$base_cmd"
+}
+
+# Generate enhanced pink noise command with filters and reverb
+generate_enhanced_command() {
+    local base_cmd
+
+    if [[ "$SAVE_TO_FILE" == true ]]; then
+        base_cmd="sox -n \"$OUTPUT_FILE\" synth $DURATION pinknoise"
+    else
+        base_cmd="play -V0 -c$CHANNELS -n synth $DURATION pinknoise"
+    fi
+
+    # Add band-pass filters, reverb, and gain
+    base_cmd="$base_cmd band -n 300 100 reverb 15 tremolo 0.1 3 gain $VOLUME_LEVEL fade h 2 0 2"
+
+    echo "$base_cmd"
+}
+
+# Display status information
+show_status() {
+    if [[ "$QUIET" == false ]]; then
+        echo -e "${GREEN}🎵 Pink Noise Generator${NC}"
+        echo -e "${BLUE}Duration:${NC} $DURATION"
+        echo -e "${BLUE}Channels:${NC} $CHANNELS ($([ "$CHANNELS" == "1" ] && echo "mono" || echo "stereo"))"
+        echo -e "${BLUE}Volume:${NC} ${VOLUME_LEVEL}dB"
+
+        if [[ "$ENHANCED" == true ]]; then
+            echo -e "${BLUE}Mode:${NC} Enhanced (with reverb and filters)"
+        else
+            echo -e "${BLUE}Mode:${NC} Standard"
+        fi
+
+        if [[ "$SAVE_TO_FILE" == true ]]; then
+            echo -e "${BLUE}Output:${NC} Saving to '$OUTPUT_FILE'"
+        else
+            echo -e "${BLUE}Output:${NC} Playing through speakers"
+            echo ""
+            echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
+        fi
+
+        echo -e "${GREEN}Starting pink noise generation...${NC}"
+        echo ""
+    fi
+}
+
+# Cleanup function for graceful exit
+cleanup() {
+    if [[ "$QUIET" == false ]]; then
+        echo ""
+        echo -e "${YELLOW}Pink noise stopped.${NC}"
+    fi
+    exit 0
+}
+
+# Main function
+main() {
+    # Set up signal handling
+    trap cleanup SIGINT SIGTERM
+
+    # Check dependencies
+    check_dependencies
+
+    # Parse arguments
+    parse_args "$@"
+
+    # Show status
+    show_status
+
+    # Generate and execute command
+    local cmd
+    if [[ "$ENHANCED" == true ]]; then
+        cmd=$(generate_enhanced_command)
+    else
+        cmd=$(generate_basic_command)
+    fi
+
+    # Execute the command
+    if [[ "$QUIET" == true ]]; then
+        eval "$cmd" 2>/dev/null
+    else
+        eval "$cmd"
+    fi
+
+    # Success message for file save
+    if [[ "$SAVE_TO_FILE" == true && "$QUIET" == false ]]; then
+        echo -e "${GREEN}✅ Pink noise saved to '$OUTPUT_FILE'${NC}"
+    fi
+}
+
+# Run main function with all arguments
+main "$@"
