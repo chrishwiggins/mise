@@ -830,19 +830,23 @@ def extract_text_body(raw_bytes):
 
 
 def print_message_preview(raw_bytes):
-    """Print headers (to stderr) + text body (to stdout) for a raw email.
+    """Print headers + text body (both to stdout) for a raw email.
 
     Shared inline view used by -t across get/reply/fwd/send/draft.
     """
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
-    print(f"From: {msg.get('From', 'unknown')}", file=sys.stderr)
+    print(f"From: {msg.get('From', 'unknown')}")
     for hdr in ("To", "Cc", "Bcc"):
         val = msg.get(hdr, "")
         if val:
-            print(f"{hdr}: {val}", file=sys.stderr)
-    print(f"Date: {msg.get('Date', '')}", file=sys.stderr)
-    print(f"Subject: {msg.get('Subject', '(no subject)')}", file=sys.stderr)
-    print("---", file=sys.stderr)
+            print(f"{hdr}: {val}")
+    print(f"Date: {msg.get('Date', '')}")
+    print(f"Subject: {msg.get('Subject', '(no subject)')}")
+    # Add Message-ID for thread tracking
+    message_id = msg.get('Message-ID', '')
+    if message_id:
+        print(f"Message-ID: {message_id}")
+    print("---")
     print(extract_text_body(raw_bytes))
 
 
