@@ -2,6 +2,11 @@
 #% wraps around ddg, turns + into quotes
 #% turns spaces into URL spaces (%22)
 
+if ( "$*" == "" ) then
+  echo "usage: duck <search terms>"
+  exit 1
+endif
+
 set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
 echo $str
 open 'https://duckduckgo.com/?q='$str
