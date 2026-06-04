@@ -2267,6 +2267,7 @@ case "$action" in
                     done
                     if (( all_ranges )) && (( ! save_attachments_only_flag )) \
                         && (( ! open_attachments_flag )) \
+                        && [[ -z "$save_file" ]] \
                         && [[ ! " ${filtered_args[*]} " =~ " -S " ]]; then
                         # Build the sed program: one "Ns,Mp" clause per range.
                         sed_prog=""
