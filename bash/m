@@ -344,6 +344,679 @@ _is_api_only() {
     [[ "$muttrc" == "/dev/null"* || ! -f "$muttrc" ]]
 }
 
+# Return a non-colliding path: if PATH exists, try PATH-v2, PATH-v3, ... This
+# mirrors the backend's versioned_path so decoded -S saves don't silently
+# clobber an existing file the way the --raw path already avoids.
+_versioned_path() {
+    local p="$1"
+    [[ -e "$p" ]] || { printf '%s\n' "$p"; return; }
+    local n=2
+    while [[ -e "${p}-v${n}" ]]; do
+        n=$((n + 1))
+    done
+    printf '%s\n' "${p}-v${n}"
+}
+
+# LOUD-FAILURE GUARD: an SMTP muttrc with no smtp_url makes neomutt fall back
+# to local /usr/sbin/sendmail, which on macOS SILENTLY DROPS the message —
+# neomutt still exits 0, so the wrapper prints "sent" and nothing leaves the
+# box. This bit the joint account on 2026-05-29 (two real emails lost). Call
+# this before every neomutt send: if the muttrc is SMTP-routed but lacks an
+# smtp_url, abort loudly instead of pretending to send.
+_assert_smtp_capable() {
+    local muttrc="$1"
+    local account="${2:-?}"
+    # API-routed accounts don't use this path; nothing to check.
+    _is_api_only "$muttrc" && return 0
+    if ! grep -q "^[[:space:]]*set[[:space:]]\+smtp_url" "$muttrc" 2>/dev/null; then
+        log_error "Account '$account' is SMTP-routed but its muttrc has no smtp_url."
+        log_error "  muttrc: $muttrc"
+        log_error "  Without smtp_url, neomutt would silently drop this message."
+        log_error "  Fix: add a working 'set smtp_url=...' block to that muttrc,"
+        log_error "       or route this account via the Gmail API by setting its"
+        log_error "       muttrc to /dev/null in $MAIL_TOOLS_CONFIG."
+        return 1
+    fi
+    return 0
+}
+
+# ========================================================================
+# § SCHEDULED SEND — scheduled email delivery via launchd
+# ========================================================================
+
+# Parse time specification and return Unix timestamp
+_parse_after_time() {
+    local time_spec="$1"
+    local now
+    now=$(date +%s)
+    local target_time
+
+    # Handle relative times
+    if [[ "$time_spec" =~ ^[0-9]+[mhdw]$ ]]; then
+        local num="${time_spec%[mhdw]}"
+        local unit="${time_spec: -1}"
+        local seconds=0
+
+        case "$unit" in
+            m) seconds=$((num * 60)) ;;
+            h) seconds=$((num * 3600)) ;;
+            d) seconds=$((num * 86400)) ;;
+            w) seconds=$((num * 604800)) ;;
+            *)
+                log_error "Invalid time unit in '$time_spec'. Use: 5m, 2h, 1d, 1w"
+                return 1
+                ;;
+        esac
+        target_time=$((now + seconds))
+    else
+        # Try to parse with date command
+        # BSD date (macOS) approach: try common patterns first
+        if target_time=$(date -j -f "%Y-%m-%d %H:%M:%S" "$time_spec" +%s 2>/dev/null); then
+            : # parsed successfully
+        elif target_time=$(date -j -f "%H:%M" "$time_spec" +%s 2>/dev/null); then
+            : # parsed as time today
+        elif target_time=$(date -j -f "%Y-%m-%d %H:%M" "$time_spec" +%s 2>/dev/null); then
+            : # parsed as date and time
+        else
+            # Try natural language patterns by converting to specific formats
+            local converted_time=""
+            case "$time_spec" in
+                "9am"|"9 am")
+                    converted_time="09:00"
+                    ;;
+                "10am"|"10 am")
+                    converted_time="10:00"
+                    ;;
+                "11am"|"11 am")
+                    converted_time="11:00"
+                    ;;
+                "12pm"|"12 pm"|"noon")
+                    converted_time="12:00"
+                    ;;
+                "1pm"|"1 pm")
+                    converted_time="13:00"
+                    ;;
+                "2pm"|"2 pm")
+                    converted_time="14:00"
+                    ;;
+                "3pm"|"3 pm")
+                    converted_time="15:00"
+                    ;;
+                "4pm"|"4 pm")
+                    converted_time="16:00"
+                    ;;
+                "5pm"|"5 pm")
+                    converted_time="17:00"
+                    ;;
+                "6pm"|"6 pm")
+                    converted_time="18:00"
+                    ;;
+                "7pm"|"7 pm")
+                    converted_time="19:00"
+                    ;;
+                "8pm"|"8 pm")
+                    converted_time="20:00"
+                    ;;
+                "9pm"|"9 pm")
+                    converted_time="21:00"
+                    ;;
+                "today 9am"|"today 9 am")
+                    converted_time="09:00"
+                    ;;
+                "today 10am"|"today 10 am")
+                    converted_time="10:00"
+                    ;;
+                "today "*)
+                    # Extract time part after "today "
+                    local time_part="${time_spec#today }"
+                    case "$time_part" in
+                        *"am"|*" am")
+                            local time_clean="${time_part%am}"
+                            time_clean="${time_clean% am}"
+                            time_clean="${time_clean% }"
+                            if [[ "$time_clean" =~ ^[0-9]+:[0-9]+$ ]]; then
+                                # Handle HH:MM format
+                                local hour="${time_clean%:*}"
+                                local minute="${time_clean#*:}"
+                                if [[ $hour -ge 1 && $hour -le 12 ]] && [[ $minute -ge 0 && $minute -le 59 ]]; then
+                                    if [[ $hour -eq 12 ]]; then
+                                        converted_time=$(printf "00:%02d" "$minute")
+                                    else
+                                        converted_time=$(printf "%02d:%02d" "$hour" "$minute")
+                                    fi
+                                fi
+                            elif [[ "$time_clean" =~ ^[0-9]+$ ]] && [[ $time_clean -ge 1 && $time_clean -le 12 ]]; then
+                                # Handle H format
+                                if [[ $time_clean -eq 12 ]]; then
+                                    converted_time="00:00"
+                                else
+                                    converted_time=$(printf "%02d:00" "$time_clean")
+                                fi
+                            fi
+                            ;;
+                        *"pm"|*" pm")
+                            local time_clean="${time_part%pm}"
+                            time_clean="${time_clean% pm}"
+                            time_clean="${time_clean% }"
+                            if [[ "$time_clean" =~ ^[0-9]+:[0-9]+$ ]]; then
+                                # Handle HH:MM format
+                                local hour="${time_clean%:*}"
+                                local minute="${time_clean#*:}"
+                                if [[ $hour -ge 1 && $hour -le 12 ]] && [[ $minute -ge 0 && $minute -le 59 ]]; then
+                                    if [[ $hour -eq 12 ]]; then
+                                        converted_time=$(printf "12:%02d" "$minute")
+                                    else
+                                        converted_time=$(printf "%02d:%02d" $((hour + 12)) "$minute")
+                                    fi
+                                fi
+                            elif [[ "$time_clean" =~ ^[0-9]+$ ]] && [[ $time_clean -ge 1 && $time_clean -le 12 ]]; then
+                                # Handle H format
+                                if [[ $time_clean -eq 12 ]]; then
+                                    converted_time="12:00"
+                                else
+                                    converted_time=$(printf "%02d:00" $((time_clean + 12)))
+                                fi
+                            fi
+                            ;;
+                    esac
+                    ;;
+                "tomorrow "*)
+                    # For tomorrow times, we'll compute tomorrow's date and parse time
+                    local time_part="${time_spec#tomorrow }"
+                    local tomorrow_date
+                    tomorrow_date=$(date -v+1d "+%Y-%m-%d")
+                    case "$time_part" in
+                        *"am"|*" am")
+                            local time_clean="${time_part%am}"
+                            time_clean="${time_clean% am}"
+                            time_clean="${time_clean% }"
+                            if [[ "$time_clean" =~ ^[0-9]+:[0-9]+$ ]]; then
+                                # Handle HH:MM format
+                                local hour="${time_clean%:*}"
+                                local minute="${time_clean#*:}"
+                                if [[ $hour -ge 1 && $hour -le 12 ]] && [[ $minute -ge 0 && $minute -le 59 ]]; then
+                                    if [[ $hour -eq 12 ]]; then
+                                        converted_time="${tomorrow_date} $(printf "00:%02d" "$minute")"
+                                    else
+                                        converted_time="${tomorrow_date} $(printf "%02d:%02d" "$hour" "$minute")"
+                                    fi
+                                fi
+                            elif [[ "$time_clean" =~ ^[0-9]+$ ]] && [[ $time_clean -ge 1 && $time_clean -le 12 ]]; then
+                                # Handle H format
+                                if [[ $time_clean -eq 12 ]]; then
+                                    converted_time="${tomorrow_date} 00:00"
+                                else
+                                    converted_time="${tomorrow_date} $(printf "%02d:00" "$time_clean")"
+                                fi
+                            fi
+                            ;;
+                        *"pm"|*" pm")
+                            local time_clean="${time_part%pm}"
+                            time_clean="${time_clean% pm}"
+                            time_clean="${time_clean% }"
+                            if [[ "$time_clean" =~ ^[0-9]+:[0-9]+$ ]]; then
+                                # Handle HH:MM format
+                                local hour="${time_clean%:*}"
+                                local minute="${time_clean#*:}"
+                                if [[ $hour -ge 1 && $hour -le 12 ]] && [[ $minute -ge 0 && $minute -le 59 ]]; then
+                                    if [[ $hour -eq 12 ]]; then
+                                        converted_time="${tomorrow_date} $(printf "12:%02d" "$minute")"
+                                    else
+                                        converted_time="${tomorrow_date} $(printf "%02d:%02d" $((hour + 12)) "$minute")"
+                                    fi
+                                fi
+                            elif [[ "$time_clean" =~ ^[0-9]+$ ]] && [[ $time_clean -ge 1 && $time_clean -le 12 ]]; then
+                                # Handle H format
+                                if [[ $time_clean -eq 12 ]]; then
+                                    converted_time="${tomorrow_date} 12:00"
+                                else
+                                    converted_time="${tomorrow_date} $(printf "%02d:00" $((time_clean + 12)))"
+                                fi
+                            fi
+                            ;;
+                    esac
+                    ;;
+                *"am"|*" am")
+                    # Handle standalone HH:MMam format (only if not already handled above)
+                    if [[ ! "$time_spec" =~ ^today ]] && [[ ! "$time_spec" =~ ^tomorrow ]]; then
+                        local time_clean="${time_spec%am}"
+                        time_clean="${time_clean% am}"
+                        time_clean="${time_clean% }"
+                        if [[ "$time_clean" =~ ^[0-9]+:[0-9]+$ ]]; then
+                            local hour="${time_clean%:*}"
+                            local minute="${time_clean#*:}"
+                            if [[ $hour -ge 1 && $hour -le 12 ]] && [[ $minute -ge 0 && $minute -le 59 ]]; then
+                                if [[ $hour -eq 12 ]]; then
+                                    converted_time=$(printf "00:%02d" "$minute")
+                                else
+                                    converted_time=$(printf "%02d:%02d" "$hour" "$minute")
+                                fi
+                            fi
+                        fi
+                    fi
+                    ;;
+                *"pm"|*" pm")
+                    # Handle standalone HH:MMpm format (only if not already handled above)
+                    if [[ ! "$time_spec" =~ ^today ]] && [[ ! "$time_spec" =~ ^tomorrow ]]; then
+                        local time_clean="${time_spec%pm}"
+                        time_clean="${time_clean% pm}"
+                        time_clean="${time_clean% }"
+                        if [[ "$time_clean" =~ ^[0-9]+:[0-9]+$ ]]; then
+                            local hour="${time_clean%:*}"
+                            local minute="${time_clean#*:}"
+                            if [[ $hour -ge 1 && $hour -le 12 ]] && [[ $minute -ge 0 && $minute -le 59 ]]; then
+                                if [[ $hour -eq 12 ]]; then
+                                    converted_time=$(printf "12:%02d" "$minute")
+                                else
+                                    converted_time=$(printf "%02d:%02d" $((hour + 12)) "$minute")
+                                fi
+                            fi
+                        fi
+                    fi
+                    ;;
+            esac
+
+            # Try parsing the converted time
+            if [[ -n "$converted_time" ]]; then
+                if target_time=$(date -j -f "%H:%M" "$converted_time" +%s 2>/dev/null); then
+                    : # parsed successfully
+                elif target_time=$(date -j -f "%Y-%m-%d %H:%M" "$converted_time" +%s 2>/dev/null); then
+                    : # parsed successfully with date
+                else
+                    log_error "Could not parse converted time '$converted_time'"
+                    echo "Examples: '5m', '2h', '9am', '11:30am', 'today 2pm', 'tomorrow 9am', '14:30'" >&2
+                    return 1
+                fi
+            else
+                log_error "Could not parse time '$time_spec'"
+                echo "Examples: '5m', '2h', '9am', '11:30am', 'today 2pm', 'tomorrow 9am', '14:30'" >&2
+                return 1
+            fi
+        fi
+    fi
+
+    # Ensure time is in the future
+    if [[ $target_time -le $now ]]; then
+        log_error "Scheduled time must be in the future"
+        echo "Parsed time: $(date -r "$target_time" 2>/dev/null || echo "invalid")" >&2
+        echo "Current time: $(date -r "$now")" >&2
+        return 1
+    fi
+
+    echo "$target_time"
+}
+
+# Create draft and schedule its sending
+_schedule_send() {
+    local after_time="$1"
+    shift
+
+    # Parse time
+    local scheduled_timestamp
+    if ! scheduled_timestamp=$(_parse_after_time "$after_time"); then
+        return 1
+    fi
+
+    # All remaining args are already formatted for gmail-api-rw draft
+    local -a draft_args=("$@")
+
+    # Check if this is a dry run - don't actually create drafts or schedule
+    if (( dry_run )); then
+        echo "✓ [DRY RUN] Would create draft and schedule for $(date -r "$scheduled_timestamp")"
+        echo " Would create .eml file with stdin body and headers"
+        echo " Command would be: gmail-api-rw draft -H temporary.eml"
+        echo " Would create launchd job to send at scheduled time"
+        return 0
+    fi
+
+    # Handle stdin body - create temporary .eml file for draft creation
+    local temp_eml
+    temp_eml=$(mktemp /tmp/m-scheduled-XXXXXX.eml)
+
+    # Build .eml file with headers and body from stdin
+    {
+        # Extract recipient from draft_args (last argument that doesn't start with -)
+        local recipient=""
+        for arg in "${draft_args[@]}"; do
+            if [[ "$arg" != -* ]]; then
+                recipient="$arg"
+            fi
+        done
+
+        [[ -n "$recipient" ]] && printf 'To: %s\n' "$recipient"
+
+        # Extract subject from draft_args
+        local i=0
+        while [[ $i -lt ${#draft_args[@]} ]]; do
+            if [[ "${draft_args[i]}" == "-s" && $((i + 1)) -lt ${#draft_args[@]} ]]; then
+                printf 'Subject: %s\n' "${draft_args[i+1]}"
+                break
+            fi
+            i=$((i + 1))
+        done
+
+        printf '\n'
+        cat  # Body from stdin
+    } > "$temp_eml"
+
+    # Create draft using the .eml file
+    local draft_output
+    if ! draft_output=$(timeout 30s gmail-api-rw draft -H "$temp_eml" 2>&1); then
+        log_error "Failed to create draft (may have timed out after 30s)"
+        echo "$draft_output" >&2
+        rm -f "$temp_eml"
+        return 1
+    fi
+
+    # Clean up temp file
+    rm -f "$temp_eml"
+
+    # Extract draft ID from output
+    local draft_id
+    if ! draft_id=$(echo "$draft_output" | grep -o 'id=[^[:space:]]*' | cut -d= -f2); then
+        log_error "Could not extract draft ID from output"
+        echo "$draft_output" >&2
+        return 1
+    fi
+
+    # Extract account from draft_args for metadata
+    local account=""
+    local i=0
+    while [[ $i -lt ${#draft_args[@]} ]]; do
+        if [[ "${draft_args[i]}" == "-e" && $((i + 1)) -lt ${#draft_args[@]} ]]; then
+            account="${draft_args[i+1]}"
+            break
+        fi
+        i=$((i + 1))
+    done
+
+    # Store metadata and create launchd job
+    if ! _create_scheduled_metadata "$draft_id" "$scheduled_timestamp" "$account" "${draft_args[@]}"; then
+        return 1
+    fi
+
+    if ! _create_launchd_job "$draft_id" "$scheduled_timestamp"; then
+        # Clean up metadata on launchd failure
+        rm -f "$HOME/.config/mail-tools/scheduled/$draft_id.json"
+        return 1
+    fi
+
+    local scheduled_date
+    scheduled_date=$(date -r "$scheduled_timestamp" "+%Y-%m-%d %H:%M:%S")
+
+    echo "✓ Draft created and scheduled for $scheduled_date"
+    echo "  Will send when laptop available after that time"
+    echo "  Cancel with: m scheduled cancel $draft_id"
+}
+
+# Create metadata file for scheduled send
+_create_scheduled_metadata() {
+    local draft_id="$1"
+    local scheduled_timestamp="$2"
+    local account="$3"
+    shift 3
+    local original_command="m send --after [time] $*"
+
+    local metadata_file="$HOME/.config/mail-tools/scheduled/$draft_id.json"
+
+    # Ensure the directory exists
+    mkdir -p "$(dirname "$metadata_file")"
+
+    local created_at
+    created_at=$(date +%s)
+    local scheduled_human
+    scheduled_human=$(date -r "$scheduled_timestamp" "+%Y-%m-%d %H:%M:%S")
+
+    cat > "$metadata_file" << EOF
+{
+    "draft_id": "$draft_id",
+    "scheduled_time": $scheduled_timestamp,
+    "scheduled_time_human": "$scheduled_human",
+    "account": "${account:-default}",
+    "original_command": "$original_command",
+    "created_at": $created_at
+}
+EOF
+
+    if [[ ! -f "$metadata_file" ]]; then
+        log_error "Failed to create metadata file: $metadata_file"
+        return 1
+    fi
+}
+
+# Create launchd plist for scheduled execution
+_create_launchd_job() {
+    local draft_id="$1"
+    local scheduled_timestamp="$2"
+
+    # Convert timestamp to calendar components
+    local year month day hour minute
+    year=$(date -r "$scheduled_timestamp" +%Y)
+    month=$(date -r "$scheduled_timestamp" +%m)
+    day=$(date -r "$scheduled_timestamp" +%d)
+    hour=$(date -r "$scheduled_timestamp" +%H)
+    minute=$(date -r "$scheduled_timestamp" +%M)
+
+    # Remove leading zeros
+    month=$((10#$month))
+    day=$((10#$day))
+    hour=$((10#$hour))
+    minute=$((10#$minute))
+
+    local plist_file="$HOME/Library/LaunchAgents/com.mise.scheduled-send.$draft_id.plist"
+
+    cat > "$plist_file" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mise.scheduled-send.$draft_id</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/wiggins/mise/bash/m-scheduled-send-wrapper</string>
+        <string>$draft_id</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Year</key>
+        <integer>$year</integer>
+        <key>Month</key>
+        <integer>$month</integer>
+        <key>Day</key>
+        <integer>$day</integer>
+        <key>Hour</key>
+        <integer>$hour</integer>
+        <key>Minute</key>
+        <integer>$minute</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
+EOF
+
+    if [[ ! -f "$plist_file" ]]; then
+        log_error "Failed to create launchd plist: $plist_file"
+        return 1
+    fi
+
+    # Load the job with timeout
+    if ! timeout 10s launchctl load "$plist_file" 2>/dev/null; then
+        log_error "Failed to load launchd job: $plist_file"
+        rm -f "$plist_file"
+        return 1
+    fi
+}
+
+# List scheduled sends
+_list_scheduled_sends() {
+    local scheduled_dir="$HOME/.config/mail-tools/scheduled"
+    if [[ ! -d "$scheduled_dir" ]]; then
+        echo "No scheduled sends found."
+        return 0
+    fi
+
+    local count=0
+    local now
+    now=$(date +%s)
+
+    echo "Scheduled sends:"
+    for metadata_file in "$scheduled_dir"/*.json; do
+        [[ -f "$metadata_file" ]] || continue
+        count=$((count + 1))
+
+        local draft_id scheduled_time account original_command
+        draft_id=$(jq -r '.draft_id // "unknown"' "$metadata_file" 2>/dev/null)
+        scheduled_time=$(jq -r '.scheduled_time // 0' "$metadata_file" 2>/dev/null)
+        account=$(jq -r '.account // "default"' "$metadata_file" 2>/dev/null)
+        original_command=$(jq -r '.original_command // "unknown"' "$metadata_file" 2>/dev/null)
+
+        if [[ "$scheduled_time" =~ ^[0-9]+$ ]] && [[ "$scheduled_time" -gt 0 ]]; then
+            local scheduled_date
+            scheduled_date=$(date -r "$scheduled_time" "+%Y-%m-%d %H:%M" 2>/dev/null)
+            local time_diff=$((scheduled_time - now))
+            local time_desc=""
+
+            if [[ $time_diff -gt 0 ]]; then
+                local hours=$((time_diff / 3600))
+                local minutes=$(((time_diff % 3600) / 60))
+                if [[ $hours -gt 0 ]]; then
+                    time_desc=" (in ${hours}h ${minutes}m)"
+                else
+                    time_desc=" (in ${minutes}m)"
+                fi
+            else
+                time_desc=" (overdue)"
+            fi
+
+            echo "  $scheduled_date → $account $draft_id$time_desc"
+        else
+            echo "  [invalid time] → $account $draft_id"
+        fi
+    done
+
+    if [[ $count -eq 0 ]]; then
+        echo "No scheduled sends found."
+    fi
+}
+
+# Cancel a scheduled send
+_cancel_scheduled_send() {
+    local draft_id="$1"
+    local metadata_file="$HOME/.config/mail-tools/scheduled/$draft_id.json"
+    local plist_file="$HOME/Library/LaunchAgents/com.mise.scheduled-send.$draft_id.plist"
+
+    if [[ ! -f "$metadata_file" ]]; then
+        log_error "Scheduled send not found: $draft_id"
+        return 1
+    fi
+
+    # Read original command for confirmation
+    local original_command
+    original_command=$(jq -r '.original_command // "unknown"' "$metadata_file" 2>/dev/null)
+
+    # Unload and remove launchd job
+    if [[ -f "$plist_file" ]]; then
+        launchctl unload "$plist_file" 2>/dev/null || true
+        rm -f "$plist_file"
+    fi
+
+    # Remove metadata
+    rm -f "$metadata_file"
+
+    echo "✓ Canceled scheduled send: $draft_id"
+    echo "  Original command: $original_command"
+    echo "  Draft remains in Gmail for manual sending"
+}
+
+# Show status of a scheduled send
+_status_scheduled_send() {
+    local draft_id="$1"
+    local metadata_file="$HOME/.config/mail-tools/scheduled/$draft_id.json"
+    local plist_file="$HOME/Library/LaunchAgents/com.mise.scheduled-send.$draft_id.plist"
+
+    if [[ ! -f "$metadata_file" ]]; then
+        log_error "Scheduled send not found: $draft_id"
+        return 1
+    fi
+
+    echo "Scheduled send status: $draft_id"
+
+    # Parse metadata
+    local scheduled_time account original_command created_at
+    scheduled_time=$(jq -r '.scheduled_time // 0' "$metadata_file" 2>/dev/null)
+    account=$(jq -r '.account // "default"' "$metadata_file" 2>/dev/null)
+    original_command=$(jq -r '.original_command // "unknown"' "$metadata_file" 2>/dev/null)
+    created_at=$(jq -r '.created_at // 0' "$metadata_file" 2>/dev/null)
+
+    echo "  Account: $account"
+    echo "  Original command: $original_command"
+
+    if [[ "$created_at" =~ ^[0-9]+$ ]] && [[ "$created_at" -gt 0 ]]; then
+        echo "  Created: $(date -r "$created_at" "+%Y-%m-%d %H:%M:%S")"
+    fi
+
+    if [[ "$scheduled_time" =~ ^[0-9]+$ ]] && [[ "$scheduled_time" -gt 0 ]]; then
+        local now
+        now=$(date +%s)
+        echo "  Scheduled: $(date -r "$scheduled_time" "+%Y-%m-%d %H:%M:%S")"
+        local time_diff=$((scheduled_time - now))
+
+        if [[ $time_diff -gt 0 ]]; then
+            local hours=$((time_diff / 3600))
+            local minutes=$(((time_diff % 3600) / 60))
+            echo "  Status: Pending (in ${hours}h ${minutes}m)"
+        else
+            echo "  Status: Overdue (check logs for execution status)"
+        fi
+    fi
+
+    # Check launchd job status
+    if [[ -f "$plist_file" ]]; then
+        echo "  launchd: Job file exists"
+        if launchctl list | grep -q "com.mise.scheduled-send.$draft_id"; then
+            echo "  launchd: Job loaded and active"
+        else
+            echo "  launchd: Job file exists but not loaded"
+        fi
+    else
+        echo "  launchd: Job file missing"
+    fi
+
+    # Check if metadata file exists
+    echo "  Metadata: $(ls -la "$metadata_file" 2>/dev/null | awk '{print $5 " bytes, " $6 " " $7 " " $8}')"
+}
+
+# ========================================================================
+# § ALIAS RESOLUTION — resolve email aliases for cc/bcc addresses
+# ========================================================================
+
+# Resolve an email alias to full email address
+# Reads from ~/.config/m/aliases (case-insensitive lookup)
+# Returns original input if not found in aliases file
+_resolve_alias() {
+    local input="$1"
+    local aliases_file="$HOME/.config/m/aliases"
+
+    # Return input unchanged if no aliases file
+    if [[ ! -f "$aliases_file" ]]; then
+        echo "$input"
+        return
+    fi
+
+    # Case-insensitive lookup in aliases file
+    # Format: "alias key email@domain.com"
+    local resolved
+    resolved=$(grep -i "^alias ${input}[[:space:]]" "$aliases_file" 2>/dev/null | head -1 | awk '{print $3}')
+
+    if [[ -n "$resolved" ]]; then
+        echo "$resolved"
+    else
+        echo "$input"
+    fi
+}
+
 # ========================================================================
 # § ATTACHMENT PROMPT — interactive add/delete/edit before send
 # ========================================================================
@@ -476,6 +1149,7 @@ direct_send() {
     local done_flag=0
     local dry_run=0
     local subject=""
+    local after_time=""
     local -a cc_addrs=()
     local -a bcc_addrs=()
     local -a args=()
@@ -502,11 +1176,11 @@ direct_send() {
                 ((i+=2))
                 ;;
             -c|--cc)
-                cc_addrs+=("${send_args[i+1]}")
+                cc_addrs+=("$(_resolve_alias "${send_args[i+1]}")")
                 ((i+=2))
                 ;;
             -b|--bcc)
-                bcc_addrs+=("${send_args[i+1]}")
+                bcc_addrs+=("$(_resolve_alias "${send_args[i+1]}")")
                 ((i+=2))
                 ;;
             -d|--done)
@@ -517,18 +1191,13 @@ direct_send() {
                 dry_run=1
                 i=$((i+1))
                 ;;
+            --after)
+                after_time="${send_args[i+1]}"
+                ((i+=2))
+                ;;
             *)
-                # Check if this argument contains comma-separated recipients
-                if [[ "${send_args[i]}" =~ .+@.+,.+@.+ ]]; then
-                    # Split comma-separated recipients for separate emails
-                    IFS=',' read -ra recipients <<< "${send_args[i]}"
-                    # Add all recipients to args - we'll send separate emails to each
-                    for recipient in "${recipients[@]}"; do
-                        args+=("$recipient")
-                    done
-                else
-                    args+=("${send_args[i]}")
-                fi
+                # Pass comma-separated recipients as-is (both neomutt and Gmail API handle multiple recipients)
+                args+=("${send_args[i]}")
                 i=$((i+1))
                 ;;
         esac
@@ -601,6 +1270,7 @@ direct_send() {
                     echo "m: ${account:-default} via gmail API" >&2
                     gmail-api-rw ${account:+-e "$account"} send --via-send -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
                 else
+                    _assert_smtp_capable "$muttrc" "${account:-default}" || return 1
                     echo "m: ${account:-default} via SMTP" >&2
                     # Direct neomutt call - optimize by removing process hop
                     echo | neomutt -e 'unset record' -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
@@ -621,6 +1291,34 @@ direct_send() {
         done
     else
         # Compose mode
+        # Check for scheduled send first, before routing decision
+        if [[ -n "$after_time" ]]; then
+            # Build draft arguments for scheduled send
+            local -a draft_args=()
+            [[ -n "$account" ]] && draft_args+=(-e "$account")
+            [[ -n "$subject" ]] && draft_args+=(-s "$subject")
+
+            # Add CC addresses
+            for cc in "${cc_addrs[@]+"${cc_addrs[@]}"}"; do
+                draft_args+=(-c "$cc")
+            done
+
+            # Add BCC addresses
+            for bcc in "${bcc_addrs[@]+"${bcc_addrs[@]}"}"; do
+                draft_args+=(-b "$bcc")
+            done
+
+            # Add attachment arguments
+            draft_args+=("${attach_args[@]+"${attach_args[@]}"}")
+
+            # Add recipients and other args
+            draft_args+=("${args[@]}")
+
+            # Route to scheduled send workflow
+            _schedule_send "$after_time" "${draft_args[@]}"
+            return $?
+        fi
+
         if _is_api_only "$muttrc"; then
             # API-only account (e.g. Columbia, hackNY): there's no SMTP
             # muttrc, so we can't open neomutt interactively. Build a .eml
@@ -630,10 +1328,62 @@ direct_send() {
             # `cat` waits silently for terminal input, which looks like the
             # command is hung. Refuse early with a clear message.
             if [[ -t 0 ]]; then
-                log_error "send to API-only account needs a piped body or a .eml file"
-                echo "  e.g.  echo 'hi' | m send $account user@example.com -s 'hello'" >&2
-                echo "  or    m send $account file.eml" >&2
-                return 1
+                # Interactive mode: route to gmail-api-rw for editor integration
+                echo "m: ${account:-default} via gmail API (interactive)" >&2
+
+                # Collect recipients from args (anything containing @)
+                local -a recipients=()
+                for arg in "${args[@]}"; do
+                    if [[ "$arg" =~ @ ]]; then
+                        if [[ "$arg" =~ , ]]; then
+                            # Split comma-separated recipients
+                            IFS=',' read -ra split_recipients <<< "$arg"
+                            for recipient in "${split_recipients[@]}"; do
+                                recipients+=("${recipient// /}")  # trim spaces
+                            done
+                        else
+                            recipients+=("$arg")
+                        fi
+                    fi
+                done
+
+                if [[ ${#recipients[@]} -eq 0 ]]; then
+                    echo "m: recipient required for interactive send" >&2
+                    return 1
+                fi
+
+                # Build recipient - use first one for primary
+                local primary_recipient="${recipients[0]}"
+
+                # Warn about multiple recipients (use first, ignore others)
+                if [[ ${#recipients[@]} -gt 1 ]]; then
+                    echo "Warning: Multiple recipients specified. Using first: $primary_recipient" >&2
+                    echo " Others ignored: ${recipients[*]:1}" >&2
+                    echo " Use separate commands for multiple recipients." >&2
+                fi
+
+                # Build gmail-api-rw command without -H flag to trigger interactive mode
+                local -a gmail_cmd=(gmail-api-rw)
+                [[ -n "$account" ]] && gmail_cmd+=(-e "$account")
+                gmail_cmd+=(send --via-send "$primary_recipient")
+                [[ -n "$subject" ]] && gmail_cmd+=(-s "$subject")
+
+                # Add CC addresses
+                for cc in "${cc_addrs[@]+"${cc_addrs[@]}"}"; do
+                    gmail_cmd+=(-c "$cc")
+                done
+
+                # Add BCC addresses
+                for bcc in "${bcc_addrs[@]+"${bcc_addrs[@]}"}"; do
+                    gmail_cmd+=(-b "$bcc")
+                done
+
+                # Add attachments
+                gmail_cmd+=("${attach_args[@]+"${attach_args[@]}"}")
+
+                # Execute interactive send
+                "${gmail_cmd[@]}"
+                return $?
             fi
 
             local datestr eml_path
@@ -641,10 +1391,19 @@ direct_send() {
             eml_path="/tmp/m-send-via-eml-${datestr}.eml"
 
             # Collect recipients from args (anything containing @)
+            # Handle comma-separated recipients by splitting them
             local -a recipients=()
             for arg in "${args[@]}"; do
                 if [[ "$arg" =~ @ ]]; then
-                    recipients+=("$arg")
+                    if [[ "$arg" =~ , ]]; then
+                        # Split comma-separated recipients
+                        IFS=',' read -ra split_recipients <<< "$arg"
+                        for recipient in "${split_recipients[@]}"; do
+                            recipients+=("$recipient")
+                        done
+                    else
+                        recipients+=("$arg")
+                    fi
                 fi
             done
 
@@ -677,19 +1436,23 @@ direct_send() {
             return $?
         fi
 
-        # Handle multiple recipients by sending separate emails
-        # Find email addresses in args (anything containing @)
-        local -a recipients=()
-        local -a other_args=()
+        # SMTP-only path below. Guard against a muttrc with no smtp_url, which
+        # would make neomutt silently drop the message via local sendmail.
+        # (Skip the check on dry-run so previews still work for inspection.)
+        if (( ! dry_run )); then
+            _assert_smtp_capable "$muttrc" "${account:-default}" || return 1
+        fi
+
+        # Check if we have any recipients (arguments containing @)
+        local has_recipients=0
         for arg in "${args[@]}"; do
             if [[ "$arg" =~ @ ]]; then
-                recipients+=("$arg")
-            else
-                other_args+=("$arg")
+                has_recipients=1
+                break
             fi
         done
 
-        if [[ ${#recipients[@]} -eq 0 ]]; then
+        if (( ! has_recipients )); then
             if (( dry_run )); then
                 echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${args[*]} ${attach_args[*]+${attach_args[*]}}"
                 return 0
@@ -698,15 +1461,13 @@ direct_send() {
             echo "m: ${account:-default} via SMTP" >&2
             neomutt -e 'unset record' -F "$muttrc" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
         else
-            # Send separate email to each recipient
-            for recipient in "${recipients[@]}"; do
-                if (( dry_run )); then
-                    echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc $recipient ${other_args[*]+${other_args[*]}} ${attach_args[*]+${attach_args[*]}}"
-                    continue
-                fi
-                echo "m: sending to $recipient via ${account:-default} SMTP" >&2
-                neomutt -e 'unset record' -F "$muttrc" "$recipient" "${other_args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
-            done
+            # Send single email with all arguments (neomutt handles comma-separated recipients)
+            if (( dry_run )); then
+                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${args[*]} ${attach_args[*]+${attach_args[*]}}"
+                return 0
+            fi
+            echo "m: ${account:-default} via SMTP" >&2
+            neomutt -e 'unset record' -F "$muttrc" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
         fi
     fi
 }
@@ -864,7 +1625,7 @@ parse_action_args() {
 # smart_send() function removed - logic consolidated into direct_send()
 # This eliminates the need for the external send script
 
-ACTIONS_SHORT="i sent q d x urls"
+ACTIONS_SHORT="i sent q d x urls scheduled"
 ACTIONS_SEND="send c"
 ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive thread read unread sfwd sreply sreply-all"
 
@@ -899,6 +1660,9 @@ EOF
 FLAGS
     -w, --web         Force browser instead of CLI
     -N, --no-cache    Bypass listing cache; force fresh fetch
+    -S [FILE]         Save message: -S FILE writes decoded text; bare -S to spool
+    --raw             With -S, save original MIME bytes (base64) + attachments
+    -p, --peek        Save message(s) and put a /peek command on the clipboard
     --quiet           Suppress progress messages
     --dry-run         Preview destructive actions
     -h, --help        This help
@@ -908,6 +1672,7 @@ HELP TOPICS
     --help=accounts   Account configuration
     --help=search     Advanced search syntax
     --help=config     Configuration options
+    --help=examples   Common usage examples
 EOF
             ;;
         actions)
@@ -921,8 +1686,21 @@ READING
     d         drafts                 View drafts (web only)
     x         spam                   Check spam folder
 
+    INDEX        Read one message (e.g. m 3)
+    START-END    List those index rows (e.g. m 45-67) — listing, not bodies
+    N,M,...      Open several messages (e.g. m 3,5,8)
+
+SAVING TO A FILE
+    INDEX -S FILE        Save message to FILE, decoded/human-readable (ASCII)
+    INDEX -S             Save decoded text to /tmp/spool (auto-named)
+    INDEX -S FILE --raw  Save original MIME bytes (base64 intact, + attachments)
+    sent INDEX -S FILE   Same, for a sent message
+    Default save is the -t render: headers, '---', then the decoded body.
+    Use --raw only when you need the wire format or attachments saved.
+
 COMPOSING
     send      Send .eml file or compose (routes to send script)
+              --after TIME  Schedule send (e.g. --after "5m" or --after "tomorrow 9am")
     c         Same as send (compose shorthand)
     draft     Save message to drafts
 
@@ -940,6 +1718,11 @@ SENT MESSAGE ACTIONS
     sfwd INDEX RECIPIENT            Forward a SENT message
     sreply INDEX                    Reply to a SENT message
     sreply-all INDEX                Reply-all to a SENT message
+
+SCHEDULED SENDS
+    scheduled list                  List pending scheduled sends
+    scheduled cancel DRAFT_ID       Cancel a scheduled send
+    scheduled status DRAFT_ID       Check status of scheduled send
 EOF
             ;;
         accounts)
@@ -1008,9 +1791,85 @@ TAB COMPLETION
     source aux/m/m-completion.bash     Enable bash completion
 EOF
             ;;
+        examples)
+            cat <<'EOF'
+EXAMPLES - Common Usage Patterns
+
+BASIC READING
+    m                                     Default inbox
+    m g                                   Gmail inbox
+    m u                                   Columbia inbox
+    m sent                                Your sent messages
+    m sent pp2                            Page 2 of sent messages
+
+SEARCHING
+    m q "from:alice"                      Find emails from Alice
+    m q "subject:meeting"                 Find emails about meetings
+    m q "is:unread"                       Find unread emails
+    m q "has:attachment" -p               Peek at emails with attachments
+
+READING MESSAGES
+    m 3                                   Read message #3
+    m q "from:boss" 1                     Search for boss emails, read first one
+    m 45-67                               List index rows 45-67 (not bodies)
+    m 3,5,8                               Open messages 3, 5, and 8
+    m 1-5 -p                              Peek at messages 1-5 (save to files)
+
+SAVING MESSAGES TO A FILE
+    m 3 -S /tmp/msg.txt                   Save msg #3, decoded/human-readable
+    m sent 3 -S /tmp/sent.txt             Save sent msg #3, decoded
+    m 3 -S                                Save decoded text to /tmp/spool
+    m 3 -S /tmp/msg.eml --raw             Save original MIME (base64) + attachments
+
+COMPOSING
+    m send user@example.com               Interactive composition (opens vi)
+    echo "Hi!" | m send user@example.com  Send with piped body
+    m send user@example.com -s "Subject"  Send with subject line
+    m u send prof@columbia.edu            Columbia account, interactive compose
+
+ATTACHMENTS & CC/BCC
+    m send user@ex.com -a file.pdf        Send with attachment
+    m send user@ex.com -c boss@work.com   Send with CC
+    m send user@ex.com -b secret@ex.com   Send with BCC
+    m send team@work.com -s "Update" -a report.pdf -c boss@work.com
+
+SCHEDULED SENDING
+    m send user@ex.com --after "5m"       Send in 5 minutes
+    m send team@work.com --after "tomorrow 9am"  Send tomorrow at 9am
+    m send client@firm.com --after "Friday 2pm"  Send Friday at 2pm
+    m scheduled list                      See what's scheduled
+    m scheduled cancel draft_abc123       Cancel a scheduled send
+
+REPLYING & FORWARDING
+    m reply 3                             Reply to message #3
+    m reply-all 3                         Reply-all to message #3
+    m fwd 3 user@example.com              Forward message #3
+    m q "from:alice" 1 reply              Find Alice email, reply to first
+
+MANAGING MESSAGES
+    m 3 trash                             Move message #3 to trash
+    m 1-5 archive                         Archive messages 1-5
+    m m 3                                 Archive message #3 (shorthand)
+    m 3 read                              Mark message #3 as read
+    m 1-10 unread                         Mark messages 1-10 as unread
+
+MULTI-ACCOUNT EXAMPLES
+    m g q "from:boss"                     Search Gmail account
+    m u send prof@columbia.edu            Columbia account interactive send
+    m j sent                              Joint account sent messages
+    m l reply 1                           Lake account reply to message #1
+
+ADVANCED WORKFLOWS
+    m q "is:unread" 1-3 -p               Peek at first 3 unread emails
+    m sent 1 fwd user@ex.com             Forward your sent message #1
+    m --dry-run send user@ex.com         Preview send without actually sending
+    m -N q "from:alice"                  Force fresh search (bypass cache)
+    m urls 3                             Extract URLs from message #3
+EOF
+            ;;
         *)
             echo "Unknown help topic: $topic" >&2
-            echo "Available topics: actions, accounts, search, config" >&2
+            echo "Available topics: actions, accounts, search, config, examples" >&2
             exit 1
             ;;
     esac
@@ -1078,22 +1937,64 @@ while (( i < ${#args[@]} )); do
             i=$((i + 1))
             rest+=("${args[i]}")
         fi
+    elif [[ "$arg" == "--after" ]]; then
+        # --after <time>: schedule send after specified time
+        # CRITICAL: this branch must consume the value (the time) here.
+        # Same pattern as --outbox to prevent account-resolution conflicts.
+        rest+=("--after")
+        if (( i + 1 < ${#args[@]} )); then
+            i=$((i + 1))
+            rest+=("${args[i]}")
+        else
+            log_error "--after requires a time argument"
+            echo "Examples: --after '5m', --after 'tomorrow 9am', --after '2024-05-24 14:30'" >&2
+            exit 1
+        fi
     elif [[ -z "$action" ]] && [[ " $ACTIONS_SHORT $ACTIONS_SEND $ACTIONS_PASSTHRU " == *" $arg "* ]]; then
         action="$arg"
     elif [[ "$arg" == "m" ]] && [[ -z "$action" ]]; then
         action="archive"
     elif [[ -z "$account" ]] && [[ -n "${ACCTS[$arg]:-}" ]]; then
         account="$arg"
-    elif [[ -z "$account" ]] && [[ ${#arg} -eq 1 ]] && [[ "$arg" =~ ^[a-z]$ ]]; then
-        echo "m: unknown account '$arg'" >&2
-        valid_accts=$(printf '%s, ' "${!EMAILS[@]}" | sort | sed 's/, $//')
-        echo "Valid accounts: $valid_accts" >&2
-        exit 1
     else
         rest+=("$arg")
     fi
     i=$((i + 1))
 done
+
+# Check for "sent" typo: if action is "sent" but rest contains email recipients
+# or .eml files, likely meant "send". Prompt for confirmation before proceeding.
+# Exception: a .eml right after -S/--save is a SAVE TARGET (m sent 3 -S out.eml),
+# not a send payload — don't nag about it.
+if [[ "$action" == "sent" ]] && (( ${#rest[@]} > 0 )); then
+    _prev=""
+    for _r in "${rest[@]}"; do
+        if [[ "$_r" =~ \.eml$ ]] && [[ "$_prev" == "-S" || "$_prev" == "--save" ]]; then
+            _prev="$_r"
+            continue
+        fi
+        _prev="$_r"
+        if [[ "$_r" =~ ^[^[:space:]]+@[^[:space:]]+\.[^[:space:]]+$ ]] || [[ "$_r" =~ \.eml$ ]]; then
+            echo "🛑 did you mean send? y/N"
+            read -r typo_response
+            case "$typo_response" in
+                [yY]|[yY][eE][sS])
+                    action="send"
+                    if [[ "$_r" =~ \.eml$ ]]; then
+                        log_warn "'sent' corrected to 'send' for file '$_r'"
+                    else
+                        log_warn "'sent' corrected to 'send' for recipient '$_r'"
+                    fi
+                    break 2
+                    ;;
+                *)
+                    # User said no, continue with 'sent' action
+                    break
+                    ;;
+            esac
+        fi
+    done
+fi
 
 # Infer 'send' if no action was given but rest contains an email recipient.
 # This is the m-is-forgiving layer doing its job: `m foo@bar.com -c baz@qux.com`
@@ -1111,7 +2012,12 @@ fi
 
 # defaults
 action="${action:-i}"
-account="${account:-${M_DEFAULT_ACCOUNT:-g}}"
+
+# Set default account from config file, fallback to environment variable, then 'g'
+if [[ -z "$account" ]]; then
+    config_default=$(jq -r '.default_account // empty' "$MAIL_TOOLS_CONFIG" 2>/dev/null)
+    account="${config_default:-${M_DEFAULT_ACCOUNT:-g}}"
+fi
 
 # pagination
 page_offset=""; page_size=10; filtered_rest=()
@@ -1141,7 +2047,16 @@ if [[ "$gmail_flag" == "!" ]]; then web=1; gmail_flag=""; fi
 # array reference fails, and on macOS bash 3 the empty-vs-unset
 # distinction is fragile.
 gmail_acct=()
-[[ -n "$gmail_flag" ]] && gmail_acct=(-e "$gmail_flag")
+if [[ -n "$gmail_flag" ]]; then
+    # Pass the email address instead of the alias so gmail-api-rw can resolve it
+    account_email="${EMAILS[$account]:-}"
+    if [[ -n "$account_email" ]]; then
+        gmail_acct=(-e "$account_email")
+    else
+        # Fallback to the gmail_flag (for backward compatibility)
+        gmail_acct=(-e "$gmail_flag")
+    fi
+fi
 
 # ========================================================================
 # § ACTION ROUTER — dispatch on $action
@@ -1157,11 +2072,28 @@ case "$action" in
             # ================================================
             # INBOX/QUERY ACTION: List messages with optional peek
             # ================================================
+            # Check for -A open combination first (special case)
+            has_attachment_save=0
+            has_trailing_open=0
+            for arg in "${rest[@]+"${rest[@]}"}"; do
+                if [[ "$arg" == "-A" || "$arg" == "--save-attachments-only" ]]; then
+                    has_attachment_save=1
+                elif [[ "$arg" == "open" && "$has_attachment_save" == "1" ]]; then
+                    has_trailing_open=1
+                fi
+            done
+
+            # If we have -A open, remove 'open' from the action words list
+            action_words="reply reply-all fwd draft open trash archive thread read unread sfwd sreply sreply-all urls grep"
+            if [[ "$has_trailing_open" == "1" ]]; then
+                action_words="reply reply-all fwd draft trash archive thread read unread sfwd sreply sreply-all urls grep"
+            fi
+
             # Delegate arg parsing to the shared helper; q-action treats rest[0] as query.
             # Inbox/query handler accepts the full action set (excluding "peek"
             # and "forward" which only the sent handler treats as standalone).
             parse_action_args "positional-q" "$action" \
-                "reply reply-all fwd draft open trash archive thread read unread sfwd sreply sreply-all urls" \
+                "$action_words" \
                 "${rest[@]+"${rest[@]}"}"
             query_string="$PA_QUERY"
             peek_flag=0
@@ -1171,6 +2103,25 @@ case "$action" in
 
             # If we found an action word, route to gmail-api-rw immediately
             if [[ -n "$action_word" ]]; then
+                # Special handling for grep action
+                if [[ "$action_word" == "grep" ]]; then
+                    # Extract context lines (default to 5)
+                    context_lines="${PA_TRAILING_ARGS[0]:-5}"
+                    if [[ ! "$context_lines" =~ ^[0-9]+$ ]]; then
+                        context_lines=5
+                    fi
+
+                    log_info "🔍 Searching for '$query_string' with $context_lines lines of context..."
+
+                    # Get the message content and grep it (use -S for raw output to stdout)
+                    gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" -S | \
+                        grep -A "$context_lines" -B "$context_lines" -i --color=always "$query_string" | \
+                        less -R
+                    exit $?
+                fi
+
+                # DEBUG: show exact command for troubleshooting cache/message ID issues
+                echo "DEBUG: account=$account, gmail_acct=(${gmail_acct[*]+${gmail_acct[*]}}), query='$query_string', numbers=(${message_numbers[*]+${message_numbers[*]}}), action=$action_word" >&2
                 exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
             fi
 
@@ -1179,9 +2130,31 @@ case "$action" in
             meta_flag=0
             open_attachments_flag=0
             save_attachments_only_flag=0
+            open_after_save_flag=0
+            save_file=""
+            raw_save_flag=0
             for i in "${!rest[@]}"; do
                 arg="${rest[i]}"
                 case "$arg" in
+                    --raw)
+                        raw_save_flag=1
+                        ;;
+                    -S|--save)
+                        # -S FILE saves the raw .eml to FILE (backend OUTPUT
+                        # positional). Bare -S keeps its legacy meaning (raw to
+                        # stdout, relied on by the grep pipeline) by falling
+                        # through to filtered_args.
+                        next_idx=$(( i + 1 ))
+                        if [[ -n "${rest[next_idx]:-}" && "${rest[next_idx]}" != -* ]]; then
+                            save_file="${rest[next_idx]}"
+                            rest[next_idx]="__M_CONSUMED__"
+                        else
+                            filtered_args+=("$arg")
+                        fi
+                        ;;
+                    __M_CONSUMED__)
+                        # filename already eaten by a preceding -S/--save
+                        ;;
                     -p|--peek)
                         peek_flag=1
                         ;;
@@ -1197,6 +2170,11 @@ case "$action" in
                     -A|--save-attachments-only)
                         save_attachments_only_flag=1
                         ;;
+                    open)
+                        if (( save_attachments_only_flag )); then
+                            open_after_save_flag=1
+                        fi
+                        ;;
                     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
                         # Single message number — but if action is 'q' and this
                         # is rest[0], it's the query string (e.g. 'm q 31'), not an index.
@@ -1205,8 +2183,15 @@ case "$action" in
                         fi
                         message_numbers+=("$arg")
                         ;;
-                    [0-9]-[0-9]|[0-9]-[0-9][0-9]|[0-9][0-9]-[0-9][0-9])
-                        # Message range (e.g., 1-5) — same q-action exception
+                    [0-9]*-[0-9]* | [0-9]*,[0-9]*)
+                        # Message range (e.g. 1-5, 45-120) or comma-list (1,3,8).
+                        # Validate the full shape so we don't swallow stray tokens
+                        # that merely contain a digit and a dash.
+                        if [[ ! "$arg" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
+                            filtered_args+=("$arg")
+                            continue
+                        fi
+                        # Same q-action exception: rest[0] is the query, not an index.
                         if [[ "$action" == "q" && "$i" == "0" ]]; then
                             continue
                         fi
@@ -1218,7 +2203,7 @@ case "$action" in
                             continue
                         fi
                         # Skip action words and flags that are handled separately
-                        if [[ "$arg" == "$action_word" ]] || [[ "$arg" =~ ^(-v|--verbose|-A|--save-attachments-only|-p|--peek|--meta|--open-attachments)$ ]]; then
+                        if [[ "$arg" == "$action_word" ]] || [[ "$arg" =~ ^(-v|--verbose|-A|--save-attachments-only|-p|--peek|--meta|--open-attachments|open)$ ]]; then
                             continue
                         fi
                         # Pass through other flags to gmail-api-rw (-x, -S, -t, etc.)
@@ -1264,6 +2249,42 @@ case "$action" in
                     # ============================================
                     # READ MODE: Open/read specific message numbers
                     # ============================================
+                    # A bare range (e.g. 45-67) means "show the index rows for
+                    # those messages", NOT open each body. Single numbers and
+                    # comma-lists still open the message(s). Trigger only when
+                    # every message-number token is a range and no attachment
+                    # flags are in play.
+                    all_ranges=1
+                    max_index=0
+                    for mn in "${message_numbers[@]}"; do
+                        if [[ "$mn" != *-* ]]; then
+                            all_ranges=0
+                            break
+                        fi
+                        # Track the highest endpoint so we fetch enough rows.
+                        end_idx="${mn##*-}"
+                        [[ "$end_idx" =~ ^[0-9]+$ ]] && (( end_idx > max_index )) && max_index="$end_idx"
+                    done
+                    if (( all_ranges )) && (( ! save_attachments_only_flag )) \
+                        && (( ! open_attachments_flag )) \
+                        && [[ ! " ${filtered_args[*]} " =~ " -S " ]]; then
+                        # Build the sed program: one "Ns,Mp" clause per range.
+                        sed_prog=""
+                        for mn in "${message_numbers[@]}"; do
+                            r_start="${mn%%-*}"
+                            r_end="${mn##*-}"
+                            sed_prog+="${r_start},${r_end}p;"
+                        done
+                        list_cmd=(gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$max_index" ${query_string:+-q "$query_string"})
+                        (( meta_flag )) && list_cmd+=(--meta)
+                        (( verbose_flag )) && list_cmd+=(-v)
+                        list_cmd+=(-t)
+                        if ! "${list_cmd[@]}" | sed -n "$sed_prog"; then
+                            exit 1
+                        fi
+                        exit 0
+                    fi
+
                     # When message numbers are specified without peek, read the messages
                     # Build command with optional attachment flag
                     # For pagination, fetch enough messages to cover the page
@@ -1289,6 +2310,42 @@ case "$action" in
                         # For -A flag, just run the command without piping to less
                         if ! "${read_cmd[@]}"; then
                             exit 1
+                        fi
+
+                        # Check if 'open' was requested after -A
+                        if (( open_after_save_flag )); then
+                            # Find the most recently saved attachment and open it
+                            log_info "🔍 Finding most recent attachment to open..."
+                            if [[ -d "/tmp/spool/attachments" ]]; then
+                                latest_file=$(ls -t "/tmp/spool/attachments/"* 2>/dev/null | head -1 || true)
+                                if [[ -n "$latest_file" ]]; then
+                                    log_info "📂 Opening: $(basename "$latest_file")"
+                                    /Users/wiggins/mise/bash/open "$latest_file"
+                                else
+                                    log_warn "⚠️ No attachments found in /tmp/spool/attachments/"
+                                fi
+                            else
+                                log_warn "⚠️ Attachments directory doesn't exist"
+                            fi
+                        fi
+                    elif [[ -n "$save_file" ]]; then
+                        # Save mode. Default: human-readable decoded text (-t
+                        # render: headers + decoded body), so the file is ASCII
+                        # not raw base64 MIME. --raw keeps the original bytes.
+                        if (( raw_save_flag )); then
+                            read_cmd+=("$save_file")
+                            if ! "${read_cmd[@]}"; then
+                                exit 1
+                            fi
+                        else
+                            read_cmd+=(-t)
+                            save_file="$(_versioned_path "$save_file")"
+                            if "${read_cmd[@]}" > "$save_file"; then
+                                echo "✅ Saved (decoded): $save_file" >&2
+                            else
+                                echo "⚠️ Failed to save $save_file" >&2
+                                exit 1
+                            fi
                         fi
                     else
                         # Check if -S flag is in filtered_args (raw output to stdout)
@@ -1332,7 +2389,7 @@ case "$action" in
                     gmail_cmd+=(--meta)
                 fi
                 if (( verbose_flag )); then
-                    gmail_cmd+=(--verbose)
+                    gmail_cmd+=(-v)
                 fi
                 gmail_cmd+=(-t)
 
@@ -1367,6 +2424,8 @@ case "$action" in
             rest=("${PA_REMAINING[@]+"${PA_REMAINING[@]}"}")
             peek_flag=0
             save_flag=0
+            save_file=""
+            raw_save_flag=0
 
             # If we found an action word, route to gmail-api-rw immediately
             if [[ -n "$action_word" ]]; then
@@ -1392,8 +2451,22 @@ case "$action" in
                     -x|--headers)
                         headers_flag=1
                         ;;
-                    -save)
+                    --raw)
+                        raw_save_flag=1
+                        ;;
+                    -S|--save|-save)
+                        # Save .eml to a file. A following non-flag token is the
+                        # destination path. Default saves decoded/ASCII text;
+                        # add --raw for original MIME bytes.
                         save_flag=1
+                        next_idx=$(( i + 1 ))
+                        if [[ -n "${rest[next_idx]:-}" && "${rest[next_idx]}" != -* ]]; then
+                            save_file="${rest[next_idx]}"
+                            rest[next_idx]="__M_CONSUMED__"
+                        fi
+                        ;;
+                    __M_CONSUMED__)
+                        # filename already eaten by a preceding -S/--save
                         ;;
                     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
                         # Single message number — but if action is 'q' and this
@@ -1403,8 +2476,15 @@ case "$action" in
                         fi
                         message_numbers+=("$arg")
                         ;;
-                    [0-9]-[0-9]|[0-9]-[0-9][0-9]|[0-9][0-9]-[0-9][0-9])
-                        # Message range (e.g., 1-5) — same q-action exception
+                    [0-9]*-[0-9]* | [0-9]*,[0-9]*)
+                        # Message range (e.g. 1-5, 45-120) or comma-list (1,3,8).
+                        # Validate the full shape so we don't swallow stray tokens
+                        # that merely contain a digit and a dash.
+                        if [[ ! "$arg" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
+                            filtered_args+=("$arg")
+                            continue
+                        fi
+                        # Same q-action exception: rest[0] is the query, not an index.
                         if [[ "$action" == "q" && "$i" == "0" ]]; then
                             continue
                         fi
@@ -1440,8 +2520,31 @@ case "$action" in
                         exit 1
                     fi
                 elif (( save_flag )); then
-                    # Save mode
-                    gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -save
+                    # Save mode. Default: human-readable (decoded headers + body,
+                    # what -t renders) so the saved file is ASCII, not raw MIME
+                    # with base64 chunks. Use --raw to keep the original bytes.
+                    if (( raw_save_flag )); then
+                        # Raw bytes via the backend OUTPUT positional. Bare -S
+                        # (no file) omits it, so the backend saves to /tmp/spool.
+                        gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" ${save_file:+"$save_file"}
+                    elif [[ -n "$save_file" ]]; then
+                        save_file="$(_versioned_path "$save_file")"
+                        if gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -t > "$save_file"; then
+                            echo "✅ Saved (decoded): $save_file" >&2
+                        else
+                            echo "⚠️ Failed to save $save_file" >&2
+                            exit 1
+                        fi
+                    else
+                        # Bare -S, no file: decoded text to a spool file.
+                        mkdir -p /tmp/spool
+                        _m_spool="$(_versioned_path "/tmp/spool/$(date +%Y-%m-%d)-sent-msg.txt")"
+                        if gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -t > "$_m_spool"; then
+                            echo "✅ Saved (decoded): $_m_spool" >&2
+                        else
+                            exit 1
+                        fi
+                    fi
                 elif (( verbose_flag )); then
                     # Verbose mode (no paging)
                     gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -v
@@ -1464,12 +2567,35 @@ case "$action" in
                 fi
             else
                 # No message numbers: show listing
-                gmail_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$page_size" ${query_string:+-q "$query_string"})
+                # For pagination, we need to fetch enough messages to show the requested page
+                if [[ -n "$page_offset" ]]; then
+                    # For page 2+, fetch (page_num * page_size) messages and filter later
+                    page_num=$(( page_offset / page_size + 1 ))
+                    total_needed=$(( page_num * page_size ))
+                    gmail_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$total_needed" ${query_string:+-q "$query_string"})
+                else
+                    # Page 1: just show page_size messages
+                    gmail_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$page_size" ${query_string:+-q "$query_string"})
+                fi
+
                 if (( meta_flag )); then
                     gmail_cmd+=(--meta)
                 fi
                 gmail_cmd+=(-t)
-                "${gmail_cmd[@]}"
+
+                if [[ -n "$page_offset" ]]; then
+                    # For page 2+, filter output to show only the desired page
+                    start_line=$(( page_offset + 1 ))
+                    end_line=$(( page_offset + page_size ))
+                    if ! "${gmail_cmd[@]}" | sed -n "${start_line},${end_line}p"; then
+                        exit 1
+                    fi
+                else
+                    # Page 1: show normally
+                    if ! "${gmail_cmd[@]}"; then
+                        exit 1
+                    fi
+                fi
             fi
         fi
         ;;
@@ -1604,6 +2730,35 @@ case "$action" in
     urls)
         # Extract URLs from message
         exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        ;;
+    scheduled)
+        # Manage scheduled sends
+        case "${rest[0]:-list}" in
+            list)
+                _list_scheduled_sends
+                ;;
+            cancel)
+                if [[ -z "${rest[1]:-}" ]]; then
+                    log_error "cancel requires a draft ID"
+                    echo "Usage: m scheduled cancel <draft_id>" >&2
+                    exit 1
+                fi
+                _cancel_scheduled_send "${rest[1]}"
+                ;;
+            status)
+                if [[ -z "${rest[1]:-}" ]]; then
+                    log_error "status requires a draft ID"
+                    echo "Usage: m scheduled status <draft_id>" >&2
+                    exit 1
+                fi
+                _status_scheduled_send "${rest[1]}"
+                ;;
+            *)
+                log_error "Unknown scheduled action: ${rest[0]}"
+                echo "Usage: m scheduled [list|cancel|status]" >&2
+                exit 1
+                ;;
+        esac
         ;;
     *)
         echo "m: unknown action '$action'" >&2
