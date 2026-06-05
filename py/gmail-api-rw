@@ -198,7 +198,7 @@ def check_dependencies():
         errors.append("OAuth helper module missing: google_auth.py")
         errors.append("  This should be in the same directory as gmail-api-rw")
     except Exception:
-        # OAuth not set up yet, that's fine - user can run 'm login <account>'
+        # OAuth not set up yet, that's fine - user can run setup_google_auth.py
         pass
 
     if errors:
@@ -207,7 +207,7 @@ def check_dependencies():
         for error in errors:
             print(f"  {error}", file=sys.stderr)
         print(file=sys.stderr)
-        print("Fix the above issues. For OAuth setup, run 'm login <account>'", file=sys.stderr)
+        print("Fix the above issues. For OAuth setup, run 'python3 ~/mise/py/setup_google_auth.py <email>'", file=sys.stderr)
         return False
 
     return True
@@ -426,11 +426,11 @@ def parse_recipient(to_header):
     """Extract a display-friendly recipient from a To header."""
     if not to_header:
         return "(unknown)"
-    # To header can have multiple addresses separated by commas
-    addrs = [a.strip() for a in to_header.split(",") if a.strip()]
+    # Use getaddresses() to properly parse email addresses (handles commas in quoted names)
+    addrs = getaddresses([to_header])
     if not addrs:
         return "(unknown)"
-    name, addr = parseaddr(addrs[0])
+    name, addr = addrs[0]
     first = name if name else addr
     if len(addrs) > 1:
         first += f" +{len(addrs) - 1}"
@@ -818,14 +818,26 @@ def extract_text_body(raw_bytes):
         for part in msg.walk():
             result = _check_part(part)
             if result is not None:
-                return _clean_unicode_noise(result)
+                text = _clean_unicode_noise(result)
+                # Fix broken URLs with spaces after protocol (https: // -> https://)
+                import re
+                text = re.sub(r'https?\s*:\s*//', 'https://', text)
+                return text
     else:
         result = _check_part(msg)
         if result is not None:
-            return _clean_unicode_noise(result)
+            text = _clean_unicode_noise(result)
+            # Fix broken URLs with spaces after protocol (https: // -> https://)
+            import re
+            text = re.sub(r'https?\s*:\s*//', 'https://', text)
+            return text
 
     if html_fallback:
-        return _clean_unicode_noise(_strip_html(html_fallback))
+        text = _clean_unicode_noise(_strip_html(html_fallback))
+        # Fix broken URLs with spaces after protocol (https: // -> https://)
+        import re
+        text = re.sub(r'https?\s*:\s*//', 'https://', text)
+        return text
     return "(no message body found)"
 
 
@@ -956,9 +968,30 @@ def _authenticated_service(args, scope, email_override=None, handle_show_account
     if handle_show_account and getattr(args, "show_account", False):
         print(login_hint or "(default account)")
         sys.exit(0)
+    from googleapiclient.discovery import build
     creds = get_credentials(service="gmail", scopes=scope,
                             token_name=token_name, login_hint=login_hint)
     service = build("gmail", "v1", credentials=creds)
+
+    # REAL SAFETY CHECK: Verify authenticated account matches requested account.
+    # We call getProfile() to see who we actually are.
+    try:
+        profile = service.users().getProfile(userId='me').execute()
+        actual_email = profile.get('emailAddress')
+    except Exception as e:
+        print(f"🛑 Failed to verify authentication: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if login_hint and actual_email and login_hint.lower() != actual_email.lower():
+        print(f"🛑 Authentication mismatch!", file=sys.stderr)
+        print(f"   Requested: {login_hint}", file=sys.stderr)
+        print(f"   Token is for:  {actual_email}", file=sys.stderr)
+        print(f"", file=sys.stderr)
+        print(f"   This prevents operations on the wrong account (e.g., Lake vs Columbia).", file=sys.stderr)
+        print(f"   To fix: re-authenticate the requested account", file=sys.stderr)
+        print(f"   Run: python3 ~/mise/py/setup_google_auth.py {login_hint}", file=sys.stderr)
+        sys.exit(1)
+
     return service, login_hint
 
 
@@ -1152,7 +1185,11 @@ def get_body_interactive(recipient, subject):
     with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
         tmpfile = f.name
     try:
-        subprocess.call([editor, tmpfile])
+        # For vim/nvim/vi, start in insert mode (empty file, so line 1)
+        if "vim" in editor.lower() or "vi" in editor.lower():
+            subprocess.call([editor, "+startinsert", tmpfile])
+        else:
+            subprocess.call([editor, tmpfile])
         body = Path(tmpfile).read_text()
     finally:
         try:
@@ -1304,7 +1341,11 @@ def edit_headers_and_body(initial_headers, body_template, current_account, max_r
             tmpfile = f.name
 
         try:
-            subprocess.call([editor, tmpfile])
+            # For vim/nvim/vi, go to line 16 and start in insert mode (body area)
+            if "vim" in editor.lower() or "vi" in editor.lower():
+                subprocess.call([editor, "+16", "+startinsert", tmpfile])
+            else:
+                subprocess.call([editor, tmpfile])
             edited = Path(tmpfile).read_text()
         finally:
             try:
@@ -1665,7 +1706,9 @@ def _resolve_message_id(service, index, count, query, account=None,
     # Cache miss or stale: fetch fresh
     if _cache_path(account).exists():
         print(f"Cache miss (query={query!r}); re-fetching message list", file=sys.stderr)
-    kwargs = {"userId": "me", "maxResults": count}
+    # Ensure we fetch at least as many messages as the requested index
+    fetch_count = max(count, index)
+    kwargs = {"userId": "me", "maxResults": fetch_count}
     if query:
         kwargs["q"] = query
     result = service.users().messages().list(**kwargs).execute()
@@ -1811,6 +1854,7 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
     ).execute()
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+
 
     # Extract headers for reply
     orig_from = msg.get("From", "")
@@ -2582,6 +2626,19 @@ def _build_raw_bytes(args, from_addr=None):
 
 def do_send(service, args, from_addr=None):
     """Send a message via Gmail API."""
+    # Handle sending existing drafts by ID (for scheduled sends)
+    if getattr(args, 'draft_id', None):
+        try:
+            # Send the existing draft
+            result = service.users().drafts().send(
+                userId="me", body={"id": args.draft_id}
+            ).execute()
+            print(f"Sent draft: id={result.get('id', '?')}", file=sys.stderr)
+            return
+        except Exception as e:
+            print(f"Failed to send draft {args.draft_id}: {e}", file=sys.stderr)
+            sys.exit(1)
+
     is_preview = getattr(args, 'text', False)
     if not is_preview and not getattr(args, 'via_send', False):
         print("gmail-api-rw send is disabled. Use send instead.", file=sys.stderr)
@@ -2671,6 +2728,8 @@ def parse_send_draft_args(argv):
                         help="Preview the built message without sending")
     parser.add_argument("--done", action="store_true",
                         help="Copy /sent <path> to clipboard after sending (for Claude /sent skill)")
+    parser.add_argument("--draft-id", default=None,
+                        help="Send an existing draft by ID (for scheduled sends)")
     # --via-send is the contract flag from `m`. m's direct_send sets it on
     # the API path; do_send refuses to send without it (see do_send body).
     # This prevents a user from accidentally bypassing m's safety checks
