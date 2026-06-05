@@ -18,6 +18,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument("-i", "--id", required=True, help="Google Document ID or full URL")
 parser.add_argument("-f", "--file", required=True, help="Path to credentials.json file")
 parser.add_argument("-o", "--output", required=True, help="Output markdown filename")
+parser.add_argument("-p", "--port", type=int, default=8080, help="Local port for OAuth callback (default: 8080)")
 
 args = parser.parse_args()
 
@@ -67,7 +68,7 @@ if not creds or not creds.valid:
         flow = InstalledAppFlow.from_client_secrets_file(
             credentials_file, ["https://www.googleapis.com/auth/documents.readonly"]
         )
-        creds = flow.run_local_server(port=8080)
+        creds = flow.run_local_server(port=args.port)
 
         with open("token.pickle", "wb") as token:
             pickle.dump(creds, token)
