@@ -11,11 +11,11 @@ set tabstop=2
 set shiftwidth=2
 " causes problems with makefiles:
 set expandtab
-filetype plugin on 
-":let b:col=substitute(b:col, ',', ';', 'g') 
+filetype plugin on
+":let b:col=substitute(b:col, ',', ';', 'g')
 "use docx2txt.pl to allow VIm to view the text content of a .docx file directly.
 autocmd BufReadPre *.docx set ro
-autocmd BufReadPost *.docx %!docx2txt.pl 
+autocmd BufReadPost *.docx %!docx2txt.pl
 
 " show line #s
 set number
@@ -26,7 +26,7 @@ let g:markdown_fenced_languages = ['html', 'python', 'bash=sh']
 
 
 " cwstuff
-set ic 
+set ic
 
 " fzf suggests adding:
 set rtp+=/usr/local/opt/fzf
@@ -66,7 +66,7 @@ autocmd BufEnter *.md Copilot enable
 command! Pilot :Copilot enable
 command! Unpilot :Copilot disable
 command! Ideas :Copilot panel
-command! Status :Copilot status  
+command! Status :Copilot status
 command! Nosnoop :Copilot disable
 command! Nocreep :Copilot disable
 
@@ -97,3 +97,37 @@ autocmd BufWritePre * %s/\s\+$//e
 
 " 20260404 collapse double spaces in prose files on save
 autocmd BufWritePre *.md,*.txt,*.eml,*.tex,*.rst,*.html %s/\(\S\)  \+/\1 /ge
+
+" 20260609 run prose on just the email body (Subject body .. before 'On ... wrote:')
+" Body = first non-blank line after the Subject: header line, through the
+" line before a reply marker ('^On .*wrote:$'), or EOF if there's no reply.
+function! ProseBody()
+  " find the Subject: header
+  let l:subj = search('^Subject:', 'nw')
+  if l:subj == 0
+    echohl WarningMsg | echo "ProseBody: no 'Subject:' line found" | echohl None
+    return
+  endif
+  " body starts at first non-blank line strictly after Subject:
+  let l:start = l:subj + 1
+  while l:start <= line('$') && getline(l:start) =~ '^\s*$'
+    let l:start += 1
+  endwhile
+  if l:start > line('$')
+    echohl WarningMsg | echo "ProseBody: no body after Subject:" | echohl None
+    return
+  endif
+  " body ends just before the reply marker, or at EOF
+  let l:marker = search('^On .*wrote:$', 'nw')
+  if l:marker > l:start
+    let l:end = l:marker - 1
+    " back up over trailing blank lines before the marker
+    while l:end > l:start && getline(l:end) =~ '^\s*$'
+      let l:end -= 1
+    endwhile
+  else
+    let l:end = line('$')
+  endif
+  execute l:start . ',' . l:end . '!prose'
+endfunction
+command! Prose call ProseBody()
