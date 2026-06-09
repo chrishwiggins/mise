@@ -357,6 +357,25 @@ _versioned_path() {
     printf '%s\n' "${p}-v${n}"
 }
 
+# Open the most-recently-extracted attachment. Used by the `-A open` paths in
+# both the inbox and sent handlers (the backend drops attachments into
+# /tmp/spool/attachments/; the freshest by mtime is the one just saved).
+_open_newest_attachment() {
+    log_info "🔍 Finding most recent attachment to open..."
+    if [[ ! -d "/tmp/spool/attachments" ]]; then
+        log_warn "⚠️ Attachments directory doesn't exist"
+        return
+    fi
+    local latest_file
+    latest_file=$(ls -t "/tmp/spool/attachments/"* 2>/dev/null | head -1 || true)
+    if [[ -n "$latest_file" ]]; then
+        log_info "📂 Opening: $(basename "$latest_file")"
+        /Users/wiggins/mise/bash/open "$latest_file"
+    else
+        log_warn "⚠️ No attachments found in /tmp/spool/attachments/"
+    fi
+}
+
 # LOUD-FAILURE GUARD: an SMTP muttrc with no smtp_url makes neomutt fall back
 # to local /usr/sbin/sendmail, which on macOS SILENTLY DROPS the message —
 # neomutt still exits 0, so the wrapper prints "sent" and nothing leaves the
@@ -1893,6 +1912,19 @@ web=0; dry_run=0; urls_flag=0; cal_flag=0; no_cache=0
 action=""; account=""; rest=()
 i=0; args=("$@")
 
+# `open` is both a top-level action (open msg in web UI) and a trailing
+# modifier for `-A` (open the just-saved attachment). When `-A`/
+# `--save-attachments-only` is present, `open` must NOT be grabbed as the
+# top-level action — it has to fall through to the inbox handler where the
+# `-A open` special-case lives. Detect the attachment-save flag up front.
+attach_save_in_args=0
+for _a in "${args[@]+"${args[@]}"}"; do
+    if [[ "$_a" == "-A" || "$_a" == "--save-attachments-only" ]]; then
+        attach_save_in_args=1
+        break
+    fi
+done
+
 while (( i < ${#args[@]} )); do
     arg="${args[i]}"
     if [[ "$arg" == "-w" || "$arg" == "--web" ]]; then
@@ -1950,6 +1982,10 @@ while (( i < ${#args[@]} )); do
             echo "Examples: --after '5m', --after 'tomorrow 9am', --after '2024-05-24 14:30'" >&2
             exit 1
         fi
+    elif [[ -z "$action" ]] && [[ "$arg" == "open" ]] && (( attach_save_in_args )); then
+        # `-A open`: 'open' is a trailing modifier, not the top-level action.
+        # Let it fall through to rest so the inbox handler's -A open path fires.
+        rest+=("$arg")
     elif [[ -z "$action" ]] && [[ " $ACTIONS_SHORT $ACTIONS_SEND $ACTIONS_PASSTHRU " == *" $arg "* ]]; then
         action="$arg"
     elif [[ "$arg" == "m" ]] && [[ -z "$action" ]]; then
@@ -2315,19 +2351,7 @@ case "$action" in
 
                         # Check if 'open' was requested after -A
                         if (( open_after_save_flag )); then
-                            # Find the most recently saved attachment and open it
-                            log_info "🔍 Finding most recent attachment to open..."
-                            if [[ -d "/tmp/spool/attachments" ]]; then
-                                latest_file=$(ls -t "/tmp/spool/attachments/"* 2>/dev/null | head -1 || true)
-                                if [[ -n "$latest_file" ]]; then
-                                    log_info "📂 Opening: $(basename "$latest_file")"
-                                    /Users/wiggins/mise/bash/open "$latest_file"
-                                else
-                                    log_warn "⚠️ No attachments found in /tmp/spool/attachments/"
-                                fi
-                            else
-                                log_warn "⚠️ Attachments directory doesn't exist"
-                            fi
+                            _open_newest_attachment
                         fi
                     elif [[ -n "$save_file" ]]; then
                         # Save mode. Default: human-readable decoded text (-t
@@ -2437,6 +2461,9 @@ case "$action" in
             verbose_flag=0
             meta_flag=0
             headers_flag=0
+            save_attachments_only_flag=0
+            open_attachments_flag=0
+            open_after_save_flag=0
             for i in "${!rest[@]}"; do
                 arg="${rest[i]}"
                 case "$arg" in
@@ -2454,6 +2481,17 @@ case "$action" in
                         ;;
                     --raw)
                         raw_save_flag=1
+                        ;;
+                    -A|--save-attachments-only)
+                        save_attachments_only_flag=1
+                        ;;
+                    --open-attachments)
+                        open_attachments_flag=1
+                        ;;
+                    open)
+                        if (( save_attachments_only_flag )); then
+                            open_after_save_flag=1
+                        fi
                         ;;
                     -S|--save|-save)
                         # Save .eml to a file. A following non-flag token is the
@@ -2496,7 +2534,21 @@ case "$action" in
 
             # Execute based on flags
             if [[ ${#message_numbers[@]} -gt 0 ]]; then
-                if (( peek_flag )); then
+                if (( save_attachments_only_flag )); then
+                    # Save attachments from the sent message(s). Mirrors the
+                    # inbox -A path: extract to /tmp/spool/attachments, and if
+                    # 'open' trailed -A, open the newest extracted file.
+                    attach_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -A)
+                    if ! "${attach_cmd[@]}"; then
+                        exit 1
+                    fi
+                    if (( open_after_save_flag )); then
+                        _open_newest_attachment
+                    fi
+                elif (( open_attachments_flag )); then
+                    # Extract attachments and open them all (backend handles it).
+                    gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" --open-attachments
+                elif (( peek_flag )); then
                     # ============================================
                     # PEEK MODE: Save messages and invoke /peek
                     # ============================================
