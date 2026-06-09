@@ -128,6 +128,9 @@ function! ProseBody()
   else
     let l:end = line('$')
   endif
+  " strip stray CRs in the body first (pasted Windows endings) so prose
+  " doesn't leave a mix of ^M and clean newlines
+  execute 'silent! ' . l:start . ',' . l:end . 's/\r$//e'
   execute l:start . ',' . l:end . '!prose'
 endfunction
 command! Prose call ProseBody()
