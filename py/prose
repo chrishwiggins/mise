@@ -8,6 +8,9 @@ def main():
     # Read input from stdin
     input_text = sys.stdin.read()
 
+    # Normalize Windows (CRLF) and old-Mac (CR) line endings to Unix (LF)
+    input_text = input_text.replace("\r\n", "\n").replace("\r", "\n")
+
     # Define a dictionary mapping delimiters to replacement strings
     replacements = {
         r"(?<=[.?!])\s+(?!\n)": "\n",  # Replace with newline for .?! delimiters
