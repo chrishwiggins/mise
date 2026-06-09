@@ -24,7 +24,7 @@ AUX_DIR="$(dirname "$SCRIPT_DIR")/aux/m"
 #                    open trash archive thread read unread sfwd sreply
 #                    sreply-all peek
 #   Flags:           -w/--web -N/--no-cache --quiet -h/--help --version
-#                    --dry-run --urls --cal -p/--peek -v --meta -S -t -x
+#                    --dry-run --urls -p/--peek -v --meta -S -t -x
 #                    -A --save-attachments-only -a -c -b -s -d/--done
 #                    -H --outbox
 #   Pagination:      ppN tokens (e.g. pp2 = page 2)
@@ -1908,7 +1908,7 @@ EOF
 #      sets $account
 #   5. Anything else accumulates in `rest`
 # After the loop, the action router (case "$action") consumes `rest`.
-web=0; dry_run=0; urls_flag=0; cal_flag=0; no_cache=0
+web=0; dry_run=0; no_cache=0
 action=""; account=""; rest=()
 i=0; args=("$@")
 
@@ -1932,9 +1932,20 @@ while (( i < ${#args[@]} )); do
     elif [[ "$arg" == "--dry-run" ]]; then
         dry_run=1
     elif [[ "$arg" == "--urls" ]]; then
-        urls_flag=1
+        # `--urls` is an alias for the `urls` action word. Push it into rest so
+        # the inbox and sent handlers route it through parse_action_args exactly
+        # like a bare `urls` (both list `urls` as an action word). A standalone
+        # flag here was dead: nothing downstream ever read it, so `m ... --urls`
+        # silently dumped the body instead of extracting URLs.
+        rest+=("urls")
     elif [[ "$arg" == "--cal" ]]; then
-        cal_flag=1
+        # `--cal` is advertised in the usage banner but was never implemented:
+        # there is no `cal` mode in gmail-api-rw and no handler here, so the old
+        # `cal_flag=1` was a dead no-op that silently dumped the message body.
+        # Fail loudly rather than mislead. (If a calendar/.ics extractor is ever
+        # added, route this through `rest` like `--urls` does.)
+        log_error "--cal is not implemented (no calendar/.ics extraction exists yet)"
+        exit 1
     elif [[ "$arg" == "-N" || "$arg" == "--no-cache" ]]; then
         no_cache=1
     elif [[ "$arg" == "--quiet" ]]; then
@@ -2156,8 +2167,6 @@ case "$action" in
                     exit $?
                 fi
 
-                # DEBUG: show exact command for troubleshooting cache/message ID issues
-                echo "DEBUG: account=$account, gmail_acct=(${gmail_acct[*]+${gmail_acct[*]}}), query='$query_string', numbers=(${message_numbers[*]+${message_numbers[*]}}), action=$action_word" >&2
                 exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
             fi
 
@@ -2441,7 +2450,7 @@ case "$action" in
             # Delegate arg parsing to shared helper; sent uses literal "q <query>" form
             # Sent handler historically supports compose actions plus "peek".
             parse_action_args "literal-q" "$action" \
-                "reply reply-all fwd forward draft peek" \
+                "reply reply-all fwd forward draft peek urls" \
                 "${rest[@]+"${rest[@]}"}"
             query_string="$PA_QUERY"
             action_word="$PA_ACTION_WORD"
