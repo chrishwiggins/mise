@@ -709,15 +709,36 @@ def _cache_path(account=None):
     return CACHE_DIR / f".gmail-api-rw-last-list-{slug}.json"
 
 
-def _listing_cache_path(account=None):
-    """Return per-account rendered-listing cache (text).
+# Warm-listing TTL: within this window, a repeated identical listing is served
+# from the rendered-text cache instead of re-hitting the Gmail API (messages.list
+# + per-row batch get, ~2-4s). Short enough that new mail shows up promptly.
+_LISTING_TTL_SECONDS = 20
 
-    Currently unused (do_list re-renders directly). Kept because the
-    rendered-text cache is occasionally useful for debugging cache misses.
-    Safe to remove if a cleanup pass also removes any callers.
+
+def _listing_cache_path(account=None, query=None, count=20):
+    """Return the rendered-listing cache path for this (account, query, count).
+
+    The shape is encoded in the filename so distinct listings (inbox vs sent vs a
+    search, or different counts) don't clobber each other.
     """
     slug = (account or "default").replace("@", "-at-").replace(".", "-")
-    return CACHE_DIR / f".gmail-api-rw-last-listing-{slug}.txt"
+    qslug = re.sub(r"[^a-zA-Z0-9]+", "-", (query or "default")).strip("-") or "default"
+    return CACHE_DIR / f".gmail-api-rw-last-listing-{slug}-{qslug}-n{count}.txt"
+
+
+def _read_fresh_listing(account=None, query=None, count=20):
+    """Return the cached rendered listing if it exists and is within TTL, else None."""
+    path = _listing_cache_path(account, query, count)
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return None
+    if age > _LISTING_TTL_SECONDS:
+        return None
+    try:
+        return path.read_text()
+    except OSError:
+        return None
 
 
 
@@ -749,6 +770,47 @@ def _load_cached_ids(count, query, account=None):
     except (json.JSONDecodeError, KeyError):
         pass
     return None
+
+
+# Verified-account cache: getProfile() costs ~2s on EVERY call when run inline,
+# purely to assert the token matches the requested account. Tokens are pinned
+# per-account on disk, so the verified (token_name -> email) mapping is stable.
+# Cache it so getProfile runs once per token, not once per invocation.
+_VERIFIED_ACCOUNT_CACHE = CACHE_DIR / ".gmail-api-rw-verified-accounts.json"
+
+
+# The default account resolves to token_name=None (no -e/-F given); it still maps
+# to exactly one Gmail identity, so cache it under a stable sentinel key.
+_DEFAULT_TOKEN_KEY = "__default__"
+
+
+def _load_verified_email(token_name):
+    """Return the previously-verified email for token_name, or None."""
+    key = token_name or _DEFAULT_TOKEN_KEY
+    try:
+        data = json.loads(_VERIFIED_ACCOUNT_CACHE.read_text())
+        return data.get(key)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _store_verified_email(token_name, email):
+    """Persist a verified (token_name -> email) pairing."""
+    if not email:
+        return
+    key = token_name or _DEFAULT_TOKEN_KEY
+    try:
+        CACHE_DIR.mkdir(exist_ok=True)
+        try:
+            data = json.loads(_VERIFIED_ACCOUNT_CACHE.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        data[key] = email
+        tmp = _VERIFIED_ACCOUNT_CACHE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, _VERIFIED_ACCOUNT_CACHE)
+    except OSError:
+        pass
 
 
 def _strip_html(html_text):
@@ -973,14 +1035,22 @@ def _authenticated_service(args, scope, email_override=None, handle_show_account
                             token_name=token_name, login_hint=login_hint)
     service = build("gmail", "v1", credentials=creds)
 
-    # REAL SAFETY CHECK: Verify authenticated account matches requested account.
-    # We call getProfile() to see who we actually are.
-    try:
-        profile = service.users().getProfile(userId='me').execute()
-        actual_email = profile.get('emailAddress')
-    except Exception as e:
-        print(f"🛑 Failed to verify authentication: {e}", file=sys.stderr)
-        sys.exit(1)
+    # SAFETY CHECK: Verify the authenticated account matches the requested one.
+    # getProfile() is a network round-trip costing ~2s. Tokens are pinned
+    # per-account on disk, so once we've verified a (token_name -> email) pair it
+    # stays true; cache it and skip the round-trip on subsequent calls. Force a
+    # fresh check with --verify-account (or first sight of a token).
+    force_verify = getattr(args, "verify_account", False)
+    cached_email = None if force_verify else _load_verified_email(token_name)
+    if cached_email is not None:
+        actual_email = cached_email
+    else:
+        try:
+            profile = service.users().getProfile(userId='me').execute()
+            actual_email = profile.get('emailAddress')
+        except Exception as e:
+            print(f"🛑 Failed to verify authentication: {e}", file=sys.stderr)
+            sys.exit(1)
 
     if login_hint and actual_email and login_hint.lower() != actual_email.lower():
         print(f"🛑 Authentication mismatch!", file=sys.stderr)
@@ -990,7 +1060,14 @@ def _authenticated_service(args, scope, email_override=None, handle_show_account
         print(f"   This prevents operations on the wrong account (e.g., Lake vs Columbia).", file=sys.stderr)
         print(f"   To fix: re-authenticate the requested account", file=sys.stderr)
         print(f"   Run: python3 ~/mise/py/setup_google_auth.py {login_hint}", file=sys.stderr)
+        # A stale cache entry could in principle be wrong; clear it so the next
+        # call re-verifies from scratch rather than trusting a bad mapping.
+        _store_verified_email(token_name, actual_email)
         sys.exit(1)
+
+    # Record the verified pairing only after the match check passes.
+    if cached_email is None:
+        _store_verified_email(token_name, actual_email)
 
     return service, login_hint
 
@@ -1470,8 +1547,19 @@ def _summarize_snippets(snippets):
 
 
 def do_list(service, count, query, account=None, sent=False, verbose=False,
-            summary=False, json_output=False, meta=False):
+            summary=False, json_output=False, meta=False, no_cache=False):
     """List recent messages as a numbered table."""
+    # Warm path: a plain table listing repeated within the TTL is served from the
+    # rendered-text cache, skipping messages.list + the per-row batch get (~2-4s).
+    # json/summary/meta/verbose shapes are NOT cached (side effects or richer
+    # output that the cache key doesn't capture). --no-cache (-N) forces fresh.
+    cacheable = not (json_output or summary or meta or verbose)
+    if cacheable and not no_cache:
+        cached_text = _read_fresh_listing(account, query, count)
+        if cached_text is not None:
+            sys.stdout.write(cached_text)
+            return
+
     kwargs = {"userId": "me", "maxResults": count}
     if query:
         kwargs["q"] = query
@@ -1655,20 +1743,14 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
     if unread_count:
         print(f"  ({unread_count} unread / {len(messages)} shown)", file=sys.stderr)
 
-    # Cache the rendered listing for the default inbox shape only.
-    # m's bash dispatcher reads this and skips the round-trip when fresh.
-    is_default_shape = (
-        not sent
-        and not verbose
-        and not summary
-        and not json_output
-        and count == 20
-        and (query is None or query == "in:inbox")
-    )
-    if is_default_shape:
+    # Cache the rendered listing so an identical repeat within the TTL is served
+    # from disk (see _read_fresh_listing at the top of do_list). Any plain table
+    # listing is cacheable, keyed on (account, query, count); richer shapes
+    # (json/summary/meta/verbose) are excluded by `cacheable`.
+    if cacheable:
         try:
             CACHE_DIR.mkdir(exist_ok=True)
-            path = _listing_cache_path(account)
+            path = _listing_cache_path(account, query, count)
             tmp = path.with_suffix(path.suffix + ".tmp")
             tmp.write_text("\n".join(cache_buf) + ("\n" if cache_buf else ""))
             os.replace(tmp, path)
@@ -2769,6 +2851,10 @@ def parse_list_get_args(argv):
     parser.add_argument("-A", "--save-attachments-only", action="store_true", help="Save attachments only (no email display)")
     parser.add_argument("--outbox", default=None,
                         help="Account alias to send FROM (read uses -e, send uses --outbox)")
+    parser.add_argument("-N", "--no-cache", action="store_true",
+                        help="Bypass the warm-listing cache; force a fresh fetch")
+    parser.add_argument("--verify-account", action="store_true",
+                        help="Force a getProfile() account-identity check (skips the cached verification)")
     return parser.parse_args(argv)
 
 
@@ -3620,7 +3706,8 @@ def main():
                     sent=sent_mode, verbose=args.verbose,
                     summary=args.summary,
                     json_output=getattr(args, 'json', False),
-                    meta=getattr(args, 'meta', False))
+                    meta=getattr(args, 'meta', False),
+                    no_cache=getattr(args, 'no_cache', False))
         else:
             indices = parse_index_token(args.index)
             peek_paths = []
