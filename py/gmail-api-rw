@@ -645,7 +645,7 @@ def open_attachments_interactively(raw_bytes):
         print(f"  {i}. {filename}", file=sys.stderr)
 
     print("\nOptions:", file=sys.stderr)
-    print("  [1-9] Open specific attachment", file=sys.stderr)
+    print("  [N or N,M-P] Open one or several (e.g. 4,5-6,8)", file=sys.stderr)
     print("  [a] Open all attachments", file=sys.stderr)
     print("  [l] List attachments and exit", file=sys.stderr)
     print("  [q] Quit without opening", file=sys.stderr)
@@ -661,19 +661,21 @@ def open_attachments_interactively(raw_bytes):
             for filename, path in attachments:
                 print(f"  {path}", file=sys.stderr)
             return
-        elif choice == 'a':
+        elif choice in ('a', 'all'):
             # Open all attachments
             for filename, path in attachments:
                 print(f"Opening: {filename}", file=sys.stderr)
                 subprocess.run(["open", str(path)], check=False)
-        elif choice.isdigit() and 1 <= int(choice) <= len(attachments):
-            # Open specific attachment
-            idx = int(choice) - 1
-            filename, path = attachments[idx]
-            print(f"Opening: {filename}", file=sys.stderr)
-            subprocess.run(["open", str(path)], check=False)
         else:
-            print(f"Invalid choice: {choice}", file=sys.stderr)
+            # Single index, or a comma/range mix like 4,5-6,8
+            selected = _parse_index_ranges(choice, len(attachments))
+            if selected is None:
+                print(f"Invalid choice: {choice} (use 1-{len(attachments)}, e.g. 4,5-6,8)", file=sys.stderr)
+                return
+            for n in selected:
+                filename, path = attachments[n - 1]
+                print(f"Opening: {filename}", file=sys.stderr)
+                subprocess.run(["open", str(path)], check=False)
 
     except (KeyboardInterrupt, EOFError):
         print("\nCanceled.", file=sys.stderr)
