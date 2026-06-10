@@ -2460,6 +2460,43 @@ def do_open(service, index, count, query, account=None):
 # Extract URLs from message
 # ---------------------------------------------------------------------------
 
+def _parse_index_ranges(spec, maximum):
+    """Parse '4,5-6,8,9-10' into a deduped, ordered list of ints in [1, maximum].
+
+    Returns None if any token is malformed or out of range. Empty result (no
+    valid indices) also returns None so callers can show the usage hint.
+    """
+    selected = []
+    seen = set()
+    for token in spec.replace(" ", "").split(","):
+        if not token:
+            continue
+        if "-" in token:
+            parts = token.split("-")
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                return None
+            try:
+                lo, hi = int(parts[0]), int(parts[1])
+            except ValueError:
+                return None
+            if lo > hi:
+                lo, hi = hi, lo
+            rng = range(lo, hi + 1)
+        else:
+            try:
+                n = int(token)
+            except ValueError:
+                return None
+            rng = range(n, n + 1)
+        for n in rng:
+            if not (1 <= n <= maximum):
+                return None
+            if n not in seen:
+                seen.add(n)
+                selected.append(n)
+    return selected or None
+
+
 def do_urls(service, index, count, query, account=None):
     """Extract URLs from a message and provide interactive menu to open them."""
     import re
@@ -2514,22 +2551,28 @@ def do_urls(service, index, count, query, account=None):
         return
 
     try:
-        print("Select URL to open (1-{}, q to quit): ".format(len(unique_urls)), end="", file=sys.stderr)
+        print("Select URL(s) to open (e.g. 1 or 4,5-6,8 or 'a' for all, q to quit): ", end="", file=sys.stderr)
         sys.stderr.flush()
         choice = sys.stdin.readline().strip()
 
         if choice.lower() in ('q', 'quit', ''):
             return
 
-        choice_num = int(choice)
-        if 1 <= choice_num <= len(unique_urls):
-            url_to_open = unique_urls[choice_num - 1]
+        if choice.lower() in ('a', 'all'):
+            selected = list(range(1, len(unique_urls) + 1))
+        else:
+            selected = _parse_index_ranges(choice, len(unique_urls))
+
+        if selected is None:
+            print(f"Invalid choice. Use numbers/ranges in 1-{len(unique_urls)} (e.g. 4,5-6,8).", file=sys.stderr)
+            return
+
+        for n in selected:
+            url_to_open = unique_urls[n - 1]
             print(f"Opening: {url_to_open}", file=sys.stderr)
             webbrowser.open(url_to_open)
-        else:
-            print(f"Invalid choice. Please enter 1-{len(unique_urls)}", file=sys.stderr)
 
-    except (ValueError, KeyboardInterrupt, EOFError):
+    except (KeyboardInterrupt, EOFError):
         print("\nCanceled", file=sys.stderr)
         return
 
