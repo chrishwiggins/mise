@@ -2425,6 +2425,9 @@ case "$action" in
                 if (( verbose_flag )); then
                     gmail_cmd+=(-v)
                 fi
+                if (( no_cache )); then
+                    gmail_cmd+=(-N)
+                fi
                 gmail_cmd+=(-t)
 
                 if [[ -n "$page_offset" ]]; then
