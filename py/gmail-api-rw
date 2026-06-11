@@ -2148,19 +2148,21 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
     if refs:
         reply["References"] = refs
 
-    reply = _attach_files(reply, getattr(args, 'attach', None))
+    attach_list = getattr(args, 'attach', None)
+    reply = _attach_files(reply, attach_list)
     raw_reply = base64.urlsafe_b64encode(reply.as_bytes()).decode()
+    att_suffix = _sent_attachment_suffix(attach_list)
 
     if as_draft:
         result = send_service.users().drafts().create(
             userId="me", body={"message": {"raw": raw_reply}}
         ).execute()
-        print(f"Draft reply saved: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}", file=sys.stderr)
+        print(f"Draft reply saved: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
     else:
         result = send_service.users().messages().send(
             userId="me", body={"raw": raw_reply}
         ).execute()
-        print(f"Sent reply: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}", file=sys.stderr)
+        print(f"Sent reply: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
 
     # Invalidate cache so next listing reflects the new message
     _cache_path(account).unlink(missing_ok=True)
@@ -2358,17 +2360,18 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
         fwd.attach(att)
 
     raw_fwd = base64.urlsafe_b64encode(fwd.as_bytes()).decode()
+    att_suffix = _sent_attachment_suffix(carried)
 
     if as_draft:
         result = service.users().drafts().create(
             userId="me", body={"message": {"raw": raw_fwd}}
         ).execute()
-        print(f"Draft forward saved: To={recipient} Subject={fwd_subject} id={result.get('id', '?')}", file=sys.stderr)
+        print(f"Draft forward saved: To={recipient} Subject={fwd_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
     else:
         result = service.users().messages().send(
             userId="me", body={"raw": raw_fwd}
         ).execute()
-        print(f"Forwarded: To={recipient} Subject={fwd_subject} id={result.get('id', '?')}", file=sys.stderr)
+        print(f"Forwarded: To={recipient} Subject={fwd_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
 
     # Invalidate cache so next listing reflects the new message
     _cache_path(account).unlink(missing_ok=True)
@@ -2698,6 +2701,19 @@ def _format_attachment_line(attachments):
         else:
             parts.append(f"{p.name} !! MISSING")
     return f"Attachments ({len(attachments)}): " + ", ".join(parts)
+
+
+def _sent_attachment_suffix(attachments):
+    """Suffix for a send/draft confirmation line naming what got attached.
+
+    Returns '' when there are no attachments, else ' Attached(N): a, b'. Inputs
+    may be full paths (reply, from args.attach) or bare filenames (forward's
+    carried-over parts); either way we show just the basename.
+    """
+    if not attachments:
+        return ""
+    names = [Path(a).name for a in attachments]
+    return f" Attached({len(names)}): " + ", ".join(names)
 
 
 def _attachment_menu(attachments):
