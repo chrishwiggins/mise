@@ -856,8 +856,13 @@ def _clean_unicode_noise(text):
     import re
     cleaned = re.sub(r' {3,}', '  ', cleaned)
 
-    # Fix whitespace around colons and other punctuation
-    cleaned = re.sub(r':(\S)', r': \1', cleaned)  # Add space after colon if missing
+    # Fix whitespace around colons and other punctuation.
+    # Add a space after a label colon (Subject:foo -> Subject: foo), but NEVER
+    # when a digit immediately precedes the colon: that's a clock time or ratio
+    # (6:45, 10:30, 3:1) and the original spacing must be preserved. The
+    # negative lookbehind (?<!\d) is what protects times; the prior blanket
+    # rule turned "6:45" into "6: 45".
+    cleaned = re.sub(r'(?<!\d):(\S)', r': \1', cleaned)  # space after label colon
     cleaned = re.sub(r'(\w):$', r'\1:', cleaned.rstrip())  # Clean trailing colon
 
     return cleaned
