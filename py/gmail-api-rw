@@ -2088,10 +2088,10 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
                 print(f"Cc: {cc_addrs}", file=sys.stderr)
             print(f"Subject: {re_subject}", file=sys.stderr)
             print(f"Body length: {len(body.strip())} chars", file=sys.stderr)
+            print(_format_attachment_line(getattr(args, 'attach', None)), file=sys.stderr)
 
-            # Simple prompt - only show edit option if user seems to need it
             try:
-                answer = input("Send this reply? [y/n/e] ")
+                answer = input("Send this reply? [y/n/e/a] ")
             except (EOFError, KeyboardInterrupt):
                 answer = "n"
 
@@ -2101,6 +2101,9 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
             elif answer in ('n', 'no', ''):
                 print("Aborted.", file=sys.stderr)
                 sys.exit(1)
+            elif answer in ('a', 'att', 'attach'):
+                args.attach = _attachment_menu(getattr(args, 'attach', None)) or None
+                continue
             elif answer in ('e', 'edit'):
                 # Re-open editor with current values
                 current_headers = {
@@ -2125,7 +2128,7 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
                     )
                 continue
             else:
-                print("Please answer y(es), n(o), or e(dit) to re-edit.", file=sys.stderr)
+                print("Please answer y(es), n(o), e(dit), or a(ttachments).", file=sys.stderr)
 
     # Build reply message
     reply = MIMEText(body, "plain", "utf-8")
@@ -2254,6 +2257,13 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
         print("No To: address, aborting.", file=sys.stderr)
         sys.exit(1)
 
+    # Summarize attachments carried over from the original (read-only here:
+    # forward re-attaches the original's parts, it does not take -a).
+    carried = []
+    for part in orig.walk():
+        if "attachment" in (part.get("Content-Disposition", "") or ""):
+            carried.append(part.get_filename() or "attachment.bin")
+
     # Confirm before sending (skip for drafts)
     if not as_draft and sys.stdin.isatty():
         while True:
@@ -2264,6 +2274,11 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
                 print(f"Cc: {fwd_cc}", file=sys.stderr)
             print(f"Subject: {fwd_subject}", file=sys.stderr)
             print(f"Body length: {len(body.strip())} chars", file=sys.stderr)
+            if carried:
+                print(f"Attachments ({len(carried)}, carried from original): "
+                      + ", ".join(carried), file=sys.stderr)
+            else:
+                print("Attachments: none", file=sys.stderr)
             try:
                 answer = input("Send this forward? [y/n/e] ")
             except (EOFError, KeyboardInterrupt):
@@ -2653,6 +2668,86 @@ def do_thread(service, index, count, query, account=None, text_view=False, heade
 # ---------------------------------------------------------------------------
 # Send mode
 # ---------------------------------------------------------------------------
+
+def _format_attachment_line(attachments):
+    """One-line summary of pending attachments for a send-confirm prompt.
+
+    Returns a string like 'Attachments (2): foo.pdf (1.2 MB), bar.png (44 KB)'
+    or 'Attachments: none'. Files that don't exist are flagged '!! MISSING' so a
+    broken path is visible BEFORE sending instead of crashing _attach_files.
+    """
+    if not attachments:
+        return "Attachments: none"
+    parts = []
+    for att in attachments:
+        p = Path(att)
+        if p.exists():
+            size = p.stat().st_size
+            if size >= 1024 * 1024:
+                human = f"{size / (1024*1024):.1f} MB"
+            elif size >= 1024:
+                human = f"{size / 1024:.0f} KB"
+            else:
+                human = f"{size} B"
+            parts.append(f"{p.name} ({human})")
+        else:
+            parts.append(f"{p.name} !! MISSING")
+    return f"Attachments ({len(attachments)}): " + ", ".join(parts)
+
+
+def _attachment_menu(attachments):
+    """Interactive add/remove/clear menu for pending attachments.
+
+    Takes the current list (possibly None), returns the new list. Pure stdin/
+    stderr; never sends. Used by the reply/forward send-confirm 'a' action.
+    """
+    current = list(attachments or [])
+    while True:
+        print("", file=sys.stderr)
+        if current:
+            for i, att in enumerate(current, 1):
+                p = Path(att)
+                flag = "" if p.exists() else "  !! MISSING"
+                print(f"  {i}. {p.name}{flag}  ({att}){flag and ''}", file=sys.stderr)
+        else:
+            print("  (no attachments)", file=sys.stderr)
+        print("Attachment menu: [+ PATH] add  [- N] remove  [c] clear  "
+              "[d] done", file=sys.stderr)
+        try:
+            cmd = input("att> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("", file=sys.stderr)
+            return current
+        if cmd in ("d", "done", ""):
+            return current
+        elif cmd in ("c", "clear"):
+            current = []
+        elif cmd.startswith("+"):
+            path = cmd[1:].strip()
+            # Allow leading "add "
+            if path.lower().startswith("add "):
+                path = path[4:].strip()
+            path = os.path.expanduser(path)
+            if not path:
+                print("Usage: + /path/to/file", file=sys.stderr)
+            elif not Path(path).exists():
+                print(f"Not found (not added): {path}", file=sys.stderr)
+            else:
+                current.append(path)
+        elif cmd.startswith("-"):
+            rest = cmd[1:].strip()
+            sel = _parse_index_ranges(rest, len(current)) if rest else None
+            if sel is None:
+                print(f"Usage: - N (1-{len(current)}), e.g. - 2 or - 1,3",
+                      file=sys.stderr)
+            else:
+                # Remove highest-index-first so earlier indices stay valid
+                for n in sorted(sel, reverse=True):
+                    del current[n - 1]
+        else:
+            print("Commands: + PATH | - N | c (clear) | d (done)",
+                  file=sys.stderr)
+
 
 def _attach_files(msg, attachments):
     """Add file attachments to an email message, converting to multipart if needed."""
