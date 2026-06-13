@@ -2696,6 +2696,30 @@ case "$action" in
         # - Would need to preserve external compatibility (ejk, noemie aliases)
         # - Key insight: m now uses unified ~/.config/mail-tools/accounts.json
         #
+        # MISUSE GUARD: `m send 1 fwd addr` / `m send 1 reply` etc.
+        # The compose verb treats every positional as a recipient, so an index
+        # plus a message-action word would be coined into junk recipients
+        # (1@gmail.com, fwd@gmail.com) and nearly emailed to strangers. If the
+        # args begin with <integer> <message-action>, the user meant the SENT
+        # action (sfwd/sreply) or the per-message action, not compose. Refuse
+        # loudly with the correct command instead of fabricating recipients.
+        if (( ${#rest[@]} >= 2 )) \
+           && [[ "${rest[0]}" =~ ^[0-9]+$ ]] \
+           && [[ " reply reply-all fwd forward draft open trash archive thread read unread urls " == *" ${rest[1]} "* ]]; then
+            _idx="${rest[0]}"; _act="${rest[1]}"; _tail=("${rest[@]:2}")
+            case "$_act" in
+                fwd|forward) _suggest="m sent ${_idx} fwd ${_tail[*]}  (or: m sfwd ${_idx} ${_tail[*]})" ;;
+                reply)       _suggest="m sent ${_idx} reply  (or: m sreply ${_idx})" ;;
+                reply-all)   _suggest="m sent ${_idx} reply-all  (or: m sreply-all ${_idx})" ;;
+                *)           _suggest="m sent ${_idx} ${_act} ${_tail[*]}" ;;
+            esac
+            log_error "'send' composes a new message; '${_idx} ${_act}' is a message action, not a recipient."
+            echo "   You typed:  m send ${rest[*]}" >&2
+            echo "   To ${_act} message #${_idx}, use:" >&2
+            echo "       ${_suggest}" >&2
+            echo "   (Refusing rather than emailing '${_idx}@...'/'${_act}@...'.)" >&2
+            exit 2
+        fi
         if (( web )); then
             # Web mode: open Gmail compose in browser
             open_web compose "${rest[@]+"${rest[@]}"}"
