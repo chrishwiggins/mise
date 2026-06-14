@@ -410,6 +410,36 @@ def _resolve_address_list(addrs):
     return ", ".join(result)
 
 
+def _assert_valid_header_addrs(value, label):
+    """Refuse a Cc/Bcc value that still contains a token with no '@'.
+
+    resolve_recipient() falls back to returning a bare word as-is (with only a
+    warning) when it is neither a full address nor found in contacts. That junk
+    then reaches Gmail and bounces with an opaque 'Invalid {label} header' AFTER
+    the whole message is composed. Catch it here with a clear, early error.
+    Returns value unchanged when every token is a real address.
+    """
+    if not value:
+        return value
+    bad = []
+    for name, addr in getaddresses([value]):
+        if not name and not addr:
+            continue
+        token = addr or name
+        if "@" not in token:
+            bad.append(token)
+    if bad:
+        joined = ", ".join(repr(b) for b in bad)
+        print(f"Error: {label} {joined} is not a valid email address "
+              f"(no @domain) and was not found in contacts.", file=sys.stderr)
+        print(f"  Gmail would reject this as 'Invalid {label} header'.",
+              file=sys.stderr)
+        print(f"  Pass a full name@domain, a known contact, or an m-alias "
+              f"(e.g. -c ah).", file=sys.stderr)
+        sys.exit(2)
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -2853,8 +2883,8 @@ def _build_raw_bytes(args, from_addr=None):
                 if answer.strip().lower() != "y":
                     sys.exit(1)
         args.recipient = resolve_recipient(args.recipient)
-        cc = _resolve_address_list(args.cc)
-        bcc = _resolve_address_list(args.bcc)
+        cc = _assert_valid_header_addrs(_resolve_address_list(args.cc), "Cc")
+        bcc = _assert_valid_header_addrs(_resolve_address_list(args.bcc), "Bcc")
         if sys.stdin.isatty():
             body = get_body_interactive(args.recipient, args.subject)
         else:
