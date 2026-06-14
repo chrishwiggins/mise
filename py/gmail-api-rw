@@ -2882,7 +2882,8 @@ def _build_raw_bytes(args, from_addr=None):
                     answer = ""
                 if answer.strip().lower() != "y":
                     sys.exit(1)
-        args.recipient = resolve_recipient(args.recipient)
+        args.recipient = _assert_valid_header_addrs(
+            resolve_recipient(args.recipient), "To")
         cc = _assert_valid_header_addrs(_resolve_address_list(args.cc), "Cc")
         bcc = _assert_valid_header_addrs(_resolve_address_list(args.bcc), "Bcc")
         if sys.stdin.isatty():
