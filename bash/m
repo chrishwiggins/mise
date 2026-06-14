@@ -2795,6 +2795,33 @@ case "$action" in
                 echo "m: send via ${gmail_flag:-default} with attachments/advanced features" >&2
 
                 # ================================================
+                # STEP 2-PRE: Resolve m-aliases for Cc/Bcc up front
+                # ================================================
+                # This advanced path execs gmail-api-rw directly, bypassing
+                # direct_send (where the simple path resolves -c/-b through
+                # ~/.config/m/aliases). Resolve them here too so `-c ah` ->
+                # aya.horikoshi@gmail.com. A bare word that is NOT an m-alias is
+                # left as-is and handed to gmail-api-rw, which tries the contacts
+                # file and then refuses unresolved Cc/Bcc loudly (see
+                # _resolve_address_list there) rather than bouncing at Gmail.
+                resolved_rest=()
+                ri=0
+                while (( ri < ${#rest[@]} )); do
+                    case "${rest[ri]}" in
+                        -c|--cc|-b|--bcc)
+                            resolved_rest+=("${rest[ri]}" \
+                                "$(_resolve_alias "${rest[ri+1]}")")
+                            ((ri+=2))
+                            ;;
+                        *)
+                            resolved_rest+=("${rest[ri]}")
+                            ((ri+=1))
+                            ;;
+                    esac
+                done
+                rest=("${resolved_rest[@]+"${resolved_rest[@]}"}")
+
+                # ================================================
                 # STEP 2A: Fix .eml file argument formatting
                 # ================================================
                 # PROBLEM: gmail-api-rw expects "-H file.eml", not bare "file.eml"
