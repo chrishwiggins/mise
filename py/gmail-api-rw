@@ -430,12 +430,19 @@ def _assert_valid_header_addrs(value, label):
             bad.append(token)
     if bad:
         joined = ", ".join(repr(b) for b in bad)
+        # Label-aware hint: the To recipient is a positional, not a -c/-b flag,
+        # so don't tell a To-error user to "use -c". Cc/Bcc do take the flag.
+        if label == "To":
+            hint = "Pass a full name@domain or a known contact name."
+        else:
+            flag = "-c" if label == "Cc" else "-b"
+            hint = (f"Pass a full name@domain, a known contact, or an m-alias "
+                    f"(e.g. {flag} ah).")
         print(f"Error: {label} {joined} is not a valid email address "
               f"(no @domain) and was not found in contacts.", file=sys.stderr)
         print(f"  Gmail would reject this as 'Invalid {label} header'.",
               file=sys.stderr)
-        print(f"  Pass a full name@domain, a known contact, or an m-alias "
-              f"(e.g. -c ah).", file=sys.stderr)
+        print(f"  {hint}", file=sys.stderr)
         sys.exit(2)
     return value
 
