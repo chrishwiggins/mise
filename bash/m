@@ -2267,6 +2267,24 @@ case "$action" in
                 esac
             done
 
+            # Default the index to 1 (most recent) when the user clearly meant
+            # to act on a single message but left the number off. A read-intent
+            # flag (-x/--headers, -p/--peek, -S FILE/--save, -A, --open-attachments,
+            # or a bare -t/-S in filtered_args) signals "read one", so
+            # `m q 'from:j2' -x` behaves like `m q 'from:j2' -x 1`. A bare query
+            # with NO such flag still LISTS (and ranges still list), preserving
+            # the deliberate listing default.
+            if [[ ${#message_numbers[@]} -eq 0 ]]; then
+                if (( peek_flag )) || (( save_attachments_only_flag )) \
+                   || (( open_attachments_flag )) || [[ -n "$save_file" ]] \
+                   || [[ " ${filtered_args[*]} " =~ " -x " ]] \
+                   || [[ " ${filtered_args[*]} " =~ " --headers " ]] \
+                   || [[ " ${filtered_args[*]} " =~ " -t " ]] \
+                   || [[ " ${filtered_args[*]} " =~ " -S " ]]; then
+                    message_numbers=(1)
+                fi
+            fi
+
             if [[ ${#message_numbers[@]} -gt 0 ]]; then
                 if (( peek_flag )); then
                     # ============================================
@@ -2553,6 +2571,17 @@ case "$action" in
                         ;;
                 esac
             done
+
+            # Default the index to 1 (most recent sent) when a read-intent flag
+            # is given without a number, mirroring the inbox/query branch:
+            # `m sent -x` behaves like `m sent 1 -x`. A bare `m sent` still LISTS.
+            if [[ ${#message_numbers[@]} -eq 0 ]]; then
+                if (( peek_flag )) || (( headers_flag )) \
+                   || (( save_attachments_only_flag )) \
+                   || (( open_attachments_flag )) || [[ -n "$save_file" ]]; then
+                    message_numbers=(1)
+                fi
+            fi
 
             # Execute based on flags
             if [[ ${#message_numbers[@]} -gt 0 ]]; then
