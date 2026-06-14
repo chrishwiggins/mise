@@ -1036,38 +1036,11 @@ _resolve_alias() {
     fi
 }
 
-# Resolve a cc/bcc recipient and refuse anything that isn't a real address.
-# A bare word with no '@' (e.g. "aya.horikoshi" instead of "aya.horikoshi@gmail.com"
-# or the alias "ah") would otherwise sail through to Gmail and bounce with the
-# opaque "Invalid Cc header" at the very end. Catch it here, loudly, with a hint.
-# $1 = raw value from -c/-b ; $2 = "Cc" or "Bcc" (for the message). Exits 2 on fail.
-_resolve_recipient_or_die() {
-    local raw="$1" label="${2:-Cc}"
-    local resolved
-    resolved=$(_resolve_alias "$raw")
-
-    if [[ "$resolved" == *@* ]]; then
-        echo "$resolved"
-        return 0
-    fi
-
-    # Not a valid address and not a known alias. Suggest the closest alias.
-    local aliases_file="$HOME/.config/m/aliases" hint=""
-    if [[ -f "$aliases_file" ]]; then
-        # alias whose key OR target contains the bare word (case-insensitive)
-        hint=$(grep -iE "^alias .*${raw}" "$aliases_file" 2>/dev/null \
-               | head -1 | awk '{printf "%s -> %s", $2, $3}')
-    fi
-    log_error "${label} '${raw}' is not a valid email address (no @domain) and not a known alias."
-    echo "   '${raw}' would have been rejected by Gmail as 'Invalid ${label} header'." >&2
-    if [[ -n "$hint" ]]; then
-        echo "   Did you mean the alias:  ${hint}" >&2
-        echo "   Use the alias key, or pass the full address." >&2
-    else
-        echo "   Pass a full address (name@domain) or an alias from ~/.config/m/aliases." >&2
-    fi
-    exit 2
-}
+# Cc/Bcc rejection of unresolvable addresses lives in the Python backend
+# (gmail-api-rw:_assert_valid_header_addrs), which is the single source of
+# truth on every send path and also knows the contacts file (nfile.asc). The
+# bash side only resolves m-aliases via _resolve_alias above; it must NOT
+# reject bare words, since a bare name may be a valid contact.
 
 # ========================================================================
 # § ATTACHMENT PROMPT — interactive add/delete/edit before send
@@ -1228,11 +1201,15 @@ direct_send() {
                 ((i+=2))
                 ;;
             -c|--cc)
-                cc_addrs+=("$(_resolve_recipient_or_die "${send_args[i+1]}" "Cc")") || exit $?
+                # Resolve m-aliases only; do NOT reject bare words here. A bare
+                # name may be a real contact (nfile.asc), which only the Python
+                # backend knows about. gmail-api-rw's _assert_valid_header_addrs
+                # is the single source of truth for rejecting unresolvable Cc/Bcc.
+                cc_addrs+=("$(_resolve_alias "${send_args[i+1]}")")
                 ((i+=2))
                 ;;
             -b|--bcc)
-                bcc_addrs+=("$(_resolve_recipient_or_die "${send_args[i+1]}" "Bcc")") || exit $?
+                bcc_addrs+=("$(_resolve_alias "${send_args[i+1]}")")
                 ((i+=2))
                 ;;
             -d|--done)
