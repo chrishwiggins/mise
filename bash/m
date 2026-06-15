@@ -1036,6 +1036,21 @@ _resolve_alias() {
     fi
 }
 
+# Build the view-filter exclusion string for -i/--important. Reads one Gmail
+# exclusion per line from ~/.config/m/view-filter.txt (blank lines and lines
+# starting with '#' ignored), joined with spaces. Falls back to a built-in
+# default and notes it on stderr once if the file is absent. View-only: these
+# are just `-from:` query terms; nothing is muted or modified.
+_view_filter_excludes() {
+    local f="$HOME/.config/m/view-filter.txt"
+    if [[ -f "$f" ]]; then
+        grep -vE '^[[:space:]]*(#|$)' "$f" | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+    else
+        echo "-from:qustodio -from:googleplay"
+        echo "m: ~/.config/m/view-filter.txt not found; using built-in default (-from:qustodio -from:googleplay)" >&2
+    fi
+}
+
 # Cc/Bcc rejection of unresolvable addresses lives in the Python backend
 # (gmail-api-rw:_assert_valid_header_addrs), which is the single source of
 # truth on every send path and also knows the contacts file (nfile.asc). The
@@ -1918,7 +1933,7 @@ EOF
 #      sets $account
 #   5. Anything else accumulates in `rest`
 # After the loop, the action router (case "$action") consumes `rest`.
-web=0; dry_run=0; no_cache=0
+web=0; dry_run=0; no_cache=0; important_filter=0
 action=""; account=""; rest=()
 i=0; args=("$@")
 
@@ -1958,6 +1973,11 @@ while (( i < ${#args[@]} )); do
         exit 1
     elif [[ "$arg" == "-N" || "$arg" == "--no-cache" ]]; then
         no_cache=1
+    elif [[ "$arg" == "-i" || "$arg" == "--important" ]]; then
+        # View-only filter: prepend Gmail -from: exclusions (noisy automated
+        # senders) to the listing/query. Non-destructive; nothing is muted,
+        # marked read, or trashed. Applied below where query_string is finalized.
+        important_filter=1
     elif [[ "$arg" == "--quiet" ]]; then
         M_QUIET_MODE=1
     elif [[ "$arg" == "-h" || "$arg" == "--help" || "$arg" == "?" ]]; then
@@ -2153,6 +2173,18 @@ case "$action" in
                 "$action_words" \
                 "${rest[@]+"${rest[@]}"}"
             query_string="$PA_QUERY"
+            # -i/--important: prepend view-filter exclusions to the query so
+            # noisy automated senders drop out of the listing (view-only). Skip
+            # when an action word is in play (e.g. trash/archive): the filter is
+            # for SCANNING, not for selecting messages to act on.
+            if (( important_filter )) && [[ -z "$PA_ACTION_WORD" ]]; then
+                _vf_excludes="$(_view_filter_excludes)"
+                if [[ -n "$query_string" ]]; then
+                    query_string="${_vf_excludes} ${query_string}"
+                else
+                    query_string="in:inbox ${_vf_excludes}"
+                fi
+            fi
             peek_flag=0
             message_numbers=("${PA_MESSAGE_NUMBERS[@]+"${PA_MESSAGE_NUMBERS[@]}"}")
             filtered_args=()
