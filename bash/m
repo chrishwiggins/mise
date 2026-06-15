@@ -2636,6 +2636,24 @@ case "$action" in
                 fi
             fi
 
+            # Last-index-wins for !!-augmented single-message reads, mirroring the
+            # inbox/query branch: `m sent 2 5 -x` means "now show 5" (the 5 was
+            # appended via !!). Collapse only when EVERY token is a bare single
+            # integer; ranges/comma-lists stay multi. Sent action verbs
+            # (sfwd/sreply/...) exec earlier, so they never reach this block.
+            if (( ${#message_numbers[@]} > 1 )); then
+                _all_bare_single=1
+                for _mn in "${message_numbers[@]}"; do
+                    if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                        _all_bare_single=0
+                        break
+                    fi
+                done
+                if (( _all_bare_single )); then
+                    message_numbers=("${message_numbers[-1]}")
+                fi
+            fi
+
             # Execute based on flags
             if [[ ${#message_numbers[@]} -gt 0 ]]; then
                 if (( save_attachments_only_flag )); then
