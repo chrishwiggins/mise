@@ -23,7 +23,7 @@ AUX_DIR="$(dirname "$SCRIPT_DIR")/aux/m"
 #   Actions:         i sent q d x urls send c draft reply reply-all fwd
 #                    open trash archive thread read unread sfwd sreply
 #                    sreply-all peek
-#   Flags:           -w/--web -N/--no-cache --quiet -h/--help --version
+#   Flags:           -w/--web -N/--no-cache -i/--important --quiet -h/--help --version
 #                    --dry-run --urls -p/--peek -v --meta -S -t -x
 #                    -A --save-attachments-only -a -c -b -s -d/--done
 #                    -H --outbox
@@ -1704,6 +1704,8 @@ EOF
 FLAGS
     -w, --web         Force browser instead of CLI
     -N, --no-cache    Bypass listing cache; force fresh fetch
+    -i, --important   Filter noisy senders from the listing (view-only; edit
+                      ~/.config/m/view-filter.txt). E.g. m -i, m q 'j2' -i
     -S [FILE]         Save message: -S FILE writes decoded text; bare -S to spool
     --raw             With -S, save original MIME bytes (base64) + attachments
     -p, --peek        Save message(s) and put a /peek command on the clipboard
