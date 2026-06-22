@@ -12,13 +12,23 @@
 #        a language name (italian, japanese), la/latin (-> Italian vowels),
 #        or a specific voice name (Alice).
 #
+# PHRASE is the main hook. Real techno drops 2-3 phrases strategically, not one,
+# so you can add a breakdown line and a climax line with -2 and -3:
+#   -1 = main hook   (intro / build / main / drop)   [same as the positional]
+#   -2 = breakdown   (the contrast line in the break section)
+#   -3 = climax      (layered on top in the drop)
+# Phrases fall back to the main hook if not given, so old one-phrase calls work.
+#
 # Examples:
 #   techno en "the system is down"
+#   techno en "the system is down" -2 "everybody to the limit" -3 "come on"
 #   techno de "wir sind die roboter" --style hardtechno --bpm 128
 #   techno ja "konnichiwa sekai" --bpm 140
 #   techno la "favere" --style house --bpm 126
 #
 # Options:
+#   -2 PHRASE      breakdown phrase (played in the break section)
+#   -3 PHRASE      climax phrase (layered into the drop)
 #   --bpm N        tempo (default 128)
 #   --bars N       length in bars (default 32)
 #   --style NAME   house | techno | hardtechno | strongbad (default strongbad)
@@ -30,15 +40,19 @@ set -e
 
 # ---------- args ----------
 if [ $# -lt 2 ]; then
-  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 fi
 LANG_ARG="$1"; shift
 PHRASE="$1"; shift
 
 BPM=128; BARS=32; STYLE=strongbad; RATE=150; VOICE=""; OUTPATH=""; PLAY=1
+PHRASE2=""; PHRASE3=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    -1) PHRASE="$2"; shift 2;;
+    -2) PHRASE2="$2"; shift 2;;
+    -3) PHRASE3="$2"; shift 2;;
     --bpm) BPM="$2"; shift 2;;
     --bars) BARS="$2"; shift 2;;
     --style) STYLE="$2"; shift 2;;
@@ -49,6 +63,10 @@ while [ $# -gt 0 ]; do
     *) echo "techno: unknown option: $1" >&2; exit 1;;
   esac
 done
+
+# phrases 2 and 3 fall back to the main hook if not supplied
+[ -z "$PHRASE2" ] && PHRASE2="$PHRASE"
+[ -z "$PHRASE3" ] && PHRASE3="$PHRASE"
 
 for need in say sox ffmpeg python3; do
   command -v "$need" >/dev/null || { echo "techno: missing dependency: $need" >&2; exit 1; }
@@ -90,26 +108,50 @@ norm_lang () {
   esac
 }
 
+# first installed voice matching a name (case-insensitive, ignores trailing
+# qualifiers like " (Premium)"); echoes the full voice name or nothing
+pick_voice () {
+  for want in "$@"; do
+    awk -F'\t' -v w="$want" 'BEGIN{w=tolower(w)}
+      {n=$1; sub(/ *\(.*/,"",n); if(tolower(n)==w){print $1; exit}}' "$VOICES" && return 0
+  done
+}
+
 if [ -n "$VOICE" ]; then
   :
 elif echo "$LANG_ARG" | grep -qE '^[a-z]{2}_[A-Z0-9]{2,3}$'; then
   VOICE="$(awk -F'\t' -v l="$LANG_ARG" '$2==l{print $1; exit}' "$VOICES")"
 else
   KEY="$(norm_lang "$LANG_ARG")"
-  VOICE="$(awk -F'\t' -v k="$KEY" 'tolower($1)==tolower(k){print $1; exit}' "$VOICES")"
+  # for English, prefer a clean natural voice over whatever sorts first
+  # (which is the novelty voice "Albert"); fall through to what's installed
+  if [ "$KEY" = en ]; then
+    VOICE="$(pick_voice 'Ava' 'Samantha' 'Allison' 'Serena' 'Tom' 'Evan' 'Daniel')"
+  fi
+  [ -z "$VOICE" ] && VOICE="$(awk -F'\t' -v k="$KEY" 'tolower($1)==tolower(k){print $1; exit}' "$VOICES")"
   [ -z "$VOICE" ] && VOICE="$(awk -F'\t' -v p="$KEY" 'index($2, p"_")==1{print $1; exit}' "$VOICES")"
 fi
 [ -z "$VOICE" ] && VOICE="Samantha"
-echo "voice: $VOICE   phrase: \"$PHRASE\"   style: $STYLE   ${BPM}bpm x ${BARS}bars"
+echo "voice: $VOICE   style: $STYLE   ${BPM}bpm x ${BARS}bars"
+echo "  hook(-1):      \"$PHRASE\""
+echo "  breakdown(-2): \"$PHRASE2\""
+echo "  climax(-3):    \"$PHRASE3\""
 
 # ---------- vocal synth ----------
-say -v "$VOICE" -r "$RATE" -o "$DAT/voc_raw.aiff" "$PHRASE"
-sox "$DAT/voc_raw.aiff" -r $SR -c 1 "$DAT/voc.wav" \
-    silence 1 0.01 0.1% reverse silence 1 0.01 0.1% reverse gain -n -3
-sox "$DAT/voc.wav" "$DAT/voc_low.wav" speed 0.84 gain -n -4
-sox "$DAT/voc.wav" "$DAT/voc_hi.wav"  speed 1.18 gain -n -5
-sox "$DAT/voc.wav" "$DAT/voc_robot.wav" overdrive 8 5 lowpass 3000 gain -n -4 2>/dev/null \
-    || cp "$DAT/voc.wav" "$DAT/voc_robot.wav"
+# Render each phrase into the same family of chops, prefixed p1_/p2_/p3_.
+mkvoc () {
+  local pfx="$1" txt="$2"
+  say -v "$VOICE" -r "$RATE" -o "$DAT/${pfx}_raw.aiff" "$txt"
+  sox "$DAT/${pfx}_raw.aiff" -r $SR -c 1 "$DAT/${pfx}.wav" \
+      silence 1 0.01 0.1% reverse silence 1 0.01 0.1% reverse gain -n -3
+  sox "$DAT/${pfx}.wav" "$DAT/${pfx}_low.wav" speed 0.84 gain -n -4
+  sox "$DAT/${pfx}.wav" "$DAT/${pfx}_hi.wav"  speed 1.18 gain -n -5
+  sox "$DAT/${pfx}.wav" "$DAT/${pfx}_robot.wav" overdrive 8 5 lowpass 3000 gain -n -4 2>/dev/null \
+      || cp "$DAT/${pfx}.wav" "$DAT/${pfx}_robot.wav"
+}
+mkvoc p1 "$PHRASE"
+mkvoc p2 "$PHRASE2"
+mkvoc p3 "$PHRASE3"
 
 # ---------- drum + bass one-shots ----------
 case "$STYLE" in
@@ -176,8 +218,11 @@ def s(t): return int(t*sr)
 
 kick,clap,hat,ohat=load("kick.wav"),load("clap.wav"),load("hat.wav"),load("ohat.wav")
 stab=load("stab.wav")
-voc,voc_low,voc_hi=load("voc.wav"),load("voc_low.wav"),load("voc_hi.wav")
-voc_robot=load("voc_robot.wav")
+# three phrase families: p1=main hook, p2=breakdown, p3=climax
+P={p:{ "plain":load(f"{p}.wav"),
+       "low":  load(f"{p}_low.wav"),
+       "hi":   load(f"{p}_hi.wav"),
+       "robot":load(f"{p}_robot.wav") } for p in ("p1","p2","p3")}
 bass={k:load(f"bass_{k}.wav") for k in "ACGE"}
 
 bed=np.zeros(N,dtype=np.float32)
@@ -188,6 +233,7 @@ def add(clip,at,g=1.0):
     bed[a:b]+=clip*g
 
 hard = style in ("hardtechno","strongbad")
+def chop(p): return P[p]["robot"] if hard else P[p]["plain"]
 bass_seq=["A","A","C","A","G","G","E","G"]
 def section_of(b):
     f=b/max(bars,1)
@@ -215,19 +261,23 @@ for barn in range(bars):
         root=bass_seq[barn%len(bass_seq)]
         for slot in range(8):
             if slot%2==1: add(bass[root],s(t0+slot*half),0.9)
-    chop=voc_robot if hard else voc
+    # phrase placement by section role:
+    #   intro/build/main -> p1 (main hook)
+    #   break            -> p2 (breakdown line)
+    #   drop             -> p1 hook + p3 climax layered on top
     if sec=="intro":
-        if barn%2==1: add(chop,s(t0),0.8)
+        if barn%2==1: add(chop("p1"),s(t0),0.8)
     elif sec=="build":
-        add(chop,s(t0),0.85)
+        add(chop("p1"),s(t0),0.85)
     elif sec=="main":
-        add(chop,s(t0),0.95)
-        if barn%2==1: add(voc_hi,s(t0+2*beat),0.5)
+        add(chop("p1"),s(t0),0.95)
+        if barn%2==1: add(P["p1"]["hi"],s(t0+2*beat),0.5)
     elif sec=="break":
-        add(voc_low,s(t0),0.9)
+        add(P["p2"]["low"],s(t0),0.9)
+        if barn%2==1: add(chop("p2"),s(t0+2*beat),0.7)
     elif sec=="drop":
-        add(chop,s(t0),1.0); add(chop,s(t0+2*beat),0.85)
-        if barn%4==3: add(voc_hi,s(t0+3*beat),0.6)
+        add(chop("p1"),s(t0),1.0); add(chop("p3"),s(t0+2*beat),0.9)
+        if barn%4==3: add(P["p3"]["hi"],s(t0+3*beat),0.6)
     if sec=="break" and barn==int(bars*0.625)-1:
         for i in range(8): add(stab,s(t0+i*half),0.3+0.07*i)
 
