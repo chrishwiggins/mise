@@ -4,8 +4,10 @@ gcal-list - List Google Calendar events for a given day.
 
 Usage:
     gcal-list                          Today's events
+    gcal-list 2                        Show full details of event #2 (today)
     gcal-list +3                       Events 3 days from now
     gcal-list -1                       Yesterday's events
+    gcal-list +1 3                     Show details of tomorrow's event #3
     gcal-list move 3 2pm               Move event #3 to 2:00 PM
     gcal-list +1 move 3 noon           Move tomorrow's event #3 to noon
     gcal-list delete 3                 Delete event #3 (with confirmation)
@@ -67,6 +69,76 @@ def _fmt_time(dt):
     return dt.strftime("%-I:%M%p").lower()
 
 
+# ---------------------------------------------------------------------------
+# Hidden-metadata detection
+#
+# The one-line listing hides most of what an event carries. We flag four kinds
+# of buried metadata with single letters, mirroring how `m` flags attachments
+# with a marker. A "." stands in for an absent field so the columns stay aligned.
+#   @  attendees (email addresses + names)
+#   P  place / physical location
+#   U  url (hangoutLink, conferenceData, or a link in location/description)
+#   D  description / notes body
+# ---------------------------------------------------------------------------
+
+_URL_RE = re.compile(r"https?://\S+")
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(text):
+    """Best-effort de-HTML for description bodies (Google stores them as HTML)."""
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "\n", text, flags=re.IGNORECASE)
+    text = _TAG_RE.sub("", text)
+    # Collapse the common HTML entities Google emits.
+    for ent, char in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                      ("&quot;", '"'), ("&#39;", "'"), ("&nbsp;", " ")):
+        text = text.replace(ent, char)
+    # Squeeze runs of blank lines.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _event_url(event):
+    """Return the first meeting/URL associated with an event, or None.
+
+    Checks, in order: the Hangouts/Meet link, any conferenceData entry point,
+    a URL embedded in the location field, then a URL in the description.
+    """
+    if event.get("hangoutLink"):
+        return event["hangoutLink"]
+    conf = event.get("conferenceData", {})
+    for ep in conf.get("entryPoints", []):
+        if ep.get("uri"):
+            return ep["uri"]
+    for field in ("location", "description"):
+        m = _URL_RE.search(event.get(field, "") or "")
+        if m:
+            # Trim trailing quotes/brackets/punctuation the \S+ greedily caught.
+            return m.group(0).rstrip('"\'<>)].,;')
+    return None
+
+
+def _event_flags(event):
+    """Build the 4-char flag string (@ P U D) for an event's hidden metadata.
+
+    Each position is the letter when present, or "." when absent, so rows align.
+    """
+    has_attendees = bool(event.get("attendees"))
+    # A bare URL stuffed into location isn't a real "place"; only flag P when
+    # the location has non-URL text.
+    loc = (event.get("location") or "").strip()
+    has_place = bool(loc and _URL_RE.sub("", loc).strip())
+    has_url = _event_url(event) is not None
+    has_desc = bool((event.get("description") or "").strip())
+    return (
+        ("@" if has_attendees else ".")
+        + ("P" if has_place else ".")
+        + ("U" if has_url else ".")
+        + ("D" if has_desc else ".")
+    )
+
+
 def display_events(events, target_date):
     if not events:
         print(f"No events on {target_date.strftime('%A, %B %-d')}.")
@@ -75,20 +147,28 @@ def display_events(events, target_date):
     print(target_date.strftime("%A, %B %-d"))
     print()
 
+    any_flags = False
     for i, event in enumerate(events, 1):
         summary = event.get("summary", "(no title)")
         start = event.get("start", {})
-        end = event.get("end", {})
+        flags = _event_flags(event)
+        if flags != "....":
+            any_flags = True
 
         if "date" in start:
-            print(f"  {i:2d}. {'[all day]':17s} {summary}")
+            when = "[all day]"
         else:
             start_dt = datetime.fromisoformat(start["dateTime"])
-            end_dt = datetime.fromisoformat(end["dateTime"])
-            time_range = f"{_fmt_time(start_dt)}-{_fmt_time(end_dt)}"
-            print(f"  {i:2d}. {time_range:17s} {summary}")
+            end_dt = datetime.fromisoformat(event["end"]["dateTime"])
+            when = f"{_fmt_time(start_dt)}-{_fmt_time(end_dt)}"
+
+        print(f"  {i:2d}. {when:17s} {summary:32s}  {flags}")
 
     print()
+    if any_flags:
+        print("  flags: @ attendees/emails   P place   U url   D description")
+        print(f"  (gcal-list {'<offset> ' if target_date != date.today() else ''}N  shows full details of event N)")
+        print()
 
 
 def parse_offset(value):
@@ -241,7 +321,7 @@ def describe_event(service, events, event_num, text=None, append=False):
         existing = event.get("description", "")
         if existing:
             print(f"{summary}:")
-            print(existing)
+            print(_strip_html(existing))
         else:
             print(f"{summary}: (no description)")
         return
@@ -267,6 +347,62 @@ def describe_event(service, events, event_num, text=None, append=False):
     print(f"  {new_desc}")
 
 
+# ---------------------------------------------------------------------------
+# Show full details of one event (the hidden metadata, expanded)
+# ---------------------------------------------------------------------------
+
+def show_event(events, event_num):
+    if event_num < 1 or event_num > len(events):
+        print(f"Error: event {event_num} out of range (1-{len(events)})", file=sys.stderr)
+        sys.exit(1)
+
+    event = events[event_num - 1]
+    summary = event.get("summary", "(no title)")
+    start = event.get("start", {})
+
+    print(summary)
+
+    if "date" in start:
+        print(f"  when:     {start['date']} (all day)")
+    else:
+        start_dt = datetime.fromisoformat(start["dateTime"])
+        end_dt = datetime.fromisoformat(event["end"]["dateTime"])
+        print(f"  when:     {start_dt.strftime('%A, %B %-d')}  {_fmt_time(start_dt)}-{_fmt_time(end_dt)}")
+
+    loc = (event.get("location") or "").strip()
+    # Only call it a "place" if it has non-URL text; a bare Zoom link shows as url.
+    if loc and _URL_RE.sub("", loc).strip():
+        print(f"  place:    {loc}")
+
+    url = _event_url(event)
+    if url:
+        print(f"  url:      {url}")
+
+    attendees = event.get("attendees", [])
+    if attendees:
+        print("  people:")
+        for a in attendees:
+            name = a.get("displayName", "")
+            email = a.get("email", "")
+            status = a.get("responseStatus", "")
+            mark = {"accepted": "yes", "declined": "no", "tentative": "maybe",
+                    "needsAction": "?"}.get(status, status)
+            label = f"{name} <{email}>" if name else email
+            organizer = " (organizer)" if a.get("organizer") else ""
+            self_ = " (you)" if a.get("self") else ""
+            print(f"    - {label}{organizer}{self_}  [{mark}]")
+
+    desc = (event.get("description") or "").strip()
+    if desc:
+        print("  description:")
+        for line in _strip_html(desc).splitlines():
+            print(f"    {line}")
+
+    # If nothing buried, say so plainly rather than printing only a title.
+    if not (loc or url or attendees or desc):
+        print("  (no attendees, place, url, or description)")
+
+
 USAGE = """\
 usage: gcal-list [offset] [command]
 
@@ -274,6 +410,7 @@ List Google Calendar events for a given day, or modify an event.
 
 commands:
   (none)                    List events (default: today)
+  N                         Show full details of event #N (attendees, place, url, desc)
   move N TIME               Move event #N to TIME (e.g., 2pm, noon, 14:00)
   delete N [-y]             Delete event #N (asks for confirmation unless -y)
   desc N                    Show event #N's description
@@ -281,7 +418,11 @@ commands:
   desc N -a "text"          Append to event #N's description
 
 arguments:
-  offset                    Day offset from today (e.g., +3, -1). Default: 0 (today).
+  offset                    Day offset from today, SIGNED: +3, -1. A bare number
+                            means event #N to show, NOT a day offset. Default: today.
+
+listing flags (shown after each event):
+  @ attendees/emails   P place   U url   D description
 
 options:
   -h, --help                Show this help message and exit"""
@@ -298,19 +439,22 @@ def main():
         print(USAGE)
         sys.exit(0)
     else:
-        # Peel off leading offset if present
+        # Peel off a leading day offset ONLY when SIGNED (+3, -1, +0, -0).
+        # A bare number is NOT an offset; it selects an event to show.
         offset = 0
         first = argv[0]
         if re.match(r"^[+-]\d+$", first):
             offset = int(first)
             argv = argv[1:]
-        elif first not in ("move", "delete", "desc") and re.match(r"^\d+$", first):
-            offset = int(first)
-            argv = argv[1:]
 
-        # Now argv is [command, ...args] or empty (list mode)
-        cmd = argv[0] if argv else None
-        rest = argv[1:] if argv else []
+        # Whatever remains is [command, ...args], or empty (list mode).
+        # A bare integer here means "show details of event #N".
+        if argv and re.match(r"^\d+$", argv[0]):
+            cmd = "show"
+            rest = argv
+        else:
+            cmd = argv[0] if argv else None
+            rest = argv[1:] if argv else []
 
     target_date = date.today() + timedelta(days=offset)
     service = get_calendar_service()
@@ -361,6 +505,15 @@ def main():
             print("gcal-list: error: -a requires text to append", file=sys.stderr)
             sys.exit(1)
         describe_event(service, events, event_num, text, append)
+
+    elif cmd == "show":
+        # Bare integer: show full details of event #N. (No further args expected.)
+        try:
+            event_num = int(rest[0])
+        except (ValueError, IndexError):
+            print(f"gcal-list: error: event# must be integer, got '{rest[0] if rest else ''}'", file=sys.stderr)
+            sys.exit(1)
+        show_event(events, event_num)
 
     elif cmd is None:
         display_events(events, target_date)

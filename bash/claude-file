@@ -1,0 +1,5 @@
+#!/bin/bash
+# claude-file: reads .claude_input from CWD and starts interactive claude
+# The file content becomes claude's first message
+content=$(cat .claude_input)
+exec claude "$content"

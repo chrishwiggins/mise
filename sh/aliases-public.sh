@@ -291,7 +291,7 @@ alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
 alias pb2gist gist -o -P
 
-alias pocket "pbpaste | mutt -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`' add@getpocket.com"
+alias pocket "pbpaste | m send add@getpocket.com -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`'"
 alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-bin/weather/weather.cgi?daysonly=0&maxdays=11&zipcode=10027' | asciify | fix | awk '/^Daily/,/^Sunset/'"
 alias omail open /Applications/Mail.app/
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
@@ -535,7 +535,7 @@ alias yt-mp4 "yt-dlp -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bes
 alias yt-video 'yt-dlp -o "%(title)s.%(ext)s"'
 #alias sniff "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s"
 alias plan "echo 'dream in years; plan in months; evaluate in weeks; ship daily'"
-alias nato "echo 'Alfa|Bravo|Charlie|Delta|Echo|Foxtrot|Golf|Hotel|India|Juliett|Kilo|Lima|Mike|November|Oscar|Papa|Quebec|Romeo|Sierra|Tango|Uniform|Victor|Whiskey|Xray|Yankee|Zulu'|tr '|' '\n'"
+#alias nato "echo 'Alfa|Bravo|Charlie|Delta|Echo|Foxtrot|Golf|Hotel|India|Juliett|Kilo|Lima|Mike|November|Oscar|Papa|Quebec|Romeo|Sierra|Tango|Uniform|Victor|Whiskey|Xray|Yankee|Zulu'|tr '|' '\n'"
 alias embiggen "osascript  $mise/osa/embiggen.osa"
 alias cd-f cd-parent
 alias md5 "echo i think you mean shasum -a 512"

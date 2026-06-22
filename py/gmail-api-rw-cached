@@ -2436,7 +2436,7 @@ def do_inbox(service, team, days, output_dir, dry_run=False, account=None, resum
     all_gmail_ids = {}  # gmail_id -> {metadata, team_members: []}
     total_members = len(team)
     for member_idx, (name, addr) in enumerate(team, 1):
-        query = f"(from:{addr} OR to:{addr}) newer_than:{days}d -from:chris.wiggins@gmail.com -from:chris.wiggins.code@gmail.com"
+        query = f"(from:{addr} OR to:{addr}) newer_than:{days}d -from:x@example.com -from:x@example.com"
         print(f"[{member_idx}/{total_members}] Searching: {name} <{addr}> ...", file=sys.stderr, end=" ")
         try:
             result = _retry_api_call(lambda: service.users().messages().list(
