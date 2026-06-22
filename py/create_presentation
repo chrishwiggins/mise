@@ -103,8 +103,8 @@ def main():
         f"Presentation URL: https://docs.google.com/presentation/d/{presentation_id}/edit"
     )
 
-    # share_presentation_with_user(presentation_id, 'chris.wiggins@gmail.com')
-    slides_util.share_presentation_with_user(presentation_id, "chris.wiggins@gmail.com")
+    # share_presentation_with_user(presentation_id, 'x@example.com')
+    slides_util.share_presentation_with_user(presentation_id, "x@example.com")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,94 @@
+#!/opt/homebrew/bin/bash
+
+# Bulletproof open wrapper - handles any filename weirdness
+# Tries multiple strategies to open files with special chars, spaces, etc.
+
+set -e
+
+if [[ $# -eq 0 ]]; then
+    echo "Usage: open <file_or_directory>"
+    echo "Enhanced wrapper that handles special characters, spaces, and attachment paths"
+    exit 1
+fi
+
+target="$1"
+
+# Strategy 0: anything the attachment-finder can't handle goes straight to the
+# real open. That means:
+#   - any flags (-a, -R, -n, -g, ...) or a flag-followed-by-arg form
+#   - more than one positional argument
+#   - URL / scheme arguments (http://, https://, ftp://, file://, mailto:, ...)
+# The file-finding heuristics below only make sense for a single bare filename;
+# everything else previously fell through to a bogus "File not found" + ls dump
+# (e.g. `open -a DuckDuckGo.app <url>` from the maps/irl aliases, or a search
+# URL from gsearch/duck).
+for arg in "$@"; do
+    if [[ "$arg" == -* ]]; then
+        /usr/bin/open "$@"
+        exit 0
+    fi
+done
+if [[ $# -gt 1 \
+      || "$target" =~ ^[a-zA-Z][a-zA-Z0-9+.-]*:// \
+      || "$target" =~ ^mailto: ]]; then
+    /usr/bin/open "$@"
+    exit 0
+fi
+
+# Strategy 1: Try as-is first (maybe it's already properly quoted)
+if [[ -e "$target" ]]; then
+    /usr/bin/open "$target"
+    exit 0
+fi
+
+# Strategy 2: Check if it's in /tmp/spool/attachments/
+attach_path="/tmp/spool/attachments/$target"
+if [[ -e "$attach_path" ]]; then
+    echo "Found in attachments: $attach_path"
+    /usr/bin/open "$attach_path"
+    exit 0
+fi
+
+# Strategy 3: Try current directory with various escaping
+for candidate in \
+    "./$target" \
+    "./${target// /\\ }" \
+    "./$target" \
+    "$target"
+do
+    if [[ -e "$candidate" ]]; then
+        /usr/bin/open "$candidate"
+        exit 0
+    fi
+done
+
+# Strategy 4: If target has no path separators, search /tmp/spool/attachments/ for partial matches
+if [[ "$target" != */* ]]; then
+    echo "Searching attachments directory for matches..."
+    matches=$(find "/tmp/spool/attachments/" -name "*$target*" 2>/dev/null || true)
+
+    if [[ -n "$matches" ]]; then
+        match_count=$(echo "$matches" | wc -l)
+        if [[ $match_count -eq 1 ]]; then
+            echo "Found match: $matches"
+            /usr/bin/open "$matches"
+            exit 0
+        else
+            echo "Multiple matches found:"
+            echo "$matches"
+            echo "Please be more specific."
+            exit 1
+        fi
+    fi
+fi
+
+# Strategy 5: List possible files if nothing found
+echo "File not found: '$target'"
+echo
+echo "Files in current directory:"
+ls -la . 2>/dev/null || true
+echo
+echo "Files in attachments directory:"
+ls -la "/tmp/spool/attachments/" 2>/dev/null || true
+
+exit 1

@@ -13,7 +13,7 @@ Usage:
     python xfer-form-owner <form_id> <new_owner_email>
 
 Example:
-    python xfer-form-owner 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms chris.wiggins@gmail.com
+    python xfer-form-owner 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms x@example.com
 
 Author: Generated for form ownership transfer
 Date: October 2025
@@ -223,9 +223,9 @@ SETUP INSTRUCTIONS:
   4. Place credentials.json in the same directory as this script
 
 Examples:
-  python xfer-form-owner 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms chris.wiggins@gmail.com
-  python xfer-form-owner https://docs.google.com/forms/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit chris.wiggins@gmail.com
-  python xfer-form-owner FORM_ID chris.wiggins@gmail.com /path/to/service-account.json
+  python xfer-form-owner 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms x@example.com
+  python xfer-form-owner https://docs.google.com/forms/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit x@example.com
+  python xfer-form-owner FORM_ID x@example.com /path/to/service-account.json
         """,
     )
 

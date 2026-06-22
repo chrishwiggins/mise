@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""
+Application Launcher - Choose between XClock and Countdown Timer
+
+This launcher allows you to choose which application to run:
+1. XClock Emulator - Classic analog clock
+2. Countdown Timer - Counts down to 12:55 PM
+"""
+
+import tkinter as tk
+from tkinter import ttk
+import subprocess
+import sys
+import os
+
+
+class AppLauncher:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Clock Application Launcher")
+        self.root.geometry("350x200")
+        self.root.resizable(False, False)
+
+        # Configure the main frame
+        self.main_frame = ttk.Frame(root, padding="20")
+        self.main_frame.pack(expand=True, fill='both')
+
+        # Title
+        title_label = ttk.Label(
+            self.main_frame,
+            text="Clock Applications",
+            font=("Arial", 16, "bold")
+        )
+        title_label.pack(pady=10)
+
+        # Description
+        desc_label = ttk.Label(
+            self.main_frame,
+            text="Choose an application to launch:",
+            font=("Arial", 10)
+        )
+        desc_label.pack(pady=5)
+
+        # Buttons frame
+        buttons_frame = ttk.Frame(self.main_frame)
+        buttons_frame.pack(pady=20)
+
+        # XClock button
+        xclock_button = ttk.Button(
+            buttons_frame,
+            text="XClock Emulator\n(Analog Clock)",
+            command=self.launch_xclock,
+            width=20
+        )
+        xclock_button.pack(side=tk.LEFT, padx=10)
+
+        # Countdown button
+        countdown_button = ttk.Button(
+            buttons_frame,
+            text="Countdown Timer\n(To 12:55 PM)",
+            command=self.launch_countdown,
+            width=20
+        )
+        countdown_button.pack(side=tk.LEFT, padx=10)
+
+        # Quit button
+        quit_button = ttk.Button(
+            self.main_frame,
+            text="Quit",
+            command=self.root.quit
+        )
+        quit_button.pack(pady=10)
+
+    def get_script_dir(self):
+        """Get the directory where this script is located"""
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def launch_xclock(self):
+        """Launch the XClock emulator"""
+        script_dir = self.get_script_dir()
+        xclock_path = os.path.join(script_dir, 'xclock.py')
+
+        try:
+            subprocess.Popen([sys.executable, xclock_path])
+            self.show_message("XClock Emulator launched!")
+        except Exception as e:
+            self.show_error(f"Failed to launch XClock: {e}")
+
+    def launch_countdown(self):
+        """Launch the countdown timer"""
+        script_dir = self.get_script_dir()
+        countdown_path = os.path.join(script_dir, 'countdown_timer.py')
+
+        try:
+            subprocess.Popen([sys.executable, countdown_path])
+            self.show_message("Countdown Timer launched!")
+        except Exception as e:
+            self.show_error(f"Failed to launch Countdown Timer: {e}")
+
+    def show_message(self, message):
+        """Show a success message"""
+        msg_window = tk.Toplevel(self.root)
+        msg_window.title("Success")
+        msg_window.geometry("250x100")
+        msg_window.resizable(False, False)
+        msg_window.transient(self.root)
+
+        ttk.Label(msg_window, text=message, padding=20).pack()
+        ttk.Button(
+            msg_window,
+            text="OK",
+            command=msg_window.destroy
+        ).pack(pady=10)
+
+        # Auto-close after 2 seconds
+        msg_window.after(2000, msg_window.destroy)
+
+    def show_error(self, error_message):
+        """Show an error message"""
+        error_window = tk.Toplevel(self.root)
+        error_window.title("Error")
+        error_window.geometry("300x120")
+        error_window.resizable(False, False)
+        error_window.transient(self.root)
+
+        ttk.Label(
+            error_window,
+            text=error_message,
+            padding=20,
+            wraplength=250
+        ).pack()
+
+        ttk.Button(
+            error_window,
+            text="OK",
+            command=error_window.destroy
+        ).pack(pady=10)
+
+
+def main():
+    """Main function to run the launcher"""
+    root = tk.Tk()
+
+    try:
+        app = AppLauncher(root)
+        root.mainloop()
+
+    except KeyboardInterrupt:
+        print("\nExiting...")
+        root.quit()
+
+
+if __name__ == "__main__":
+    main()

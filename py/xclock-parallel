@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""
+Embarrassingly Parallel Clock Applications Launcher
+
+This script can launch multiple instances of clock applications in parallel.
+Perfect for running many countdown timers or clocks simultaneously.
+"""
+
+import os
+import sys
+import subprocess
+import argparse
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+
+# Add the clock source directory to path
+CLOCK_SRC_DIR = "/private/tmp/260504121318_make-an-xclock-emulator/src"
+
+def launch_xclock():
+    """Launch a single XClock instance"""
+    try:
+        proc = subprocess.Popen([
+            sys.executable,
+            os.path.join(CLOCK_SRC_DIR, "xclock.py")
+        ])
+        return f"XClock launched (PID: {proc.pid})"
+    except Exception as e:
+        return f"XClock failed: {e}"
+
+def launch_countdown():
+    """Launch a single countdown timer instance"""
+    try:
+        proc = subprocess.Popen([
+            sys.executable,
+            os.path.join(CLOCK_SRC_DIR, "countdown_timer.py")
+        ])
+        return f"Countdown timer launched (PID: {proc.pid})"
+    except Exception as e:
+        return f"Countdown timer failed: {e}"
+
+def launch_launcher():
+    """Launch the application launcher"""
+    try:
+        proc = subprocess.Popen([
+            sys.executable,
+            os.path.join(CLOCK_SRC_DIR, "launcher.py")
+        ])
+        return f"Launcher launched (PID: {proc.pid})"
+    except Exception as e:
+        return f"Launcher failed: {e}"
+
+def parallel_launch(app_type, count, delay=0.1):
+    """Launch multiple instances in parallel"""
+    print(f"Launching {count} {app_type} instances in parallel...")
+
+    # Choose the launch function
+    if app_type == "xclock":
+        launch_func = launch_xclock
+    elif app_type == "countdown":
+        launch_func = launch_countdown
+    elif app_type == "launcher":
+        launch_func = launch_launcher
+    else:
+        raise ValueError(f"Unknown app type: {app_type}")
+
+    # Launch in parallel with ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(count, 20)) as executor:
+        # Submit all launch tasks
+        futures = []
+        for i in range(count):
+            if delay > 0 and i > 0:
+                time.sleep(delay)
+            future = executor.submit(launch_func)
+            futures.append(future)
+
+        # Collect results
+        results = []
+        for i, future in enumerate(futures):
+            try:
+                result = future.result(timeout=10)
+                results.append(f"{i+1:2d}. {result}")
+            except Exception as e:
+                results.append(f"{i+1:2d}. Launch failed: {e}")
+
+    return results
+
+def staggered_launch(app_type, count, interval=1.0):
+    """Launch instances with staggered timing"""
+    print(f"Launching {count} {app_type} instances with {interval}s intervals...")
+
+    def launch_with_delay(delay):
+        time.sleep(delay)
+        if app_type == "xclock":
+            return launch_xclock()
+        elif app_type == "countdown":
+            return launch_countdown()
+        elif app_type == "launcher":
+            return launch_launcher()
+
+    # Launch with staggered delays
+    with ThreadPoolExecutor(max_workers=count) as executor:
+        futures = []
+        for i in range(count):
+            delay = i * interval
+            future = executor.submit(launch_with_delay, delay)
+            futures.append(future)
+
+        # Collect results as they complete
+        results = []
+        for i, future in enumerate(futures):
+            try:
+                result = future.result()
+                results.append(f"{i+1:2d}. {result}")
+                print(f"  ✓ Instance {i+1} launched")
+            except Exception as e:
+                results.append(f"{i+1:2d}. Launch failed: {e}")
+                print(f"  ✗ Instance {i+1} failed: {e}")
+
+    return results
+
+def rapid_fire_launch(app_type, count):
+    """Launch instances as fast as possible"""
+    print(f"Rapid-fire launching {count} {app_type} instances...")
+
+    # Use ProcessPoolExecutor for maximum parallelism
+    with ProcessPoolExecutor(max_workers=min(count, os.cpu_count() * 2)) as executor:
+        if app_type == "xclock":
+            launch_func = launch_xclock
+        elif app_type == "countdown":
+            launch_func = launch_countdown
+        elif app_type == "launcher":
+            launch_func = launch_launcher
+
+        # Submit all at once
+        futures = [executor.submit(launch_func) for _ in range(count)]
+
+        # Collect results
+        results = []
+        for i, future in enumerate(futures):
+            try:
+                result = future.result(timeout=15)
+                results.append(f"{i+1:2d}. {result}")
+            except Exception as e:
+                results.append(f"{i+1:2d}. Launch failed: {e}")
+
+    return results
+
+def main():
+    parser = argparse.ArgumentParser(description="Launch clock applications in embarrassingly parallel fashion")
+
+    parser.add_argument("app", choices=["xclock", "countdown", "launcher"],
+                       help="Type of application to launch")
+    parser.add_argument("count", type=int, default=1,
+                       help="Number of instances to launch")
+    parser.add_argument("--mode", choices=["parallel", "staggered", "rapid"],
+                       default="parallel", help="Launch mode")
+    parser.add_argument("--delay", type=float, default=0.1,
+                       help="Delay between launches in parallel mode (seconds)")
+    parser.add_argument("--interval", type=float, default=1.0,
+                       help="Interval between launches in staggered mode (seconds)")
+    parser.add_argument("--test", action="store_true",
+                       help="Test mode - show what would be launched without launching")
+
+    args = parser.parse_args()
+
+    if args.test:
+        print(f"TEST MODE: Would launch {args.count} {args.app} instances using {args.mode} mode")
+        return
+
+    # Validate count
+    if args.count < 1:
+        print("Error: Count must be at least 1")
+        sys.exit(1)
+
+    if args.count > 50:
+        response = input(f"Launch {args.count} instances? This might overwhelm your system. (y/N): ")
+        if response.lower() != 'y':
+            print("Cancelled.")
+            sys.exit(0)
+
+    # Launch based on mode
+    start_time = time.time()
+
+    if args.mode == "parallel":
+        results = parallel_launch(args.app, args.count, args.delay)
+    elif args.mode == "staggered":
+        results = staggered_launch(args.app, args.count, args.interval)
+    elif args.mode == "rapid":
+        results = rapid_fire_launch(args.app, args.count)
+
+    elapsed = time.time() - start_time
+
+    # Display results
+    print(f"\nLaunch completed in {elapsed:.2f} seconds:")
+    for result in results:
+        print(f"  {result}")
+
+    print(f"\n🚀 Successfully initiated {args.count} {args.app} instances!")
+    print(f"⏱️  Total time: {elapsed:.2f} seconds")
+    print(f"📊 Average time per instance: {elapsed/args.count:.3f} seconds")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nLaunch cancelled by user.")
+    except Exception as e:
+        print(f"\nError: {e}")
+        sys.exit(1)

@@ -21,10 +21,10 @@
    - Choose "External" user type
    - Fill in required fields:
      - App name: `GCal CLI Tool`
-     - User support email: `chris.wiggins@gmail.com`
-     - Developer contact: `chris.wiggins@gmail.com`
+     - User support email: `x@example.com`
+     - Developer contact: `x@example.com`
    - Add scopes: `https://www.googleapis.com/auth/calendar`
-   - Add test users: `chris.wiggins@gmail.com`
+   - Add test users: `x@example.com`
 4. For Application type, choose "Desktop application"
 5. Name it: `GCal CLI Desktop App`
 6. Click "Create"
