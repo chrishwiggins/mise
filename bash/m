@@ -1203,11 +1203,25 @@ direct_send() {
                 ((i+=2))
                 ;;
             -H)
-                # Mutt compatibility: treat -H file as just the file
+                # Mutt compatibility: treat -H file as just the file.
+                # Guard: if -H is followed by another flag (e.g. -H -H file) or
+                # nothing, the user doubled the flag or dropped the filename.
+                # Blindly taking the next token would feed "-H" downstream as the
+                # .eml path and produce a cryptic "argument -H: expected one
+                # argument" from the backend. Stop with a clear hint instead.
+                if [[ -z "${send_args[i+1]+x}" || "${send_args[i+1]}" == -* ]]; then
+                    log_error "I think you put in -H -H. The -H flag needs a single .eml file right after it (e.g. -H draft.eml). Please fix and re-run."
+                    return 2
+                fi
                 args+=("${send_args[i+1]}")
                 ((i+=2))
                 ;;
             -a)
+                # Guard: -a with no path (or a flag where the path should be).
+                if [[ -z "${send_args[i+1]+x}" || "${send_args[i+1]}" == -* ]]; then
+                    log_error "-a needs an attachment path right after it (e.g. -a file.pdf). It looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 attachments+=("${send_args[i+1]}")
                 ((i+=2))
                 ;;
@@ -2909,13 +2923,47 @@ case "$action" in
                 # instead of the more verbose "m u send -H file.eml -a att.pdf"
                 #
                 fixed_args=()
-                for arg in "${rest[@]+"${rest[@]}"}"; do
-                    if [[ "$arg" =~ \.eml$ ]] && [[ ! "$arg" =~ ^-H$ ]]; then
-                        # Found bare .eml file, add -H flag before it
+                fa_i=0
+                while (( fa_i < ${#rest[@]} )); do
+                    arg="${rest[fa_i]}"
+                    if [[ "$arg" == -H ]]; then
+                        # Explicit -H: its value must be a single .eml path, not
+                        # another flag or a missing arg. -H -H file (doubled flag)
+                        # or a trailing -H would otherwise feed "-H" to the backend
+                        # as the .eml path and produce a cryptic
+                        # "argument -H: expected one argument".
+                        next="${rest[fa_i+1]-}"
+                        if [[ -z "${rest[fa_i+1]+x}" || "$next" == -* ]]; then
+                            if [[ "$next" == -H ]]; then
+                                log_error "I think you put in -H -H. The -H flag needs a single .eml file right after it (e.g. -H draft.eml). Please fix and re-run."
+                            else
+                                log_error "-H needs a single .eml file right after it (e.g. -H draft.eml); it looks like the filename is missing. Please fix and re-run."
+                            fi
+                            exit 2
+                        fi
+                        # Pass -H and its file through together so the bare-.eml
+                        # branch below does NOT prepend a second -H.
+                        fixed_args+=(-H "$next")
+                        ((fa_i+=2))
+                    elif [[ "$arg" == -a || "$arg" == --attach ]]; then
+                        # -a/--attach needs an attachment path, not another flag
+                        # or a missing arg.
+                        next="${rest[fa_i+1]-}"
+                        if [[ -z "${rest[fa_i+1]+x}" || "$next" == -* ]]; then
+                            log_error "-a needs an attachment path right after it (e.g. -a file.pdf); it looks like one is missing. Please fix and re-run."
+                            exit 2
+                        fi
+                        fixed_args+=("$arg" "$next")
+                        ((fa_i+=2))
+                    elif [[ "$arg" =~ \.eml$ ]]; then
+                        # Bare .eml file (no preceding -H): add the -H flag for the
+                        # backend, which expects "-H file.eml" not bare "file.eml".
                         fixed_args+=(-H "$arg")
+                        ((fa_i+=1))
                     else
                         # Regular argument, pass through unchanged
                         fixed_args+=("$arg")
+                        ((fa_i+=1))
                     fi
                 done
 
