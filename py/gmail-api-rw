@@ -2559,8 +2559,13 @@ def _parse_index_ranges(spec, maximum):
     return selected or None
 
 
-def do_urls(service, index, count, query, account=None):
-    """Extract URLs from a message and provide interactive menu to open them."""
+def do_urls(service, index, count, query, account=None, url_index=None):
+    """Extract URLs from a message and provide interactive menu to open them.
+
+    If url_index is given (1-based), open that URL directly and skip the
+    interactive menu. Used by `m ... urls N K` to open the Kth URL without
+    the prompt, while `m ... urls N` keeps the interactive dialog.
+    """
     import re
     import webbrowser
 
@@ -2597,6 +2602,21 @@ def do_urls(service, index, count, query, account=None):
         if url not in seen:
             seen.add(url)
             unique_urls.append(url)
+
+    # Direct-open shortcut: `urls N K` opens the Kth URL with no prompt.
+    if url_index is not None:
+        if url_index < 1 or url_index > len(unique_urls):
+            print(f"URL number {url_index} out of range; message has "
+                  f"{len(unique_urls)} URL(s).", file=sys.stderr)
+            # Still show the list so the user can see what was available.
+            for i, url in enumerate(unique_urls, 1):
+                display_url = url if len(url) <= 80 else url[:77] + "..."
+                print(f"  {i}. {display_url}", file=sys.stderr)
+            sys.exit(1)
+        url_to_open = unique_urls[url_index - 1]
+        print(f"Opening: {url_to_open}", file=sys.stderr)
+        webbrowser.open(url_to_open)
+        return
 
     # Show interactive menu
     print(f"Found {len(unique_urls)} URL(s):", file=sys.stderr)
@@ -3861,14 +3881,40 @@ def main():
                      text_view=args.text, headers_only=args.headers)
     elif mode == "urls":
         mode_rest = [a for a in rest if a != mode]
-        indices, filtered_rest = collect_indices(mode_rest)
-        args = parse_list_get_args(filtered_rest)
-        if not indices:
-            print("Usage: gmail-api-rw urls INDEX (e.g., gmail-api-rw urls 3)", file=sys.stderr)
+        # Preserve typed order so a SECOND bare integer can mean "open this URL
+        # directly". `m q shapiro 7 urls 3` -> message 7, open URL 3 with no
+        # interactive prompt. `collect_indices` sorts/dedupes and would lose the
+        # order, so parse the bare single integers out of mode_rest by hand here.
+        ordered_ints = []
+        non_index_rest = []
+        _skip_next = False
+        for _a in mode_rest:
+            if _skip_next:
+                non_index_rest.append(_a)
+                _skip_next = False
+                continue
+            if _a in ("-n", "--count", "-q", "--query", "-F", "--config", "-e", "--email"):
+                non_index_rest.append(_a)
+                _skip_next = True
+                continue
+            if _a.startswith("-"):
+                non_index_rest.append(_a)
+                continue
+            if re.match(r"^\d+$", _a):
+                ordered_ints.append(int(_a))
+            else:
+                non_index_rest.append(_a)
+        args = parse_list_get_args(non_index_rest)
+        if not ordered_ints:
+            print("Usage: gmail-api-rw urls INDEX [URL_NUM] "
+                  "(e.g., gmail-api-rw urls 3, or urls 3 2 to open the 2nd URL)",
+                  file=sys.stderr)
             sys.exit(1)
-        if len(indices) > 1:
-            print(f"urls only works with a single message, got "
-                  f"{len(indices)} indices: {indices}", file=sys.stderr)
+        msg_index = ordered_ints[0]
+        url_index = ordered_ints[1] if len(ordered_ints) > 1 else None
+        if len(ordered_ints) > 2:
+            print(f"urls takes at most a message index and one URL number, got "
+                  f"{ordered_ints}", file=sys.stderr)
             sys.exit(1)
         service, login_hint = _authenticated_service(args, "gmail-readonly")
         # Apply same query defaults as listing, so cache keys match
@@ -3877,7 +3923,8 @@ def main():
             query = f"in:sent {query}" if query else "in:sent"
         elif not query:
             query = "in:inbox"
-        do_urls(service, indices[0], args.count, query, account=login_hint)
+        do_urls(service, msg_index, args.count, query, account=login_hint,
+                url_index=url_index)
     else:
         args = parse_list_get_args(rest)
         service, login_hint = _authenticated_service(args, "gmail-readonly")

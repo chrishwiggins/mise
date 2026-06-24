@@ -1924,7 +1924,8 @@ ADVANCED WORKFLOWS
     m sent 1 fwd user@ex.com             Forward your sent message #1
     m --dry-run send user@ex.com         Preview send without actually sending
     m -N q "from:alice"                  Force fresh search (bypass cache)
-    m urls 3                             Extract URLs from message #3
+    m urls 3                             Extract URLs from message #3 (interactive menu)
+    m q shapiro 7 urls 2                  Open the 2nd URL in message #7 directly (no menu)
 EOF
             ;;
         *)
