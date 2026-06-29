@@ -339,15 +339,56 @@ def _config_get(key, env_var=None, default=None):
 _contacts_path = _config_get("contacts_file", env_var="GMAILS_CONTACTS_FILE")
 CONTACTS_FILE = Path(_contacts_path).expanduser() if _contacts_path else None
 
+# m-alias file: `alias <key> <email>`, case-insensitive keys. This is the SAME
+# file the bash front-end's _resolve_alias reads. Compose paths that run wholly
+# in Python (fwd, send via the advanced path) never pass through the bash
+# resolver, so we consult it here too. Resolving an m-alias FIRST also dodges
+# malformed contact lines: e.g. `taizo;wiggins@tdw;taizo.wiggins@gmail.com` in
+# nfile.asc would otherwise make resolve_recipient('tdw') return the bogus
+# `wiggins@tdw` (it has an '@', so it was treated as the email field) and Gmail
+# would reject it as an "Invalid To header".
+M_ALIASES_FILE = Path("~/.config/m/aliases").expanduser()
+
+
+def _resolve_m_alias(addr):
+    """Return the email for an m-alias key, or None if addr is not a known key.
+
+    Reads ~/.config/m/aliases (`alias <key> <email>` lines). Case-insensitive.
+    """
+    if not addr or "@" in addr:
+        return None
+    if not M_ALIASES_FILE.exists():
+        return None
+    needle = addr.strip().lower()
+    try:
+        with open(M_ALIASES_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                # `alias <key> <email>`
+                if len(parts) >= 3 and parts[0] == "alias" and parts[1].lower() == needle:
+                    return parts[2]
+    except OSError:
+        return None
+    return None
+
 
 def resolve_recipient(addr):
-    """Resolve a partial name/email to a full email address via contacts file.
+    """Resolve a partial name/email to a full email address.
 
-    If addr already contains '@' and a '.', return it as-is.
-    Otherwise search the contacts file (semicolon-delimited) for a matching field.
+    Resolution order:
+      1. If addr is already a full name@domain, return it as-is.
+      2. If addr is a known m-alias key (~/.config/m/aliases), return its email.
+      3. Otherwise search the contacts file (semicolon-delimited) for a match.
     """
     if "@" in addr and "." in addr.split("@", 1)[1]:
         return addr
+    aliased = _resolve_m_alias(addr)
+    if aliased is not None:
+        print(f"Resolved m-alias: {addr} -> {aliased}", file=sys.stderr)
+        return aliased
     if not CONTACTS_FILE or not CONTACTS_FILE.exists():
         return addr
     matches = []
@@ -426,20 +467,25 @@ def _assert_valid_header_addrs(value, label):
         if not name and not addr:
             continue
         token = addr or name
-        if "@" not in token:
+        # Require a real dotted domain: catches both a missing '@' (bare word
+        # like 'tdw') AND a malformed address with no domain dot (like
+        # 'wiggins@tdw', which a malformed contact line can yield). Either one
+        # bounces at Gmail as 'Invalid {label} header'.
+        if "@" not in token or "." not in token.split("@", 1)[1]:
             bad.append(token)
     if bad:
         joined = ", ".join(repr(b) for b in bad)
         # Label-aware hint: the To recipient is a positional, not a -c/-b flag,
         # so don't tell a To-error user to "use -c". Cc/Bcc do take the flag.
         if label == "To":
-            hint = "Pass a full name@domain or a known contact name."
+            hint = ("Pass a full name@domain, a known contact, or an m-alias "
+                    "(e.g. tdw).")
         else:
             flag = "-c" if label == "Cc" else "-b"
             hint = (f"Pass a full name@domain, a known contact, or an m-alias "
                     f"(e.g. {flag} ah).")
         print(f"Error: {label} {joined} is not a valid email address "
-              f"(no @domain) and was not found in contacts.", file=sys.stderr)
+              f"(no real @domain) and was not resolved.", file=sys.stderr)
         print(f"  Gmail would reject this as 'Invalid {label} header'.",
               file=sys.stderr)
         print(f"  {hint}", file=sys.stderr)
@@ -2233,7 +2279,7 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
         print_message_preview(raw_bytes)
         return
 
-    recipient = resolve_recipient(recipient)
+    recipient = _assert_valid_header_addrs(resolve_recipient(recipient), "To")
 
     fwd_subject = subject_override or (
         orig_subject if orig_subject.lower().startswith("fwd:") else f"Fwd: {orig_subject}"
