@@ -864,14 +864,31 @@ def _load_cached_ids(count, query, account=None):
 _VERIFIED_ACCOUNT_CACHE = CACHE_DIR / ".gmail-api-rw-verified-accounts.json"
 
 
-# The default account resolves to token_name=None (no -e/-F given); it still maps
-# to exactly one Gmail identity, so cache it under a stable sentinel key.
+# The default account resolves to token_name=None (no -e/-F given). It does NOT
+# map to a single identity: the readonly and send default tokens live in
+# separate pickle files (gmail-readonly.pickle vs gmail-send.pickle) and can be
+# authorized under DIFFERENT Gmail identities if the browser was logged into the
+# wrong account when a token was minted. So the default key must be scoped by
+# OAuth scope, or the two identities clobber each other under one key and a
+# wrong-mailbox send token goes undetected.
 _DEFAULT_TOKEN_KEY = "__default__"
 
 
-def _load_verified_email(token_name):
+def _verified_key(token_name, scope=None):
+    """Cache key for a verified identity.
+
+    Named accounts key on token_name (already identity-specific). The default
+    account (token_name is None) keys on the scope too, because its readonly and
+    send tokens are separate files that may resolve to different mailboxes.
+    """
+    if token_name:
+        return token_name
+    return f"{_DEFAULT_TOKEN_KEY}:{scope}" if scope else _DEFAULT_TOKEN_KEY
+
+
+def _load_verified_email(token_name, scope=None):
     """Return the previously-verified email for token_name, or None."""
-    key = token_name or _DEFAULT_TOKEN_KEY
+    key = _verified_key(token_name, scope)
     try:
         data = json.loads(_VERIFIED_ACCOUNT_CACHE.read_text())
         return data.get(key)
@@ -879,11 +896,11 @@ def _load_verified_email(token_name):
         return None
 
 
-def _store_verified_email(token_name, email):
+def _store_verified_email(token_name, email, scope=None):
     """Persist a verified (token_name -> email) pairing."""
     if not email:
         return
-    key = token_name or _DEFAULT_TOKEN_KEY
+    key = _verified_key(token_name, scope)
     try:
         CACHE_DIR.mkdir(exist_ok=True)
         try:
@@ -896,6 +913,39 @@ def _store_verified_email(token_name, email):
         os.replace(tmp, _VERIFIED_ACCOUNT_CACHE)
     except OSError:
         pass
+
+
+# The default readonly token lives in a fixed pickle file (token_name=None maps
+# the "gmail-readonly" scope to gmail-readonly.pickle). This mirrors
+# google_auth._scope_key for the default-account readonly case only.
+_DEFAULT_READONLY_TOKEN = Path("~/.config/google-tokens/gmail-readonly.pickle").expanduser()
+
+
+def _default_readonly_identity():
+    """Return the default account's readonly Gmail identity, or None.
+
+    Used to anchor the cross-scope guard when nothing has been cached yet (a
+    send-first default call). Reads the existing readonly token WITHOUT triggering
+    an interactive OAuth flow: if the token file is absent we have no anchor and
+    return None (the guard then proceeds rather than blocking). Caches the result
+    so this costs one getProfile at most.
+    """
+    if not _DEFAULT_READONLY_TOKEN.exists():
+        return None
+    try:
+        import pickle
+        from googleapiclient.discovery import build
+        with open(_DEFAULT_READONLY_TOKEN, "rb") as f:
+            creds = pickle.load(f)
+        if not creds or not getattr(creds, "valid", False):
+            return None
+        svc = build("gmail", "v1", credentials=creds)
+        email = svc.users().getProfile(userId="me").execute().get("emailAddress")
+    except Exception:
+        return None
+    if email:
+        _store_verified_email(None, email, "gmail-readonly")
+    return email
 
 
 def _strip_html(html_text):
@@ -1131,7 +1181,7 @@ def _authenticated_service(args, scope, email_override=None, handle_show_account
     # stays true; cache it and skip the round-trip on subsequent calls. Force a
     # fresh check with --verify-account (or first sight of a token).
     force_verify = getattr(args, "verify_account", False)
-    cached_email = None if force_verify else _load_verified_email(token_name)
+    cached_email = None if force_verify else _load_verified_email(token_name, scope)
     if cached_email is not None:
         actual_email = cached_email
     else:
@@ -1152,12 +1202,39 @@ def _authenticated_service(args, scope, email_override=None, handle_show_account
         print(f"   Run: python3 ~/mise/py/setup_google_auth.py {login_hint}", file=sys.stderr)
         # A stale cache entry could in principle be wrong; clear it so the next
         # call re-verifies from scratch rather than trusting a bad mapping.
-        _store_verified_email(token_name, actual_email)
+        _store_verified_email(token_name, actual_email, scope)
         sys.exit(1)
+
+    # Default-account cross-scope guard. The default account has no login_hint, so
+    # the check above can't fire. But its readonly and send tokens are separate
+    # pickle files that may be authorized under DIFFERENT identities (e.g. the
+    # send token minted while the browser was logged into hackNY). Reading from
+    # one mailbox then composing from another silently searches/sends the wrong
+    # account. Anchor on the readonly identity and refuse a divergent send token.
+    if token_name is None and actual_email:
+        reference = _load_verified_email(None, "gmail-readonly")
+        # Cold-cache send-first path: no readonly identity has been recorded yet
+        # (e.g. `m reply` is the very first default-account call). Establish the
+        # anchor on demand from the readonly token so the guard still fires; skip
+        # only if there is no readonly token to compare against.
+        if not reference and scope != "gmail-readonly":
+            reference = _default_readonly_identity()
+        if (reference and scope != "gmail-readonly"
+                and reference.lower() != actual_email.lower()):
+            print(f"🛑 Default-account token mismatch!", file=sys.stderr)
+            print(f"   You read as:      {reference}", file=sys.stderr)
+            print(f"   But the {scope} token is for: {actual_email}", file=sys.stderr)
+            print(f"", file=sys.stderr)
+            print(f"   The default send token was authorized under the wrong Gmail", file=sys.stderr)
+            print(f"   identity, so composing/replying would use {actual_email}, not", file=sys.stderr)
+            print(f"   {reference}. Re-mint the default send token logged in as {reference}:", file=sys.stderr)
+            print(f"   Run: python3 ~/mise/py/gmail-remint-default-send.py {reference}", file=sys.stderr)
+            _store_verified_email(token_name, actual_email, scope)
+            sys.exit(1)
 
     # Record the verified pairing only after the match check passes.
     if cached_email is None:
-        _store_verified_email(token_name, actual_email)
+        _store_verified_email(token_name, actual_email, scope)
 
     return service, login_hint
 
@@ -2960,7 +3037,40 @@ def _build_raw_bytes(args, from_addr=None):
         cc = _assert_valid_header_addrs(_resolve_address_list(args.cc), "Cc")
         bcc = _assert_valid_header_addrs(_resolve_address_list(args.bcc), "Bcc")
         if sys.stdin.isatty():
-            body = get_body_interactive(args.recipient, args.subject)
+            # Open the same header+body editor reply/fwd use, so a bare
+            # `m <acct> send addr` lets the user fill in Subject (and edit
+            # To/Cc/From) inline rather than dropping into a body-only buffer
+            # with no Subject line.
+            initial_headers = {
+                "From": from_addr or "",
+                "To": args.recipient,
+                "Cc": cc,
+                "Subject": args.subject or "",
+            }
+            final_headers, body, new_account_info = edit_headers_and_body(
+                initial_headers, "", from_addr or ""
+            )
+            args.recipient = _assert_valid_header_addrs(
+                resolve_recipient(final_headers.get("To", args.recipient)), "To")
+            cc = _assert_valid_header_addrs(
+                _resolve_address_list(final_headers.get("Cc", "")), "Cc")
+            args.subject = final_headers.get("Subject", args.subject)
+            if not body.strip():
+                print("Empty body, aborting.", file=sys.stderr)
+                sys.exit(1)
+            # A From: change would require re-authenticating as the new
+            # outbox before send. do_send here uses the already-chosen
+            # service, so silently honoring an edited From: would compose as
+            # one account and send via another. Refuse loudly instead and
+            # point at the supported outbox mechanism.
+            if new_account_info:
+                print("From: was changed in the editor, but plain `send` cannot",
+                      file=sys.stderr)
+                print("switch outboxes mid-compose. Re-run with the account you want:",
+                      file=sys.stderr)
+                print(f"   m {final_headers.get('From', '')} send {args.recipient}",
+                      file=sys.stderr)
+                sys.exit(1)
         else:
             body = sys.stdin.read()
         raw_bytes = build_mime_message(

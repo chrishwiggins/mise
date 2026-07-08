@@ -1501,6 +1501,26 @@ direct_send() {
             _assert_smtp_capable "$muttrc" "${account:-default}" || return 1
         fi
 
+        # ------------------------------------------------------------------
+        # Subject prompt for bare compose sends (e.g. the `momo`/`mail`
+        # aliases: `m g send <addr>` with no -s). Without this you land
+        # straight in neomutt's editor with an empty Subject header. Ask for
+        # the subject at the shell first, then pass it through as -s so it is
+        # pre-filled. Guards:
+        #   - only when no -s was given ($subject empty)
+        #   - only interactively (stdin is a tty); piped/scripted sends skip
+        #   - not on dry-run
+        # Empty input just falls through (neomutt's abort_nosubject still
+        # applies), so hitting Return changes nothing about the old flow.
+        local -a subject_args=()
+        if [[ -n "$subject" ]]; then
+            subject_args=(-s "$subject")
+        elif (( ! dry_run )) && [[ -t 0 && -t 2 ]]; then
+            local _prompt_subject=""
+            read -r -e -p "Subject: " _prompt_subject </dev/tty
+            [[ -n "$_prompt_subject" ]] && subject_args=(-s "$_prompt_subject")
+        fi
+
         # Check if we have any recipients (arguments containing @)
         local has_recipients=0
         for arg in "${args[@]}"; do
@@ -1512,20 +1532,20 @@ direct_send() {
 
         if (( ! has_recipients )); then
             if (( dry_run )); then
-                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${args[*]} ${attach_args[*]+${attach_args[*]}}"
+                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${subject_args[*]+${subject_args[*]}} ${args[*]} ${attach_args[*]+${attach_args[*]}}"
                 return 0
             fi
             # No recipients found, use neomutt in compose mode (user will enter recipient)
             echo "m: ${account:-default} via SMTP" >&2
-            neomutt -e 'unset record' -F "$muttrc" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
+            neomutt -e 'unset record' -F "$muttrc" "${subject_args[@]+"${subject_args[@]}"}" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
         else
             # Send single email with all arguments (neomutt handles comma-separated recipients)
             if (( dry_run )); then
-                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${args[*]} ${attach_args[*]+${attach_args[*]}}"
+                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${subject_args[*]+${subject_args[*]}} ${args[*]} ${attach_args[*]+${attach_args[*]}}"
                 return 0
             fi
             echo "m: ${account:-default} via SMTP" >&2
-            neomutt -e 'unset record' -F "$muttrc" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
+            neomutt -e 'unset record' -F "$muttrc" "${subject_args[@]+"${subject_args[@]}"}" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
         fi
     fi
 }
