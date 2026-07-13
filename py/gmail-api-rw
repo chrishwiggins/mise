@@ -1000,6 +1000,50 @@ def _clean_unicode_noise(text):
 
     return cleaned
 
+def extract_html_bodies(raw_bytes):
+    """Return the decoded text/html parts of a message, as a list of strings.
+
+    Companion to extract_text_body(). That function is for READING: it runs the
+    HTML through _strip_html(), which deletes every tag, so a link's href is
+    thrown away and only the anchor text ("Access Your Account") survives. For
+    URL extraction we need the markup itself, because in an HTML-only mail the
+    URLs live exclusively in href/src attributes and appear nowhere in the
+    rendered text. Returns [] if there is no HTML part.
+    """
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    parts = msg.walk() if msg.is_multipart() else [msg]
+    bodies = []
+    for part in parts:
+        if part.get_content_type() != "text/html":
+            continue
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        charset = part.get_content_charset() or "utf-8"
+        bodies.append(payload.decode(charset, errors="replace"))
+    return bodies
+
+
+def extract_urls_from_html(html_text):
+    """Pull link targets out of raw HTML: href= and src= attribute values.
+
+    Handles the quirks real mail throws at us: quoted or bare attribute values,
+    and whitespace around the '=' (SendGrid et al. emit `<a href =3D "http...">`,
+    which after quoted-printable decoding is `<a href = "http...">`).
+    """
+    import re
+    urls = []
+    attr_re = re.compile(
+        r'(?:href|src)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))',
+        re.IGNORECASE,
+    )
+    for m in attr_re.finditer(html_text):
+        val = (m.group(1) or m.group(2) or m.group(3) or "").strip()
+        if val.lower().startswith(("http://", "https://")):
+            urls.append(val)
+    return urls
+
+
 def extract_text_body(raw_bytes):
     """Extract text/plain body from raw email bytes, falling back to stripped HTML."""
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
@@ -2713,6 +2757,16 @@ def do_urls(service, index, count, query, account=None, url_index=None):
     # Find URLs using regex - matches http(s) URLs
     url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
     urls = re.findall(url_pattern, text_body)
+
+    # Also mine the raw HTML for href/src targets. extract_text_body() strips
+    # every tag, so in an HTML-only mail (a bare text/html part, no text/plain
+    # alternative) the link target is deleted along with the <a> tag and only
+    # the anchor text survives. Those messages used to report "No URLs found"
+    # even though the body was nothing but a link. Text URLs come first so the
+    # menu numbering stays stable for mail that prints its links as plain text.
+    for html_body in extract_html_bodies(raw_bytes):
+        html_body = heavy['html_mod'].unescape(html_body)
+        urls.extend(extract_urls_from_html(html_body))
 
     if not urls:
         print("No URLs found in message", file=sys.stderr)
