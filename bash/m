@@ -1181,6 +1181,14 @@ _attachment_prompt() {
 # compose mode, it auto-builds a .eml from stdin and ships via API.
 # Handles file sending, attachment processing, and backend routing
 
+# With edit_headers set, neomutt's compose buffer is a 9-line header block
+# (From/To/Cc/Bcc/Reply-To/Subject/...) followed by a blank line, so the body
+# starts on line 10. Land the cursor there in insert mode so composing takes
+# zero keystrokes. cursor() clamps to the last line on short buffers, and
+# startinsert is a no-op if the buffer is empty. gmail-smtp-w does the same;
+# direct_send calls neomutt directly (no wrapper), so it needs its own copy.
+M_NEOMUTT_EDITOR="set editor=\"vim -c 'call cursor(10,1)' -c startinsert\""
+
 direct_send() {
     local -a send_args=("$@")
 
@@ -1322,7 +1330,7 @@ direct_send() {
                     if _is_api_only "$muttrc"; then
                         echo "DRY-RUN: gmail-api-rw ${account:+-e $account} send --via-send -H $abspath ${attach_args[*]+${attach_args[*]}}"
                     else
-                        echo "DRY-RUN: echo | neomutt -e 'unset record' -F $muttrc -H $abspath ${attach_args[*]+${attach_args[*]}}"
+                        echo "DRY-RUN: echo | neomutt -e 'unset record' -e '$M_NEOMUTT_EDITOR' -F $muttrc -H $abspath ${attach_args[*]+${attach_args[*]}}"
                     fi
                 elif _is_api_only "$muttrc"; then
                     echo "m: ${account:-default} via gmail API" >&2
@@ -1331,7 +1339,7 @@ direct_send() {
                     _assert_smtp_capable "$muttrc" "${account:-default}" || return 1
                     echo "m: ${account:-default} via SMTP" >&2
                     # Direct neomutt call - optimize by removing process hop
-                    echo | neomutt -e 'unset record' -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
+                    echo | neomutt -e 'unset record' -e "$M_NEOMUTT_EDITOR" -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
                 fi
 
                 if (( send_rc != 0 )); then
@@ -1532,20 +1540,20 @@ direct_send() {
 
         if (( ! has_recipients )); then
             if (( dry_run )); then
-                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${subject_args[*]+${subject_args[*]}} ${args[*]} ${attach_args[*]+${attach_args[*]}}"
+                echo "DRY-RUN: neomutt -e 'unset record' -e '$M_NEOMUTT_EDITOR' -F $muttrc ${subject_args[*]+${subject_args[*]}} ${args[*]} ${attach_args[*]+${attach_args[*]}}"
                 return 0
             fi
             # No recipients found, use neomutt in compose mode (user will enter recipient)
             echo "m: ${account:-default} via SMTP" >&2
-            neomutt -e 'unset record' -F "$muttrc" "${subject_args[@]+"${subject_args[@]}"}" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
+            neomutt -e 'unset record' -e "$M_NEOMUTT_EDITOR" -F "$muttrc" "${subject_args[@]+"${subject_args[@]}"}" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
         else
             # Send single email with all arguments (neomutt handles comma-separated recipients)
             if (( dry_run )); then
-                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${subject_args[*]+${subject_args[*]}} ${args[*]} ${attach_args[*]+${attach_args[*]}}"
+                echo "DRY-RUN: neomutt -e 'unset record' -e '$M_NEOMUTT_EDITOR' -F $muttrc ${subject_args[*]+${subject_args[*]}} ${args[*]} ${attach_args[*]+${attach_args[*]}}"
                 return 0
             fi
             echo "m: ${account:-default} via SMTP" >&2
-            neomutt -e 'unset record' -F "$muttrc" "${subject_args[@]+"${subject_args[@]}"}" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
+            neomutt -e 'unset record' -e "$M_NEOMUTT_EDITOR" -F "$muttrc" "${subject_args[@]+"${subject_args[@]}"}" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
         fi
     fi
 }
