@@ -283,8 +283,13 @@ load_mail_config
 _lookup_muttrc() {
     local needle="$1"
 
-    # Check if we have this account in our loaded config
-    if [[ -n "${EMAILS[$needle]}" ]]; then
+    # Check if we have this account in our loaded config.
+    # The :- default is load-bearing under `set -u`: callers pass a gmail_flag
+    # (e.g. "lake"), not necessarily an EMAILS key (the keys are the short
+    # aliases from accounts.json: g j u l h z ...). An unguarded EMAILS[$needle]
+    # aborts the whole script on any non-alias needle instead of falling through
+    # to the partial match below. Keep the :-.
+    if [[ -n "${EMAILS[$needle]:-}" ]]; then
         # Direct alias match - extract muttrc from JSON config
         jq -r ".accounts.\"$needle\".muttrc // empty" "$MAIL_TOOLS_CONFIG" 2>/dev/null
         return
