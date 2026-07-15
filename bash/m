@@ -4,6 +4,21 @@
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 AUX_DIR="$(dirname "$SCRIPT_DIR")/aux/m"
 
+# Terminal width for the backend. The backend pipes its own stdout on some
+# paths (paging cache), so os.get_terminal_size() fails there and it would
+# truncate subjects at 80 cols. Read the real width from the controlling tty
+# and export COLUMNS so the backend can honor it even when piped. tcsh does
+# not export COLUMNS to children, so we derive it here.
+if [[ -z "${COLUMNS:-}" || ! "${COLUMNS:-}" =~ ^[0-9]+$ ]]; then
+    _m_cols=""
+    if [[ -r /dev/tty ]]; then
+        _m_cols="$(tput cols </dev/tty 2>/dev/null)"
+        [[ "$_m_cols" =~ ^[0-9]+$ ]] || _m_cols="$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)"
+    fi
+    [[ "$_m_cols" =~ ^[0-9]+$ ]] && export COLUMNS="$_m_cols"
+    unset _m_cols
+fi
+
 # ============================================================================
 # m — multi-account email dispatcher (bash frontend)
 # ============================================================================
