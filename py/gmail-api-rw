@@ -3237,7 +3237,7 @@ def parse_send_draft_args(argv):
     parser.add_argument("-Q", "--show-account", action="store_true", help="Show active account and exit")
     parser.add_argument("-t", "--text", action="store_true",
                         help="Preview the built message without sending")
-    parser.add_argument("--done", action="store_true",
+    parser.add_argument("-d", "--done", action="store_true",
                         help="Copy /sent <path> to clipboard after sending (for Claude /sent skill)")
     parser.add_argument("--draft-id", default=None,
                         help="Send an existing draft by ID (for scheduled sends)")
