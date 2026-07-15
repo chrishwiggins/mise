@@ -520,12 +520,43 @@ def parse_recipient(to_header):
     return first
 
 
+def _detect_term_width(default=80):
+    """Best-effort terminal width.
+
+    os.get_terminal_size() only works when a real TTY is attached. When the
+    caller pipes our stdout (as the bash front-end does for the paging cache),
+    it raises OSError and we would otherwise fall back to a narrow 80 columns,
+    truncating subjects with an ellipsis. Honor the COLUMNS env var (the bash
+    front-end exports the real width even when it pipes) before defaulting.
+    """
+    try:
+        cols = os.get_terminal_size().columns
+        if cols and cols > 0:
+            return cols
+    except OSError:
+        pass
+    env_cols = os.environ.get("COLUMNS")
+    if env_cols:
+        try:
+            n = int(env_cols)
+            if n > 0:
+                return n
+        except ValueError:
+            pass
+    return default
+
+
 def parse_date(date_header):
     """Parse email Date header to DoW YYYY-MM-DD HH:MM string."""
     if not date_header:
         return "                    "
     try:
         dt = parsedate_to_datetime(date_header)
+        # Header carries the sender's timezone; convert to local wall-clock so
+        # the displayed time matches Gmail's web UI. Aware datetimes convert via
+        # astimezone(); naive ones (no offset in header) are left as-is.
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
         dow = dt.strftime("%a")  # Mon, Tue, Wed, etc.
         return dt.strftime(f"{dow} %Y-%m-%d %H:%M")
     except Exception:
@@ -630,6 +661,8 @@ def generate_filename(raw_bytes):
     if date_hdr:
         try:
             dt = parsedate_to_datetime(date_hdr)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
             date_str = dt.strftime("%Y-%m-%d")
         except Exception:
             pass
@@ -1784,18 +1817,19 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
     # Cache message IDs for !! workflow safety
     _cache_message_ids(messages, count, query, account=account)
 
-    try:
-        term_width = os.get_terminal_size().columns
-    except OSError:
-        term_width = 80
+    term_width = _detect_term_width()
 
     # Batch-fetch metadata for all messages (1 HTTP round-trip instead of N)
     fetched = [None] * len(messages)
+    fetch_errors = [None] * len(messages)
+    meta_headers = ["From", "To", "Subject", "Date"] if sent else ["From", "Subject", "Date"]
 
     def _make_callback(idx):
         def _cb(req_id, response, exception):
             if exception is None:
                 fetched[idx] = response
+            else:
+                fetch_errors[idx] = exception
         return _cb
 
     batch = service.new_batch_http_request()
@@ -1805,11 +1839,28 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
                 userId="me",
                 id=msg_stub["id"],
                 format="metadata",
-                metadataHeaders=["From", "To", "Subject", "Date"] if sent else ["From", "Subject", "Date"],
+                metadataHeaders=meta_headers,
             ),
             callback=_make_callback(i),
         )
     batch.execute()
+
+    # Batch gets can intermittently fail a single sub-request (Gmail 500s under
+    # load) while the rest succeed, leaving a lone "(fetch error)" row. Retry
+    # just the failed slots once, individually, so a transient blip self-heals.
+    for idx, msg in enumerate(fetched):
+        if msg is not None:
+            continue
+        try:
+            fetched[idx] = service.users().messages().get(
+                userId="me",
+                id=messages[idx]["id"],
+                format="metadata",
+                metadataHeaders=meta_headers,
+            ).execute()
+            fetch_errors[idx] = None
+        except Exception as e:
+            fetch_errors[idx] = e
 
     # --json: structured output for TUI/scripting consumers
     if json_output:
@@ -1875,6 +1926,9 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
     for i, msg in enumerate(fetched, 1):
         if msg is None:
             emit(f"{i:>{idx_width}}.  (fetch error)")
+            err = fetch_errors[i - 1]
+            if err is not None:
+                print(f"  row {i}: fetch failed: {err}", file=sys.stderr)
             continue
 
         headers = msg.get("payload", {}).get("headers", [])
