@@ -55,4 +55,8 @@ HELP
 fi
 
 # Simple passthrough to neomutt - NO TEMPLATE OVERWRITING
-exec neomutt -e 'unset record' -F "$MUTTRC" "$@"
+# Open vim on line 10 (first body line below edit_headers block) in insert mode
+# so composing starts with zero keystrokes; cursor() clamps on short buffers.
+exec neomutt -e 'unset record' \
+    -e "set editor=\"vim -c 'call cursor(10,1)' -c startinsert\"" \
+    -F "$MUTTRC" "$@"
