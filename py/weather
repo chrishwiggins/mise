@@ -1,5 +1,7 @@
 #!/usr/bin/python3
 
+import os
+
 import requests
 from datetime import datetime
 import argparse
@@ -73,6 +75,103 @@ def format_uv_index(uv_index):
         level = "Extreme"
 
     return f"UV: {uv_val} ({level})"
+
+
+def get_minutely_tomorrow(latitude, longitude, api_key, use_celsius=False):
+    """15-min rows from Tomorrow.io Timelines API (requires API key).
+
+    Returns a list of (label, temp, prob, amount) tuples or None on any
+    failure, which triggers the Open-Meteo fallback. Labels are in the
+    terminal's local timezone (Tomorrow.io timestamps are UTC)."""
+    params = {
+        "location": f"{latitude},{longitude}",
+        "fields": "temperature,precipitationProbability",
+        "timesteps": "15m",
+        "startTime": "now",
+        "endTime": "nowPlus3h",
+        "units": "metric" if use_celsius else "imperial",
+        "apikey": api_key,
+    }
+    try:
+        response = requests.get(
+            "https://api.tomorrow.io/v4/timelines", params=params, timeout=10
+        )
+        if response.status_code != 200:
+            return None
+        intervals = response.json()["data"]["timelines"][0]["intervals"]
+    except (requests.RequestException, ValueError, KeyError, IndexError):
+        return None
+    rows = []
+    for interval in intervals[:12]:
+        start = interval["startTime"].replace("Z", "+00:00")
+        label = datetime.fromisoformat(start).astimezone().strftime("%H:%M")
+        values = interval["values"]
+        rows.append(
+            (
+                label,
+                values.get("temperature"),
+                values.get("precipitationProbability"),
+                None,
+            )
+        )
+    return rows
+
+
+def get_minutely_openmeteo(latitude, longitude, use_celsius=False):
+    """15-min rows from Open-Meteo (keyless).
+
+    Temperature and precipitation amount are native 15-min (HRRR in North
+    America); rain probability only exists hourly, so each hour's value is
+    repeated across its four slots. Labels are location-local via
+    timezone=auto."""
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "minutely_15": "temperature_2m,precipitation",
+        "hourly": "precipitation_probability",
+        "forecast_minutely_15": 12,
+        "forecast_hours": 4,
+        "temperature_unit": "celsius" if use_celsius else "fahrenheit",
+        "timezone": "auto",
+    }
+    if not use_celsius:
+        params["precipitation_unit"] = "inch"
+    try:
+        response = requests.get(
+            "https://api.open-meteo.com/v1/forecast", params=params, timeout=10
+        )
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        minutely = data["minutely_15"]
+    except (requests.RequestException, ValueError, KeyError):
+        return None
+    hourly = data.get("hourly", {})
+    prob_by_hour = dict(
+        zip(
+            (t[:13] for t in hourly.get("time", [])),
+            hourly.get("precipitation_probability", []),
+        )
+    )
+    rows = []
+    for t, temp, amount in zip(
+        minutely["time"], minutely["temperature_2m"], minutely["precipitation"]
+    ):
+        rows.append((t[11:16], temp, prob_by_hour.get(t[:13]), amount))
+    return rows
+
+
+def print_minutely_forecast(rows, use_celsius=False):
+    if not rows:
+        print("15-min forecast unavailable")
+        return
+    temp_unit = "°C" if use_celsius else "°F"
+    precip_unit = "mm" if use_celsius else "in"
+    for label, temp, prob, amount in rows:
+        temp_str = format_temperature(int(round(temp))) if temp is not None else "N/A"
+        prob_str = format_precipitation(int(round(prob)) if prob is not None else None)
+        suffix = f" {amount}{precip_unit}" if amount else ""
+        print(f"{label} {temp_str}{temp_unit} {prob_str}%{suffix}")
 
 
 def get_day_of_week(date_str):
@@ -176,13 +275,29 @@ def main():
         type=str,
     )
     parser.add_argument(
-        "-d", "--days", help="Number of days to forecast", default=10, type=int
+        "-d",
+        "--days",
+        help="Number of days to forecast (default 10)",
+        default=None,
+        type=int,
     )
     parser.add_argument(
         "-k", "--apikey", help="OpenCage API key", default=None, type=str
     )
     parser.add_argument(
         "-c", "--celsius", help="Display temperature in Celsius", action="store_true"
+    )
+    parser.add_argument(
+        "-m",
+        "--minutely",
+        help="Show 15-minute rain/temperature table for the next 3 hours",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--tkey",
+        help="Tomorrow.io API key (default: TOMORROW_API_KEY env var)",
+        default=None,
+        type=str,
     )
     args = parser.parse_args()
 
@@ -204,7 +319,12 @@ def main():
     point_data = get_point_data(latitude, longitude)
 
     temp_unit = "°C" if args.celsius else "°F"
-    current = get_current_temp(point_data, args.celsius)
+    # NWS is US-only; point_data lacks "properties" elsewhere
+    current = (
+        get_current_temp(point_data, args.celsius)
+        if "properties" in point_data
+        else None
+    )
 
     # Build current conditions output
     current_output = []
@@ -218,8 +338,23 @@ def main():
     if current_output:
         print(" ; ".join(current_output))
 
-    weather_forecast = get_weather_forecast(point_data)
-    print_daily_forecast(weather_forecast, args.days, args.celsius)
+    if args.minutely:
+        tkey = args.tkey or os.environ.get("TOMORROW_API_KEY")
+        rows = (
+            get_minutely_tomorrow(latitude, longitude, tkey, args.celsius)
+            if tkey
+            else None
+        )
+        rows = rows or get_minutely_openmeteo(latitude, longitude, args.celsius)
+        print_minutely_forecast(rows, args.celsius)
+
+    if not args.minutely or args.days is not None:
+        days = args.days if args.days is not None else 10
+        if "properties" in point_data:
+            weather_forecast = get_weather_forecast(point_data)
+            print_daily_forecast(weather_forecast, days, args.celsius)
+        else:
+            print("Forecast data is not available.")
 
 
 if __name__ == "__main__":
