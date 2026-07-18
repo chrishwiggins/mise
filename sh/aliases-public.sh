@@ -52,8 +52,8 @@ alias pbdate 'datestr| pbcopy'
 alias dstr 'setenv dstr `datestr`'
 
 
-alias dump "learn;pbpaste > `datestr`"
-alias mdump "learn;pbpaste > `datestr`.eml;pbmunpack;mv mail-dump `datestr`-files"
+alias dump 'pbpaste > `datestr`'
+alias mdump 'set _ds=`datestr`; pbpaste > $_ds.eml; pbmunpack; mv mail-dump $_ds-files'
 alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Resources/jsc
 alias dusort "learn;date;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`;date"
 alias rstudio open /Applications/RStudio.app/
