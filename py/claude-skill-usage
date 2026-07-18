@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+"""claude-skill-usage - analyze Claude Code slash-command, skill, and hook usage.
+
+Reads ~/.claude/history.jsonl (typed prompts), ~/.claude/settings*.json (hook
+wiring), and ~/.claude/hooks/ file mtimes, then writes a self-contained HTML
+report. Pure analysis: no Claude / LLM at runtime, fully deterministic and
+re-runnable.
+
+Usage:
+    claude-skill-usage                      # write /tmp/hot.htm
+    claude-skill-usage -o ~/report.html     # custom output
+    claude-skill-usage --open               # write and open in browser
+    claude-skill-usage --top 25             # show top N commands
+    claude-skill-usage --days 14            # "hottest" window (default 30)
+    claude-skill-usage --json               # dump raw data as JSON, no HTML
+
+Caveat: history.jsonl records what you *typed*. Skills auto-invoked by the model
+(description match, not a /name) are not counted here.
+"""
+import argparse
+import collections
+import datetime
+import html
+import json
+import os
+import re
+import subprocess
+import sys
+
+CLAUDE = os.path.expanduser("~/.claude")
+
+# Built-in CLI commands and obvious typos/path-fragments to exclude from the
+# "your custom commands" ranking.
+BUILTIN = {
+    "exit", "compact", "context", "model", "clear", "help", "config", "resume",
+    "init", "review", "status", "cost", "login", "logout", "memory", "quit",
+    "usage", "effort", "plugin", "plugins", "export", "play", "rate-limit-options",
+    "extra-usage", "install-github-app", "reload-plugins", "tasks", "tokens",
+    "mobile", "chrome", "upgrade", "settings", "schedule", "whatsnext", "passes",
+    "done", "raw", "fix", "send", "vim", "terminal-setup", "bug", "pr-comments",
+    "pr_comments", "release-notes", "add-dir", "agents", "mcp", "doctor",
+    "permissions", "hooks", "ide", "fast", "websearch",
+}
+# Path fragments that leak in when a prompt starts with an absolute path.
+PATH_JUNK = {"Users", "tmp", "private", "opt", "YYYY-MM-DD", "Test", "th", "exut"}
+
+# Descriptions are read live from the source-of-truth files: a command's
+# ~/.claude/commands/<cmd>.md or a skill's ~/.claude/skills/<cmd>/SKILL.md.
+# Both may carry a YAML `description:` in frontmatter; failing that we fall back
+# to the first `# H1` title or first prose line. Results are cached per run.
+_DESC_CACHE = {}
+
+
+def _extract_desc(path):
+    """Pull a one-line description from a command/skill markdown file."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return ""
+    # YAML frontmatter description: (quoted or bare, possibly multi-word).
+    fm = re.match(r"^---\s*\n(.*?)\n---", text, re.S)
+    if fm:
+        m = re.search(r'^description:\s*["\']?(.+?)["\']?\s*$',
+                      fm.group(1), re.M)
+        if m:
+            return m.group(1).strip()
+        body = text[fm.end():]
+    else:
+        body = text
+    # Fall back to the first H1 title.
+    m = re.search(r"^#\s+(.+?)\s*$", body, re.M)
+    if m:
+        return m.group(1).strip()
+    # Last resort: first non-blank prose line.
+    for line in body.splitlines():
+        line = line.strip()
+        if line and not line.startswith(("#", "-", "*", ">")):
+            return line
+    return ""
+
+
+def describe(cmd):
+    """One-line description for a command/skill name, '' if unknown."""
+    if cmd in _DESC_CACHE:
+        return _DESC_CACHE[cmd]
+    candidates = [
+        os.path.join(CLAUDE, "commands", f"{cmd}.md"),
+        os.path.join(CLAUDE, "skills", cmd, "SKILL.md"),
+    ]
+    desc = ""
+    for path in candidates:
+        if os.path.exists(path):
+            desc = _extract_desc(path)
+            if desc:
+                break
+    # Trim over-long titles so the chart label stays readable.
+    if len(desc) > 60:
+        desc = desc[:57].rstrip() + "..."
+    _DESC_CACHE[cmd] = desc
+    return desc
+
+# Classify hooks for the report. Substring match on the script name.
+HOOK_KIND = [
+    ("email", "safety"), ("eml", "safety"), ("public-repo", "safety"),
+    ("home-dir", "safety"), ("send", "safety"),
+    ("llm-tells", "style"), ("markdown-bold", "style"), ("finds-you-well", "style"),
+    ("rtk", "style"),
+]
+
+
+def load_history():
+    """Yield (timestamp_seconds, raw_display) for each prompt in history.jsonl."""
+    path = os.path.join(CLAUDE, "history.jsonl")
+    if not os.path.exists(path):
+        sys.exit(f"no history file at {path}")
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            yield d.get("timestamp", 0) / 1000.0, d.get("display", "").strip()
+
+
+def analyze(days):
+    rows = []          # (ts, cmd) for every slash command
+    first = last = None
+    total = slash = 0
+    for ts, disp in load_history():
+        total += 1
+        if ts:
+            first = ts if first is None else min(first, ts)
+            last = ts if last is None else max(last, ts)
+        m = re.match(r"^/([A-Za-z0-9_:-]+)", disp)
+        if m:
+            slash += 1
+            rows.append((ts, m.group(1)))
+
+    counts = collections.Counter(c for _, c in rows)
+    custom = {c: n for c, n in counts.items()
+              if c not in BUILTIN and c not in PATH_JUNK}
+
+    firstd, lastd = {}, {}
+    for ts, c in rows:
+        if c not in firstd or ts < firstd[c]:
+            firstd[c] = ts
+        if c not in lastd or ts > lastd[c]:
+            lastd[c] = ts
+
+    cutoff = (last or 0) - days * 86400
+    recent = collections.Counter(
+        c for ts, c in rows
+        if ts >= cutoff and c not in BUILTIN and c not in PATH_JUNK)
+
+    def dd(ts):
+        return datetime.date.fromtimestamp(ts).isoformat() if ts else "?"
+
+    top = sorted(custom.items(), key=lambda x: -x[1])
+    return {
+        "span": [dd(first), dd(last)],
+        "total": total, "slash": slash,
+        "distinct": len(custom), "customtotal": sum(custom.values()),
+        "days": days,
+        "top": [{"cmd": c, "n": n, "first": dd(firstd[c]),
+                 "last": dd(lastd[c]), "desc": describe(c)} for c, n in top],
+        "recent": [{"cmd": c, "n": n} for c, n in recent.most_common(15)],
+        "hooks": analyze_hooks(),
+    }
+
+
+def wired_hooks():
+    """Return set of hook script basenames referenced in settings*.json."""
+    wired = {}
+    for fn in ("settings.json", "settings.local.json"):
+        path = os.path.join(CLAUDE, fn)
+        if not os.path.exists(path):
+            continue
+        try:
+            s = json.load(open(path))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for event, arr in s.get("hooks", {}).items():
+            for entry in arr:
+                for hook in entry.get("hooks", []):
+                    cmd = hook.get("command", "")
+                    for name in re.findall(r"([\w-]+\.(?:sh|py))", cmd):
+                        wired.setdefault(name, set()).add(event)
+    return {k: ", ".join(sorted(v)) for k, v in wired.items()}
+
+
+def analyze_hooks():
+    hdir = os.path.join(CLAUDE, "hooks")
+    if not os.path.isdir(hdir):
+        return []
+    wired = wired_hooks()
+    out = []
+    for name in os.listdir(hdir):
+        if not name.endswith((".sh", ".py")):
+            continue
+        mtime = os.path.getmtime(os.path.join(hdir, name))
+        kind = "other"
+        for frag, k in HOOK_KIND:
+            if frag in name:
+                kind = k
+                break
+        out.append({
+            "name": name,
+            "mtime": datetime.date.fromtimestamp(mtime).isoformat(),
+            "kind": kind,
+            "event": wired.get(name, ""),
+            "wired": name in wired,
+        })
+    out.sort(key=lambda h: h["mtime"], reverse=True)
+    return out
+
+
+# --- HTML template; data is injected as a JSON blob, rendered client-side. -----
+TEMPLATE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skills &amp; Hooks Usage</title>
+<style>
+  :root{--bg:#0e1116;--panel:#161b22;--panel2:#1c222b;--line:#2a323d;--ink:#e6edf3;
+    --dim:#8b949e;--accent:#58a6ff;--hot:#ff7b54;--bar:#3b6ea5;--safe:#d29922;--good:#3fb950}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1040px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:30px;margin:0 0 4px;letter-spacing:-.4px}
+  .sub{color:var(--dim);margin:0 0 28px;font-size:14px}
+  .stats{display:flex;flex-wrap:wrap;gap:14px;margin:0 0 36px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 20px;flex:1;min-width:150px}
+  .stat .num{font-size:26px;font-weight:700;letter-spacing:-.5px}
+  .stat .lbl{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+  h2{font-size:18px;margin:38px 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  .note{color:var(--dim);font-size:13px;margin:-6px 0 18px}
+  .row{display:grid;grid-template-columns:170px 1fr 56px;align-items:center;gap:12px;margin:5px 0}
+  .row .nm{font-family:ui-monospace,Menlo,monospace;font-size:13px;text-align:right}
+  .row .nm small{display:block;color:var(--dim);font-size:10px}
+  .track{background:var(--panel2);border-radius:5px;height:22px;overflow:hidden}
+  .fill{height:100%;background:linear-gradient(90deg,var(--bar),#4a82c4);border-radius:5px;
+    transform-origin:left;animation:grow .9s cubic-bezier(.2,.8,.2,1) both}
+  .fill.hotbar{background:linear-gradient(90deg,#c2502f,var(--hot))}
+  .row .v{font-variant-numeric:tabular-nums;color:var(--dim);font-size:13px;text-align:right}
+  @keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:32px}
+  @media(max-width:760px){.cols{grid-template-columns:1fr}.row{grid-template-columns:120px 1fr 44px}}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.5px}
+  td.mono{font-family:ui-monospace,Menlo,monospace}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600}
+  .tag.style{background:#3a2a10;color:var(--safe)}
+  .tag.safety{background:#3a1414;color:#ff7b6b}
+  .tag.other{background:#1c2a1c;color:var(--good)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+  .dot.on{background:var(--good)}.dot.off{background:#555}
+  footer{color:var(--dim);font-size:12px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+</style></head><body><div class="wrap">
+  <h1>Skills &amp; Hooks Usage</h1>
+  <p class="sub" id="span"></p>
+  <div class="stats" id="stats"></div>
+  <div class="cols">
+    <div><h2>Most used &mdash; all time</h2>
+      <p class="note" id="alltime-note"></p><div id="alltime"></div></div>
+    <div><h2>Hottest now</h2>
+      <p class="note" id="recent-note"></p><div id="recent"></div></div>
+  </div>
+  <h2>Hooks &mdash; what's live</h2>
+  <p class="note" id="hooks-note"></p>
+  <table id="hooks"><thead><tr><th>Hook</th><th>Last edited</th><th>Kind</th>
+    <th>Event</th><th>Active</th></tr></thead><tbody></tbody></table>
+  <footer id="foot"></footer>
+</div>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+const D=JSON.parse(document.getElementById('data').textContent);
+document.getElementById('span').textContent=
+  `Typed-command history, ${D.span[0]} → ${D.span[1]} · ${D.total.toLocaleString()} prompts`;
+const stats=[[D.slash.toLocaleString(),"slash invocations"],
+  [Math.round(100*D.slash/D.total)+"%","of prompts use a command"],
+  [D.distinct,"distinct custom commands"],
+  [D.customtotal.toLocaleString(),"custom invocations"]];
+document.getElementById('stats').innerHTML=stats.map(([n,l])=>
+  `<div class="stat"><div class="num">${n}</div><div class="lbl">${l}</div></div>`).join('');
+const wired=D.hooks.filter(h=>h.wired).length;
+document.getElementById('alltime-note').textContent=
+  `Top ${D.topN} custom commands, by times typed`;
+document.getElementById('recent-note').textContent=`Last ${D.days} days.`;
+document.getElementById('hooks-note').textContent=
+  `${D.hooks.length} scripts on disk; ${wired} wired into settings and firing. Sorted by last edit.`;
+function bars(el,items,hot){
+  if(!items.length){el.innerHTML='<p class="note">No activity in this window.</p>';return;}
+  const max=items[0].n||1;
+  el.innerHTML=items.map((it,i)=>{
+  const pct=(it.n/max*100).toFixed(1);
+  const sub=it.desc?`<small>${it.desc}</small>`:'';
+  return `<div class="row"><div class="nm">/${it.cmd}${sub}</div>
+    <div class="track"><div class="fill ${hot?'hotbar':''}" style="width:${pct}%;animation-delay:${i*40}ms"></div></div>
+    <div class="v">${it.n}</div></div>`;}).join('');}
+bars(document.getElementById('alltime'),D.top.slice(0,D.topN),false);
+bars(document.getElementById('recent'),D.recent,true);
+document.querySelector('#hooks tbody').innerHTML=D.hooks.map(h=>
+  `<tr><td class="mono">${h.name}</td><td>${h.mtime}</td>
+   <td><span class="tag ${h.kind}">${h.kind}</span></td>
+   <td>${h.event||'—'}</td>
+   <td><span class="dot ${h.wired?'on':'off'}"></span>${h.wired?'live':'idle'}</td></tr>`).join('');
+document.getElementById('foot').textContent=
+  `Source: ~/.claude/history.jsonl (typed prompts only — model-auto-invoked skills not counted), `+
+  `settings.json hook wiring, hook file mtimes. Generated ${D.span[1]}.`;
+</script></body></html>
+"""
+
+
+def render(data, top_n):
+    data = dict(data, topN=top_n)
+    blob = json.dumps(data)
+    # Guard against </script> breaking out of the embedding script tag.
+    blob = blob.replace("</", "<\\/")
+    return TEMPLATE.replace("__DATA__", blob)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("-o", "--out", default="/tmp/hot.htm", help="output HTML path")
+    ap.add_argument("--top", type=int, default=18, help="top N commands to chart")
+    ap.add_argument("--days", type=int, default=30, help="'hottest' window in days")
+    ap.add_argument("--open", action="store_true", help="open report after writing")
+    ap.add_argument("--json", action="store_true", help="print raw JSON, skip HTML")
+    args = ap.parse_args()
+
+    data = analyze(args.days)
+
+    if args.json:
+        json.dump(data, sys.stdout, indent=1)
+        print()
+        return
+
+    out = os.path.expanduser(args.out)
+    with open(out, "w") as f:
+        f.write(render(data, args.top))
+
+    top3 = ", ".join(f"/{t['cmd']} ({t['n']})" for t in data["top"][:3])
+    print(f"wrote {out}")
+    print(f"  {data['slash']:,} slash invocations across {data['total']:,} prompts "
+          f"({data['span'][0]} to {data['span'][1]})")
+    print(f"  top: {top3}")
+    print(f"  hooks: {sum(h['wired'] for h in data['hooks'])} wired / "
+          f"{len(data['hooks'])} on disk")
+
+    if args.open:
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.run([opener, out])
+
+
+if __name__ == "__main__":
+    main()

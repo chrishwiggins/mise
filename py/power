@@ -1,0 +1,664 @@
+#!/usr/bin/env python3
+"""
+power - Battery and power management CLI for macOS
+
+Default action (no args): apply low-power profile.
+Use --default to apply Apple factory default settings.
+Use --restore to return to saved settings.
+Use --status to see current battery and power state.
+"""
+
+import argparse
+import ctypes
+import ctypes.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+STATE_FILE = Path.home() / ".power_state.json"
+
+# Homebrew paths that may not be in PATH when invoked from certain contexts
+_EXTRA_PATHS = ["/opt/homebrew/bin", "/usr/local/bin"]
+for _p in _EXTRA_PATHS:
+    if _p not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _p + ":" + os.environ.get("PATH", "")
+
+# Apple factory defaults for MacBook on battery
+APPLE_DEFAULTS = {
+    "brightness": 0.5,
+    "bluetooth": True,
+    "wifi": True,
+    "displaysleep": 2,
+    "sleep": 10,
+    "powernap": 1,
+    "reduce_transparency": False,
+}
+
+# ── helpers ──────────────────────────────────────────────────────────────
+
+def run(cmd, capture=True, sudo=False):
+    """Run a shell command, return stdout or None on failure."""
+    if sudo:
+        cmd = ["sudo"] + cmd
+    try:
+        r = subprocess.run(cmd, capture_output=capture, text=True, timeout=10)
+        return r.stdout.strip() if capture else None
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def has(tool):
+    """Check if a CLI tool is available."""
+    return shutil.which(tool) is not None
+
+
+def tint(text, code):
+    """ANSI color wrapper (dim=2, green=32, yellow=33, red=31, cyan=36, bold=1)."""
+    if not sys.stdout.isatty():
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+# ── battery info ─────────────────────────────────────────────────────────
+
+def battery_info():
+    """Return dict with pct, charging, source."""
+    raw = run(["pmset", "-g", "batt"]) or ""
+    info = {"pct": None, "charging": False, "source": "Unknown"}
+
+    src = re.search(r"'(.+?)'", raw)
+    if src:
+        info["source"] = src.group(1)
+        info["charging"] = "AC" in info["source"]
+
+    pct = re.search(r"(\d+)%", raw)
+    if pct:
+        info["pct"] = int(pct.group(1))
+
+    return info
+
+
+def battery_bar(pct):
+    """Colored bar for battery percentage."""
+    if pct is None:
+        return "??%"
+    filled = pct // 5  # 0-20 blocks
+    bar = "#" * filled + "-" * (20 - filled)
+    if pct <= 20:
+        color = 31  # red
+    elif pct <= 50:
+        color = 33  # yellow
+    else:
+        color = 32  # green
+    return f"[{tint(bar, color)}] {pct}%"
+
+
+# ── display brightness via DisplayServices framework ─────────────────────
+
+def _load_display_services():
+    """Load macOS DisplayServices private framework via ctypes."""
+    try:
+        ds = ctypes.cdll.LoadLibrary(
+            "/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices"
+        )
+        cg_path = ctypes.util.find_library("CoreGraphics")
+        cg = ctypes.cdll.LoadLibrary(cg_path)
+        cg.CGMainDisplayID.restype = ctypes.c_uint32
+        display = cg.CGMainDisplayID()
+
+        ds.DisplayServicesGetBrightness.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_float)]
+        ds.DisplayServicesGetBrightness.restype = ctypes.c_int32
+        ds.DisplayServicesSetBrightness.argtypes = [ctypes.c_uint32, ctypes.c_float]
+        ds.DisplayServicesSetBrightness.restype = ctypes.c_int32
+
+        def _get():
+            b = ctypes.c_float(0)
+            ds.DisplayServicesGetBrightness(display, ctypes.byref(b))
+            return float(b.value)
+
+        def _set(val):
+            ds.DisplayServicesSetBrightness(display, ctypes.c_float(val))
+
+        return _get, _set
+    except (OSError, AttributeError):
+        return None, None
+
+
+_ds_get, _ds_set = _load_display_services()
+
+
+# ── current state readers ────────────────────────────────────────────────
+
+def get_brightness():
+    """Get current display brightness (0.0-1.0) or None."""
+    if _ds_get:
+        try:
+            return _ds_get()
+        except Exception:
+            pass
+    if has("brightness"):
+        raw = run(["brightness", "-l"])
+        if raw:
+            m = re.search(r"display\s+\d+:\s+brightness\s+([\d.]+)", raw)
+            if m:
+                return float(m.group(1))
+    return None
+
+
+def get_bluetooth():
+    """Return True if bluetooth is on, None if can't determine."""
+    if has("blueutil"):
+        raw = run(["blueutil", "-p"])
+        if raw is not None:
+            return raw.strip() == "1"
+    return None
+
+
+def get_wifi_interface():
+    """Find the Wi-Fi interface name."""
+    raw = run(["networksetup", "-listallhardwareports"]) or ""
+    lines = raw.splitlines()
+    for i, line in enumerate(lines):
+        if "Wi-Fi" in line or "AirPort" in line:
+            for j in range(i + 1, min(i + 4, len(lines))):
+                m = re.match(r"Device:\s+(\S+)", lines[j])
+                if m:
+                    return m.group(1)
+    return "en0"
+
+
+def get_wifi():
+    """Return True if Wi-Fi is on."""
+    iface = get_wifi_interface()
+    raw = run(["networksetup", "-getairportpower", iface]) or ""
+    return "On" in raw
+
+
+def get_dark_mode():
+    """Return True if dark mode is on."""
+    raw = run([
+        "osascript", "-l", "JavaScript", "-e",
+        "Application('System Events').appearancePreferences.darkMode()"
+    ])
+    return raw == "true" if raw else None
+
+
+def get_pmset_val(key):
+    """Read a single pmset value for current power source."""
+    raw = run(["pmset", "-g"]) or ""
+    m = re.search(rf"^\s*{key}\s+(\S+)", raw, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+# ── state save / restore ─────────────────────────────────────────────────
+
+def save_state():
+    """Snapshot current settings to disk so we can restore later."""
+    state = {
+        "brightness": get_brightness(),
+        "bluetooth": get_bluetooth(),
+        "wifi": get_wifi(),
+        "dark_mode": get_dark_mode(),
+        "displaysleep": get_pmset_val("displaysleep"),
+        "sleep": get_pmset_val("sleep"),
+        "powernap": get_pmset_val("powernap"),
+    }
+    STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
+    return state
+
+
+def load_state():
+    """Load previously saved state."""
+    if not STATE_FILE.exists():
+        return None
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+# ── actions ──────────────────────────────────────────────────────────────
+
+def set_brightness(val):
+    """Set display brightness (0.0-1.0)."""
+    if _ds_set:
+        try:
+            _ds_set(val)
+            return True
+        except Exception:
+            pass
+    if has("brightness"):
+        run(["brightness", str(val)])
+        return True
+    return False
+
+
+def can_brightness():
+    return _ds_set is not None or has("brightness")
+
+
+def set_bluetooth(on):
+    if has("blueutil"):
+        run(["blueutil", "-p", "1" if on else "0"])
+        return True
+    return False
+
+
+def set_wifi(on):
+    iface = get_wifi_interface()
+    run(["networksetup", "-setairportpower", iface, "on" if on else "off"])
+    return True
+
+
+def set_dark_mode(on):
+    val = "true" if on else "false"
+    run([
+        "osascript", "-l", "JavaScript", "-e",
+        f"Application('System Events').appearancePreferences.darkMode = {val}"
+    ])
+    return True
+
+
+def set_pmset(key, val, sudo=True):
+    """Set a pmset value."""
+    cmd = ["pmset", "-b", key, str(val)]
+    run(cmd, sudo=sudo)
+    return True
+
+
+def set_reduce_transparency(on):
+    run(["defaults", "write", "com.apple.universalaccess",
+         "reduceTransparency", "-bool", "true" if on else "false"])
+    return True
+
+
+def kill_hogs(threshold_pct=15.0, dry_run=False):
+    """Find and optionally kill high-CPU processes (excluding essentials)."""
+    raw = run(["ps", "-A", "-o", "pid,pcpu,comm"])
+    if not raw:
+        return []
+    essentials = {
+        "kernel_task", "WindowServer", "loginwindow", "launchd", "Finder",
+        "Dock", "SystemUIServer", "syslogd", "coreaudiod", "corebrightnessd",
+        "power",
+    }
+    hogs = []
+    for line in raw.splitlines()[1:]:
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid, cpu, comm = parts[0], float(parts[1]), parts[2].split("/")[-1]
+        if cpu >= threshold_pct and comm not in essentials:
+            hogs.append((pid, cpu, comm))
+
+    if dry_run or not hogs:
+        return hogs
+
+    for pid, cpu, comm in hogs:
+        print(f"  killing {comm} (pid {pid}, {cpu:.0f}% CPU)")
+        run(["kill", "-15", pid])
+    return hogs
+
+
+# ── report helper ────────────────────────────────────────────────────────
+
+def make_reporter():
+    results = []
+    def report(name, ok, detail=""):
+        sym = tint("ok", 32) if ok else tint("skip", 2)
+        extra = f"  ({detail})" if detail else ""
+        results.append(f"  {sym}  {name}{extra}")
+    return results, report
+
+
+# ── profiles ─────────────────────────────────────────────────────────────
+
+def apply_low_power(args):
+    """Apply the low-power profile."""
+    dry = args.dry_run
+    print(tint("power", 1) + " - saving current state and applying low-power profile\n")
+
+    if not dry:
+        save_state()
+    results, report = make_reporter()
+
+    # brightness
+    target = args.brightness
+    ok = can_brightness()
+    if not dry and ok:
+        set_brightness(target)
+    report("display brightness", ok,
+           f"{int(target*100)}%" if ok else "no brightness control available")
+
+    # dark mode
+    if not args.no_dark:
+        if not dry:
+            set_dark_mode(True)
+        report("dark mode", True, "on")
+    else:
+        report("dark mode", False, "skipped (--no-dark)")
+
+    # bluetooth
+    if not args.keep_bluetooth:
+        ok = has("blueutil")
+        if not dry and ok:
+            set_bluetooth(False)
+        report("bluetooth", ok,
+               "off" if ok else "install `brew install blueutil`")
+    else:
+        report("bluetooth", False, "kept on (--keep-bluetooth)")
+
+    # wifi
+    if args.wifi_off:
+        if not dry:
+            set_wifi(False)
+        report("wifi", True, "off")
+    else:
+        report("wifi", False, "kept on (use --wifi-off to disable)")
+
+    # pmset
+    if not args.no_pmset:
+        if not dry:
+            set_pmset("displaysleep", args.display_sleep)
+            set_pmset("sleep", args.system_sleep)
+            set_pmset("powernap", 0)
+        report("pmset", True,
+               f"display sleep {args.display_sleep}m, system sleep {args.system_sleep}m, powernap off")
+    else:
+        report("pmset", False, "skipped (--no-pmset)")
+
+    # reduce transparency
+    if not args.no_accessibility:
+        if not dry:
+            set_reduce_transparency(True)
+        report("reduce transparency", True, "on")
+    else:
+        report("reduce transparency", False, "skipped")
+
+    # kill CPU hogs
+    if args.kill_hogs:
+        hogs = kill_hogs(threshold_pct=args.cpu_threshold, dry_run=True)
+        if hogs:
+            if not dry:
+                kill_hogs(threshold_pct=args.cpu_threshold, dry_run=False)
+            report("cpu hogs", True, f"{'found' if dry else 'killed'} {len(hogs)}")
+        else:
+            report("cpu hogs", True, "none found")
+
+    print("\n".join(results))
+    batt = battery_info()
+    print(f"\n  battery: {battery_bar(batt['pct'])}  ({batt['source']})")
+    if not dry:
+        print(f"\n  state saved to {STATE_FILE}")
+        print(f"  run `power --restore` to undo\n")
+    else:
+        print(f"\n  (dry run - no changes made)\n")
+
+
+def apply_default(args):
+    """Apply Apple factory default settings."""
+    dry = args.dry_run
+    d = APPLE_DEFAULTS
+    print(tint("power --default", 1) + " - applying Apple factory default settings\n")
+
+    results, report = make_reporter()
+
+    # brightness
+    ok = can_brightness()
+    if not dry and ok:
+        set_brightness(d["brightness"])
+    report("display brightness", ok,
+           f"{int(d['brightness']*100)}%" if ok else "no brightness control available")
+
+    # bluetooth
+    ok = has("blueutil")
+    if not dry and ok:
+        set_bluetooth(d["bluetooth"])
+    report("bluetooth", ok,
+           ("on" if d["bluetooth"] else "off") if ok else "install `brew install blueutil`")
+
+    # wifi
+    if not dry:
+        set_wifi(d["wifi"])
+    report("wifi", True, "on" if d["wifi"] else "off")
+
+    # pmset
+    if not args.no_pmset:
+        if not dry:
+            set_pmset("displaysleep", d["displaysleep"])
+            set_pmset("sleep", d["sleep"])
+            set_pmset("powernap", d["powernap"])
+        report("pmset", True,
+               f"display sleep {d['displaysleep']}m, system sleep {d['sleep']}m, powernap on")
+    else:
+        report("pmset", False, "skipped (--no-pmset)")
+
+    # reduce transparency
+    if not dry:
+        set_reduce_transparency(d["reduce_transparency"])
+    report("reduce transparency", True, "off")
+
+    print("\n".join(results))
+    batt = battery_info()
+    print(f"\n  battery: {battery_bar(batt['pct'])}  ({batt['source']})")
+
+    # clean up saved state if it exists
+    if STATE_FILE.exists():
+        if not dry:
+            STATE_FILE.unlink(missing_ok=True)
+        print(f"  (cleared saved state)\n")
+    else:
+        print()
+
+
+def apply_restore(args):
+    """Restore settings from saved state."""
+    state = load_state()
+    if not state:
+        print("no saved state found - use `power --default` for Apple factory settings")
+        sys.exit(1)
+
+    print(tint("power --restore", 1) + " - restoring previous settings\n")
+    results, report = make_reporter()
+
+    if state.get("brightness") is not None:
+        ok = set_brightness(state["brightness"])
+        report("brightness", ok, f"{int(state['brightness']*100)}%")
+    else:
+        report("brightness", False, "no saved value")
+
+    if state.get("dark_mode") is not None:
+        set_dark_mode(state["dark_mode"])
+        report("dark mode", True, "on" if state["dark_mode"] else "off")
+
+    if state.get("bluetooth") is not None:
+        ok = set_bluetooth(state["bluetooth"])
+        report("bluetooth", ok, "on" if state["bluetooth"] else "off")
+
+    if state.get("wifi") is not None and not state["wifi"]:
+        set_wifi(True)
+        report("wifi", True, "on")
+
+    if state.get("displaysleep"):
+        set_pmset("displaysleep", state["displaysleep"])
+        set_pmset("sleep", state.get("sleep", "10"))
+        set_pmset("powernap", state.get("powernap", "1"))
+        report("pmset", True, "restored")
+
+    set_reduce_transparency(False)
+    report("reduce transparency", True, "off")
+
+    print("\n".join(results))
+    STATE_FILE.unlink(missing_ok=True)
+    print(f"\n  state file removed\n")
+
+
+def show_status(args):
+    """Show current battery and power-related status."""
+    print(tint("power --status", 1) + "\n")
+
+    batt = battery_info()
+    print(f"  battery:      {battery_bar(batt['pct'])}  ({batt['source']})")
+
+    b = get_brightness()
+    if b is not None:
+        print(f"  brightness:   {int(b * 100)}%")
+    else:
+        print(f"  brightness:   {tint('unknown', 2)}")
+
+    bt = get_bluetooth()
+    if bt is not None:
+        print(f"  bluetooth:    {'on' if bt else 'off'}")
+    else:
+        print(f"  bluetooth:    {tint('unknown', 2)} (install `brew install blueutil`)")
+
+    print(f"  wifi:         {'on' if get_wifi() else 'off'}")
+
+    dm = get_dark_mode()
+    if dm is not None:
+        print(f"  dark mode:    {'on' if dm else 'off'}")
+
+    for key in ("displaysleep", "sleep", "powernap"):
+        val = get_pmset_val(key)
+        if val:
+            print(f"  {key:14s}{val}")
+
+    if STATE_FILE.exists():
+        print(f"\n  saved state:  {STATE_FILE}")
+        print(f"  (run `power --restore` to revert)")
+    else:
+        print(f"\n  no saved state")
+
+    hogs = kill_hogs(threshold_pct=10.0, dry_run=True)
+    if hogs:
+        print(f"\n  cpu hogs (>10%):")
+        for pid, cpu, comm in sorted(hogs, key=lambda x: -x[1])[:5]:
+            print(f"    {cpu:5.1f}%  {comm} (pid {pid})")
+
+    print()
+
+
+def apply_compute(args):
+    """Apply compute profile: screen dims, system never sleeps."""
+    dry = args.dry_run
+    print(tint("power --compute", 1) + " - screen dims, system stays awake\n")
+
+    if not dry:
+        save_state()
+    results, report = make_reporter()
+
+    # brightness - dim it
+    target = args.brightness
+    ok = can_brightness()
+    if not dry and ok:
+        set_brightness(target)
+    report("display brightness", ok,
+           f"{int(target*100)}%" if ok else "no brightness control available")
+
+    # pmset: display can sleep, system NEVER sleeps
+    if not args.no_pmset:
+        if not dry:
+            set_pmset("displaysleep", args.display_sleep)
+            set_pmset("sleep", 0)
+            set_pmset("powernap", 0)
+        report("pmset", True,
+               f"display sleep {args.display_sleep}m, system sleep NEVER, powernap off")
+    else:
+        report("pmset", False, "skipped (--no-pmset)")
+
+    print("\n".join(results))
+    batt = battery_info()
+    print(f"\n  battery: {battery_bar(batt['pct'])}  ({batt['source']})")
+    if not dry:
+        print(f"\n  state saved to {STATE_FILE}")
+        print(f"  run `power --restore` to undo\n")
+    else:
+        print(f"\n  (dry run - no changes made)\n")
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="power",
+        description="Battery and power management for macOS.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  power --low               apply low-power profile
+  power --default           apply Apple factory default settings
+  power --status            show battery and power state
+  power --restore           undo changes (return to saved state)
+  power -l --brightness 0.2 low-power with specific brightness (0.0-1.0)
+  power -l --kill-hogs      low-power and kill high-CPU processes
+  power -l --wifi-off       low-power and disable Wi-Fi
+  power -l --dry-run        show what would change, don't apply
+  power --compute           screen dims, system stays awake for long jobs
+  power -c -b 0.1           compute mode with very dim screen
+""",
+    )
+
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("-l", "--low", action="store_true",
+                      help="apply low-power profile (dim, bluetooth off, dark mode, etc.)")
+    mode.add_argument("-s", "--status", action="store_true",
+                      help="show current battery/power status")
+    mode.add_argument("-r", "--restore", action="store_true",
+                      help="restore settings from before low-power was applied")
+    mode.add_argument("-c", "--compute", action="store_true",
+                      help="screen dims, system never sleeps (for long jobs)")
+    mode.add_argument("-d", "--default", action="store_true",
+                      help="apply Apple factory default settings")
+
+    p.add_argument("-b", "--brightness", type=float, default=0.3,
+                   metavar="VAL", help="target brightness 0.0-1.0 (default: 0.3)")
+    p.add_argument("--display-sleep", type=int, default=2, metavar="MIN",
+                   help="display sleep in minutes (default: 2)")
+    p.add_argument("--system-sleep", type=int, default=5, metavar="MIN",
+                   help="system sleep in minutes (default: 5)")
+
+    p.add_argument("--keep-bluetooth", action="store_true",
+                   help="don't disable bluetooth")
+    p.add_argument("--wifi-off", action="store_true",
+                   help="also disable Wi-Fi (not done by default)")
+    p.add_argument("--no-dark", action="store_true",
+                   help="don't enable dark mode")
+    p.add_argument("--no-pmset", action="store_true",
+                   help="skip pmset changes (avoids sudo prompt)")
+    p.add_argument("--no-accessibility", action="store_true",
+                   help="skip accessibility tweaks")
+
+    p.add_argument("-k", "--kill-hogs", action="store_true",
+                   help="kill processes using excessive CPU")
+    p.add_argument("--cpu-threshold", type=float, default=15.0, metavar="PCT",
+                   help="CPU %% threshold for --kill-hogs (default: 15)")
+
+    p.add_argument("-n", "--dry-run", action="store_true",
+                   help="show what would be done without changing anything")
+
+    args = p.parse_args()
+
+    if args.low:
+        if args.dry_run:
+            print(tint("power --dry-run", 1) + " (no changes will be made)\n")
+        apply_low_power(args)
+    elif args.compute:
+        if args.dry_run:
+            print(tint("power --dry-run", 1) + " (no changes will be made)\n")
+        apply_compute(args)
+    elif args.status:
+        show_status(args)
+    elif args.restore:
+        apply_restore(args)
+    elif getattr(args, "default", False):
+        apply_default(args)
+    else:
+        p.print_help()
+
+
+if __name__ == "__main__":
+    main()
