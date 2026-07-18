@@ -47,3 +47,11 @@ output.*
 data.tsv
 *.png
 mergedir_old_*
+# Build/runtime artifacts and local media (never publish)
+.venv/
+__pycache__/
+*.pyc
+*.mp3
+*.wav
+mergedir_old_*/
+tmp.htm
