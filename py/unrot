@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""
+unrot: Fix dead links in webpages by finding Wayback Machine snapshots.
+"""
+
+import argparse
+import json
+import logging
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, List, Tuple
+from urllib.parse import urljoin, urlparse
+
+import requests
+from bs4 import BeautifulSoup
+
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
+
+# User agent to avoid being blocked
+USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+
+def download_page(url: str) -> Optional[BeautifulSoup]:
+    """Download a webpage and parse with BeautifulSoup."""
+    try:
+        headers = {'User-Agent': USER_AGENT}
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        return BeautifulSoup(resp.content, 'html.parser')
+    except Exception as e:
+        logger.error(f"Failed to download {url}: {e}")
+        return None
+
+def detect_article_date(soup: BeautifulSoup) -> Optional[str]:
+    """
+    Auto-detect article publication date from meta tags.
+    Returns YYYYMMDD format or None.
+    """
+    # Try common meta tags
+    date_selectors = [
+        ('meta[property="article:published_time"]', 'content'),
+        ('meta[name="datePublished"]', 'content'),
+        ('meta[property="datePublished"]', 'content'),
+        ('meta[name="DC.date"]', 'content'),
+        ('meta[name="publish_date"]', 'content'),
+    ]
+
+    for selector, attr in date_selectors:
+        tag = soup.select_one(selector)
+        if tag:
+            date_str = tag.get(attr, '').strip()
+            if date_str:
+                # Parse various date formats: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS, etc.
+                match = re.match(r'(\d{4})-(\d{2})-(\d{2})', date_str)
+                if match:
+                    return f"{match.group(1)}{match.group(2)}{match.group(3)}"
+
+    return None
+
+def extract_links(soup: BeautifulSoup, base_url: str) -> Dict[str, List[Tuple]]:
+    """
+    Extract all href/src/data attributes from various tags.
+    Returns dict of {url: [(tag_name, attr_name, element)]}.
+    Skips anchors, data: URIs, mailto: links, relative URLs.
+    """
+    links = {}
+
+    # Tags and attributes to check
+    tag_attrs = [
+        ('a', 'href'),
+        ('link', 'href'),
+        ('script', 'src'),
+        ('img', 'src'),
+        ('iframe', 'src'),
+    ]
+
+    for tag_name, attr_name in tag_attrs:
+        for tag in soup.find_all(tag_name):
+            url = tag.get(attr_name, '').strip()
+            if not url:
+                continue
+
+            # Skip anchors, data: URIs, mailto:
+            if url.startswith('#') or url.startswith('data:') or url.startswith('mailto:'):
+                continue
+
+            # Skip relative URLs (must be absolute)
+            if not url.startswith('http://') and not url.startswith('https://'):
+                continue
+
+            if url not in links:
+                links[url] = []
+            links[url].append((tag_name, attr_name, tag))
+
+    return links
+
+def test_link(url: str, timeout: int = 5) -> bool:
+    """
+    Test if a URL is alive (2xx/3xx response and not a generic error page).
+    Returns True if alive, False otherwise.
+    """
+    try:
+        headers = {'User-Agent': USER_AGENT}
+        resp = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
+
+        # Check status code
+        if resp.status_code >= 400:
+            return False
+
+        # Check if final URL is different domain (likely redirected to error page)
+        final_url = resp.url
+        original_domain = urlparse(url).netloc
+        final_domain = urlparse(final_url).netloc
+
+        if final_domain != original_domain:
+            # Cross-domain redirect; likely error page
+            return False
+
+        return True
+    except requests.Timeout:
+        return False
+    except requests.RequestException:
+        # DNS failure, connection refused, etc.
+        return False
+    except Exception:
+        return False
+
+def find_wayback_snapshot(url: str, before_date: str) -> Optional[str]:
+    """
+    Find the latest Wayback Machine snapshot BEFORE the given date.
+    before_date should be YYYYMMDD format.
+    Returns archive.org URL or None.
+    """
+    try:
+        # CDX API query: find snapshots before this date with status 200
+        cdx_url = "https://web.archive.org/cdx/search/cdx"
+        params = {
+            'url': url,
+            'output': 'json',
+            'filter': 'statuscode:200',
+            'to': before_date,
+            'sort': 'reverse',  # Most recent first
+        }
+
+        resp = requests.get(cdx_url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Response format: header row, then data rows
+        # Header: ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"]
+        if len(data) < 2:  # Header only, no results
+            return None
+
+        # Get the first result (most recent) after header
+        result = data[1]
+        timestamp = result[1]  # YYYYMMDDHHMMSS
+        original_url = result[2]  # Original URL (may include :80 or :443)
+
+        # Remove default ports from original_url (CDX includes them, but Wayback doesn't like them)
+        original_url = original_url.replace(':80/', '/', 1)  # http://example.com:80/ -> http://example.com/
+        original_url = original_url.replace(':443/', '/', 1)  # https://example.com:443/ -> https://example.com/
+
+        # Construct Wayback URL properly
+        wayback_url = f"https://web.archive.org/web/{timestamp}/{original_url}"
+
+        # Verify this Wayback URL is actually accessible
+        if test_link(wayback_url):
+            return wayback_url
+        else:
+            return None
+    except Exception as e:
+        logger.debug(f"Wayback lookup failed for {url}: {e}")
+        return None
+
+def replace_dead_links(soup: BeautifulSoup, article_date: str, dry_run: bool = False) -> Tuple[BeautifulSoup, Dict]:
+    """
+    Test all links and replace dead ones with Wayback snapshots.
+    Returns (updated_soup, replacement_log).
+    """
+    links = extract_links(soup, '')
+    replacements = {}
+
+    total = len(links)
+    for i, (url, occurrences) in enumerate(links.items(), 1):
+        logger.info(f"[{i}/{total}] Testing {url}")
+
+        if test_link(url):
+            logger.info(f"  -> OK")
+            continue
+
+        logger.info(f"  -> DEAD, searching Wayback...")
+        wayback_url = find_wayback_snapshot(url, article_date)
+
+        if wayback_url:
+            logger.info(f"  -> Found: {wayback_url}")
+            replacements[url] = wayback_url
+
+            if not dry_run:
+                # Update all occurrences in the soup
+                for tag_name, attr_name, tag in occurrences:
+                    tag[attr_name] = wayback_url
+        else:
+            logger.info(f"  -> No Wayback snapshot found")
+
+    return soup, replacements
+
+def save_html(soup: BeautifulSoup, output_dir: str = "/tmp/unrot") -> str:
+    """
+    Save HTML to a timestamped file.
+    Returns the full path.
+    """
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    filepath = os.path.join(output_dir, f"{timestamp}.html")
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(soup.prettify())
+
+    return filepath
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Fix dead links in a webpage using Wayback Machine snapshots.'
+    )
+    parser.add_argument('--url', required=True, help='URL of the webpage to fix')
+    parser.add_argument('--date', help='Article publication date (YYYYMMDD). Auto-detected if not provided.')
+    parser.add_argument('--output-dir', default='/tmp/unrot', help='Output directory (default: /tmp/unrot)')
+    parser.add_argument('--dry-run', action='store_true', help='Test links without saving output')
+
+    args = parser.parse_args()
+
+    # Download page
+    logger.info(f"Downloading {args.url}")
+    soup = download_page(args.url)
+    if not soup:
+        sys.exit(1)
+
+    # Detect or use provided date
+    article_date = args.date
+    if not article_date:
+        logger.info("Auto-detecting article date...")
+        article_date = detect_article_date(soup)
+        if article_date:
+            logger.info(f"Detected date: {article_date}")
+        else:
+            logger.warning("Could not auto-detect date. Using current date.")
+            article_date = datetime.now().strftime("%Y%m%d")
+
+    # Replace dead links
+    logger.info("Testing and replacing dead links...")
+    soup, replacements = replace_dead_links(soup, article_date, dry_run=args.dry_run)
+
+    # Log summary
+    logger.info(f"Replaced {len(replacements)} dead links:")
+    for old_url, new_url in replacements.items():
+        logger.info(f"  {old_url}\n  -> {new_url}")
+
+    # Save and output
+    if not args.dry_run:
+        filepath = save_html(soup, args.output_dir)
+        print(filepath)
+    else:
+        logger.info("Dry-run mode: no file written")
+
+if __name__ == '__main__':
+    main()

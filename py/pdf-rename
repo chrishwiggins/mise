@@ -1,0 +1,363 @@
+#!/usr/bin/env python3
+"""pdf-rename: rename a PDF to firstauthor_year_all-title-words.pdf
+
+Builds a logical slug:  <first-author-last-name>_<year>_<all-title-words>.pdf
+
+Three analysis tiers, cheapest first:
+  -s  small   embedded PDF metadata only (pdfinfo). No network, no LLM.
+  -m  medium  printed DOI -> Crossref, else Crossref title query. Network, no LLM.
+  -l  large   first-page text -> `claude -p`. LLM; handles anything (old scans).
+
+With NO tier flag, auto-escalates s -> m -> l, stopping at the first tier that
+returns confident metadata. A tier flag pins to exactly that tier (no fallback).
+
+Usage:
+    pdf-rename paper.pdf [more.pdf ...]     # auto-escalate
+    pdf-rename -s paper.pdf                 # local metadata only
+    pdf-rename -m paper.pdf                 # Crossref only
+    pdf-rename -l paper.pdf                 # LLM only
+    pdf-rename -n paper.pdf                 # dry run (print target, no rename)
+    pdf-rename -d DEST paper.pdf            # rename AND move into DEST
+    pdf-rename -v paper.pdf                 # show which tier succeeded
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+
+CLAUDE = "/Users/wiggins/.local/bin/claude"
+CROSSREF = "https://api.crossref.org/works"
+MAILTO = "chris.wiggins@gmail.com"  # polite Crossref pool
+
+# Journal/issue strings that masquerade as titles in bad embedded metadata.
+JUNK_TITLE_RE = re.compile(
+    r"^(library trends|untitled|microsoft word|\d|vol\.?|.*\b\d+\(\d+\))",
+    re.IGNORECASE,
+)
+
+# Boilerplate lines (publisher attributions, arXiv stamps, page headers) that
+# appear before/around the real title on page 1 and must not seed a query.
+BOILERPLATE_RE = re.compile(
+    r"(provided proper attribution|hereby grants permission|reproduce the|"
+    r"^arxiv:|preprint|under review|to appear|copyright|all rights reserved|"
+    r"journalistic or|scholarly works|doi:|https?://|www\.)",
+    re.IGNORECASE,
+)
+
+
+# ----------------------------- helpers -------------------------------------
+
+def slugify_title(title: str) -> str:
+    t = title.lower().replace("&", " and ")
+    t = re.sub(r"[^a-z0-9]+", " ", t).strip()
+    return re.sub(r"\s+", "-", t)
+
+
+def slugify_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def first_author_last(author_field: str) -> str:
+    """Best-effort last name from a free-text author string."""
+    # take the first author (split on ; , 'and' &)
+    first = re.split(r";| and |&|,", author_field)[0].strip()
+    if not first:
+        return ""
+    # 'Gerard Salton' -> 'Salton'; 'Salton, Gerard' handled by the comma split
+    # above only when the comma separated authors; guard the 'Last, First' case:
+    if "," in author_field and len(author_field.split(",")) >= 2 and \
+            " " not in first:
+        return first
+    parts = first.split()
+    return parts[-1] if parts else ""
+
+
+def make_name(last: str, year: str, title: str) -> str | None:
+    last = slugify_name(last)
+    year = re.sub(r"[^0-9]", "", year)[:4]
+    title = slugify_title(title)
+    if last and len(year) == 4 and title:
+        return f"{last}_{year}_{title}.pdf"
+    return None
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def pdftotext(pdf: str, first=1, last=1) -> str:
+    out = run(["pdftotext", "-f", str(first), "-l", str(last), pdf, "-"])
+    if out.returncode != 0:
+        raise RuntimeError(f"pdftotext failed: {out.stderr.strip()}")
+    return out.stdout
+
+
+# ----------------------------- tier: small ---------------------------------
+
+def tier_small(pdf: str) -> str | None:
+    """Embedded metadata via pdfinfo. Returns name or None if not confident."""
+    out = run(["pdfinfo", pdf])
+    if out.returncode != 0:
+        return None
+    meta = {}
+    for line in out.stdout.splitlines():
+        if ":" in line:
+            k, _, v = line.partition(":")
+            meta[k.strip()] = v.strip()
+    title = meta.get("Title", "").strip()
+    author = meta.get("Author", "").strip()
+    date = meta.get("CreationDate", "") or meta.get("ModDate", "")
+    ymatch = re.search(r"\b(1[89]\d\d|20\d\d)\b", date)
+    year = ymatch.group(1) if ymatch else ""
+    if not title or not author or not year:
+        return None
+    if JUNK_TITLE_RE.match(title):
+        return None
+    # institutional author (no clear surname / too many words) is unreliable
+    last = first_author_last(author)
+    if not last or len(author.split()) > 6:
+        return None
+    return make_name(last, year, title)
+
+
+# ----------------------------- tier: medium --------------------------------
+
+def crossref_get(url: str) -> dict | None:
+    req = urllib.request.Request(url, headers={
+        "User-Agent": f"pdf-rename/1.0 (mailto:{MAILTO})"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.load(r)
+    except Exception:
+        return None
+
+
+def name_from_crossref_item(item: dict) -> str | None:
+    titles = item.get("title") or []
+    title = titles[0] if titles else ""
+    authors = item.get("author") or []
+    last = ""
+    if authors:
+        last = authors[0].get("family") or authors[0].get("name") or ""
+    year = ""
+    for key in ("published-print", "published-online", "issued", "created"):
+        dp = item.get(key, {}).get("date-parts")
+        if dp and dp[0] and dp[0][0]:
+            year = str(dp[0][0])
+            break
+    if not (title and last and year):
+        return None
+    return make_name(last, year, title)
+
+
+def name_from_arxiv(arxiv_id: str) -> str | None:
+    """Query the arXiv API directly (authoritative for arXiv papers)."""
+    url = ("https://export.arxiv.org/api/query?"
+           + urllib.parse.urlencode({"id_list": arxiv_id}))
+    req = urllib.request.Request(url, headers={"User-Agent": "pdf-rename/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            x = r.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    titles = re.findall(r"<title>(.*?)</title>", x, re.S)
+    names = re.findall(r"<name>(.*?)</name>", x, re.S)
+    pub = re.findall(r"<published>(.*?)</published>", x, re.S)
+    # titles[0] is the feed title; titles[1] is the paper title
+    title = (titles[1] if len(titles) > 1 else "").strip()
+    last = first_author_last(names[0].strip()) if names else ""
+    year = (pub[0][:4] if pub else "")
+    return make_name(last, year, title)
+
+
+def tier_medium(pdf: str) -> str | None:
+    """arXiv API / printed DOI -> Crossref; else Crossref bibliographic query."""
+    head = pdftotext(pdf, 1, 2)
+    # 1a. arXiv id -> arXiv API (clean and authoritative; DOI/title-query are
+    #     both unreliable for arXiv preprints).
+    ax = re.search(r'arXiv:\s*(\d{4}\.\d{4,5})', head)
+    if ax:
+        name = name_from_arxiv(ax.group(1))
+        if name:
+            return name
+    # 1b. printed DOI -> Crossref
+    dois = []
+    m = re.search(r'10\.\d{4,9}/[^\s"<>]+', head)
+    if m:
+        dois.append(m.group(0).rstrip(".,);"))
+    for doi in dois:
+        data = crossref_get(f"{CROSSREF}/{urllib.parse.quote(doi)}")
+        if data and "message" in data:
+            name = name_from_crossref_item(data["message"])
+            if name:
+                return name
+    # 2. title query: use embedded title or first non-trivial line of page 1
+    query_title = ""
+    info = run(["pdfinfo", pdf])
+    for line in info.stdout.splitlines():
+        if line.startswith("Title:"):
+            t = line.split(":", 1)[1].strip()
+            if t and not JUNK_TITLE_RE.match(t):
+                query_title = t
+            break
+    if not query_title:
+        # join the first few non-blank lines so a multi-line title is whole,
+        # not a truncated first-line fragment that mismatches in Crossref.
+        good = []
+        for line in head.splitlines():
+            line = line.strip()
+            if not line:
+                if good:
+                    break  # stop at the first blank gap after the title block
+                continue
+            if JUNK_TITLE_RE.match(line) or BOILERPLATE_RE.search(line):
+                continue
+            good.append(line)
+            if len(good) >= 3 or len(" ".join(good)) > 80:
+                break
+        query_title = " ".join(good)
+    if len(query_title) < 10:
+        return None
+    q = urllib.parse.urlencode({
+        "query.bibliographic": query_title, "rows": "1", "mailto": MAILTO})
+    data = crossref_get(f"{CROSSREF}?{q}")
+    if not data:
+        return None
+    items = data.get("message", {}).get("items", [])
+    if not items:
+        return None
+    # Guard against a confident-but-wrong match. Require BOTH:
+    #  (a) Crossref's own relevance score clears a floor, and
+    #  (b) most words of the returned title are present in our query
+    #      (so the result is not a generic-keyword coincidence).
+    item = items[0]
+    score = item.get("score", 0)
+    cand = (item.get("title") or [""])[0]
+    if not cand or score < 60:
+        return None
+    qwords = set(slugify_title(query_title).split("-"))
+    cwords = set(slugify_title(cand).split("-"))
+    cwords.discard("")
+    if not cwords or len(qwords & cwords) / len(cwords) < 0.7:
+        return None
+    return name_from_crossref_item(item)
+
+
+# ----------------------------- tier: large ---------------------------------
+
+PROMPT = """You are reading the first page of an academic paper (plain text below).
+Output ONE line and nothing else, in exactly this format:
+
+  lastname|year|Full Title Of The Paper
+
+Rules:
+- lastname: the FIRST author's last name only, lowercase, ASCII letters only.
+- year: the 4-digit publication year. If the page shows "received"/"revised"
+  dates, use the actual publication year, not the submission year.
+- Title: the full paper title, every word, as printed.
+- Do not add commentary, quotes, code fences, or extra lines.
+
+=== FIRST PAGE TEXT ===
+"""
+
+
+def tier_large(pdf: str) -> str | None:
+    text = pdftotext(pdf, 1, 1).strip()
+    if not text:
+        return None  # scanned image; nothing for the LLM to read
+    proc = run([CLAUDE, "-p", PROMPT + text])
+    if proc.returncode != 0:
+        return None
+    lines = [l for l in proc.stdout.strip().splitlines() if "|" in l]
+    if not lines:
+        return None
+    parts = lines[-1].split("|")
+    if len(parts) < 3:
+        return None
+    return make_name(parts[0].strip(), parts[1].strip(),
+                     "|".join(parts[2:]).strip())
+
+
+# ----------------------------- driver --------------------------------------
+
+TIERS = {"s": ("small", tier_small),
+         "m": ("medium", tier_medium),
+         "l": ("large", tier_large)}
+
+
+class ResolveError(Exception):
+    """No confident metadata for this file; caller skips it (batch-safe)."""
+
+
+def resolve_name(pdf: str, pinned: str | None, verbose: bool) -> str:
+    order = [pinned] if pinned else ["s", "m", "l"]
+    for key in order:
+        label, fn = TIERS[key]
+        try:
+            name = fn(pdf)
+        except RuntimeError as e:
+            # e.g. pdftotext failure on a corrupt/truncated PDF: skip this file
+            raise ResolveError(str(e))
+        if name:
+            if verbose:
+                print(f"  [{label}] {os.path.basename(pdf)}", file=sys.stderr)
+            return name
+    tiers_tried = label if pinned else "s/m/l"
+    raise ResolveError(f"no confident metadata from tier(s) {tiers_tried}. "
+                       "Try -l (LLM) or OCR a scanned PDF first.")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="Rename PDFs to firstauthor_year_all-title-words.pdf")
+    ap.add_argument("pdfs", nargs="+", help="PDF file(s)")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("-s", dest="tier", action="store_const", const="s",
+                   help="small: embedded metadata only (no net, no LLM)")
+    g.add_argument("-m", dest="tier", action="store_const", const="m",
+                   help="medium: DOI/Crossref lookup (net, no LLM)")
+    g.add_argument("-l", dest="tier", action="store_const", const="l",
+                   help="large: LLM extraction via claude -p")
+    ap.add_argument("-n", "--dry-run", action="store_true",
+                    help="print target, do not rename")
+    ap.add_argument("-d", "--dest", metavar="DIR",
+                    help="also move renamed file into DIR")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="report which tier succeeded")
+    args = ap.parse_args()
+
+    if args.dest:
+        os.makedirs(args.dest, exist_ok=True)
+
+    for pdf in args.pdfs:
+        if not os.path.isfile(pdf):
+            print(f"skip: not a file: {pdf}", file=sys.stderr)
+            continue
+        try:
+            name = resolve_name(pdf, args.tier, args.verbose)
+        except ResolveError as e:
+            print(f"skip: {pdf}: {e}", file=sys.stderr)
+            continue
+        dest_dir = args.dest or os.path.dirname(os.path.abspath(pdf))
+        target = os.path.join(dest_dir, name)
+        if os.path.abspath(target) == os.path.abspath(pdf):
+            print(f"unchanged: {pdf}")
+            continue
+        if os.path.exists(target):
+            print(f"skip: target exists: {target}", file=sys.stderr)
+            continue
+        if args.dry_run:
+            print(f"{pdf}  ->  {target}")
+            continue
+        os.rename(pdf, target)
+        print(f"{pdf}  ->  {target}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,74 @@
+#!/opt/homebrew/bin/bash
+
+# m-scheduled-send-wrapper - Execute scheduled email sends for launchd
+# Called by launchd with draft ID as argument
+
+set -euo pipefail
+
+draft_id="$1"
+metadata_file="$HOME/.config/mail-tools/scheduled/$draft_id.json"
+log_file="/tmp/m-scheduled-send-$(date +%Y%m%d-%H%M%S)-$draft_id.log"
+
+# Log function
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): $*" | tee -a "$log_file" >&2
+}
+
+log "Starting scheduled send for draft $draft_id"
+
+if [[ ! -f "$metadata_file" ]]; then
+    log "ERROR: Metadata file not found: $metadata_file"
+    exit 1
+fi
+
+# Read metadata
+if ! metadata=$(cat "$metadata_file"); then
+    log "ERROR: Failed to read metadata file"
+    exit 1
+fi
+
+# Extract account from metadata using basic parsing (avoid jq dependency)
+account=$(echo "$metadata" | grep '"account"' | cut -d'"' -f4)
+original_command=$(echo "$metadata" | grep '"original_command"' | cut -d'"' -f4)
+
+log "Account: $account"
+log "Original command: $original_command"
+
+# Attempt to send the draft
+log "Attempting to send draft $draft_id"
+
+# Use gmail-api-rw with account flag only if account is not "default"
+if [[ "$account" == "default" ]]; then
+    send_cmd="gmail-api-rw send --draft-id $draft_id --via-send"
+else
+    send_cmd="gmail-api-rw -e $account send --draft-id $draft_id --via-send"
+fi
+
+log "Command: $send_cmd"
+if eval "$send_cmd" 2>&1 | tee -a "$log_file"; then
+    log "SUCCESS: Draft sent successfully"
+
+    # Clean up on success
+    log "Cleaning up metadata and launchd job"
+    rm -f "$metadata_file"
+
+    plist_file="$HOME/Library/LaunchAgents/com.mise.scheduled-send.$draft_id.plist"
+    if [[ -f "$plist_file" ]]; then
+        launchctl unload "$plist_file" 2>/dev/null || true
+        rm -f "$plist_file"
+        log "Removed launchd job: $plist_file"
+    fi
+
+    # Clean up log file on success (keep it on failure for debugging)
+    rm -f "$log_file"
+
+else
+    log "ERROR: Failed to send draft $draft_id"
+    log "Metadata preserved for manual retry"
+    if [[ "$account" == "default" ]]; then
+        log "To retry manually: gmail-api-rw send --draft-id \"$draft_id\" --via-send"
+    else
+        log "To retry manually: gmail-api-rw -e \"$account\" send --draft-id \"$draft_id\" --via-send"
+    fi
+    exit 1
+fi

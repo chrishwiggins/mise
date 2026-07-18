@@ -1,0 +1,75 @@
+#!/bin/bash
+# idle-timeout SECONDS COMMAND [ARGS...]
+# Run COMMAND, killing it if it produces no output for SECONDS seconds.
+# Unlike `timeout`, the clock resets on every line of output, so a
+# long-running command is fine as long as it keeps printing progress.
+#
+# Examples:
+#   idle-timeout 10 python3 foo.py
+#   idle-timeout 30 ./long-build.sh
+#
+# Exit status: command's status if it finishes, 124 if killed for being idle.
+
+set +m   # disable job-control so killing the bg job doesn't print "Terminated"
+
+if [ "$#" -lt 2 ]; then
+    echo "usage: idle-timeout SECONDS COMMAND [ARGS...]" >&2
+    exit 2
+fi
+
+idle=$1
+shift
+
+# Force unbuffered output for python so lines aren't trapped in a buffer
+# and falsely read as idle. Harmless for other commands.
+case "$1" in
+    python|python3) set -- "$1" -u "${@:2}" ;;
+esac
+
+# Run the command in its own process group, writing its status to a temp file
+# so we can recover it after reading all output. Process substitution would
+# hide the real PID and exit status, so use a named pipe instead.
+statusfile=$(mktemp)
+fifo=$(mktemp -u)
+mkfifo "$fifo"
+trap 'rm -f "$statusfile" "$fifo"' EXIT
+
+# Launch in a new process group (setsid via subshell) so children die too.
+{
+    "$@" 2>&1
+    echo $? > "$statusfile"
+} > "$fifo" &
+cmd_pid=$!
+disown "$cmd_pid" 2>/dev/null   # stop the shell from printing "Terminated" on kill
+
+# Open the FIFO read end on fd 3 and keep it open so reads block on timeout
+# (returning >128) rather than seeing spurious EOF.
+exec 3< "$fifo"
+
+timed_out=0
+while :; do
+    if IFS= read -r -t "$idle" -u 3 line; then
+        printf '%s\n' "$line"
+    else
+        # read failed: either real EOF or an idle timeout. Bash's exit
+        # status for a FIFO timeout is unreliable (>128 only on real
+        # pipes/ttys), so distinguish by whether the producer is alive.
+        if kill -0 "$cmd_pid" 2>/dev/null; then
+            timed_out=1
+        fi
+        break
+    fi
+done
+
+if [ "$timed_out" -eq 1 ]; then
+    echo "[idle-timeout] no output for ${idle}s, killing pid $cmd_pid" >&2
+    kill -TERM "$cmd_pid" 2>/dev/null
+    sleep 1
+    kill -KILL "$cmd_pid" 2>/dev/null
+    wait "$cmd_pid" 2>/dev/null   # reap silently to suppress "Terminated" job message
+    exit 124
+fi
+
+# EOF reached: command finished. Recover its exit status.
+wait "$cmd_pid" 2>/dev/null
+exit "$(cat "$statusfile" 2>/dev/null || echo 0)"
