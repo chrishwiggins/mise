@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 import zipfile
 import xml.etree.ElementTree as ET
 import subprocess
@@ -11,6 +12,11 @@ import unicodedata
 OUTPUT_DIR = "audiobook"
 VOICE = "Samantha"
 SPEECH_RATE = 200
+# macOS `say` sometimes finishes writing the AIFF but never exits (observed
+# hanging for hours/days). If the output file stops growing for this many
+# seconds while `say` is still alive, kill it and move on.
+STALL_TIMEOUT = 120
+POLL_INTERVAL = 5
 
 
 # ---------------------
@@ -116,6 +122,39 @@ def clean_text_file(txt_path):
         f.write(ascii_cleaned)
 
 
+def run_with_stall_guard(cmd, watched_path, stall_timeout=STALL_TIMEOUT):
+    """Run cmd, killing it if watched_path stops growing while it's alive.
+
+    Returns "ok" (clean exit), "stalled" (killed after output stopped growing;
+    output is usually complete), or "failed" (nonzero exit).
+    """
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    last_size = -1
+    last_change = time.time()
+
+    while True:
+        ret = proc.poll()
+        if ret is not None:
+            return "ok" if ret == 0 else "failed"
+
+        try:
+            size = os.path.getsize(watched_path)
+        except OSError:
+            size = -1
+
+        if size != last_size:
+            last_size = size
+            last_change = time.time()
+        elif time.time() - last_change > stall_timeout:
+            proc.kill()
+            proc.wait()
+            return "stalled"
+
+        time.sleep(POLL_INTERVAL)
+
+
 def generate_audio_files(output_dir, voice, speech_rate):
     print("🎙 Generating audio files...")
     text_dir = os.path.join(output_dir, "text")
@@ -127,26 +166,34 @@ def generate_audio_files(output_dir, voice, speech_rate):
         txt_path = os.path.join(text_dir, txt_file)
         aiff_path = os.path.join(audio_dir, f"{base_name}.aiff")
 
-        try:
-            subprocess.run(
-                [
-                    "say",
-                    "-v",
-                    voice,
-                    "-r",
-                    str(speech_rate),
-                    "-f",
-                    txt_path,
-                    "-o",
-                    aiff_path,
-                ],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Error generating audio for {txt_file}:\n{e.stderr.decode()}")
+        if os.path.exists(aiff_path) and os.path.getsize(aiff_path) > 0:
+            print(f"⏭ Skipping {txt_file}: {aiff_path} already exists")
             continue
+
+        status = run_with_stall_guard(
+            [
+                "say",
+                "-v",
+                voice,
+                "-r",
+                str(speech_rate),
+                "-f",
+                txt_path,
+                "-o",
+                aiff_path,
+            ],
+            aiff_path,
+        )
+
+        if status == "failed":
+            print(f"❌ Error generating audio for {txt_file}")
+            continue
+        if status == "stalled":
+            print(
+                f"⚠️ say hung after {aiff_path} stopped growing for "
+                f"{STALL_TIMEOUT}s; killed it and moved on (file is likely "
+                f"complete, but spot-check it)"
+            )
 
         print(f"🔊 Created audio file: {aiff_path}")
 
