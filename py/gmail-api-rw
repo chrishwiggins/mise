@@ -695,20 +695,110 @@ def versioned_path(path):
     return parent / f"{stem}-v{new_v}{suffix}"
 
 
+def iter_attachment_parts(msg):
+    """Yield (part, filename) for every part a human would call an attachment.
+
+    Filtering on `Content-Disposition: attachment` alone silently misses inline
+    images. Mail from Outlook/Apple Mail embeds screenshots in the HTML body as
+    `Content-Disposition: inline` parts with a Content-ID, referenced by
+    `cid:` in the markup. Those are real files the user wants (a 380KB PNG is
+    an attachment by any practical definition), but the old filter dropped them
+    and reported "No attachments found".
+
+    So the rule is: any non-multipart part that is not the message body itself
+    counts. Concretely, skip multipart containers and skip body parts, then
+    take whatever is left.
+    """
+    # Local import: this module keeps top-level imports minimal for startup
+    # latency, and mimetypes is only needed for unnamed inline parts.
+    import mimetypes
+
+    counter = [0]
+
+    def walk(container, in_alternative=False):
+        """Recurse manually rather than using msg.walk().
+
+        Yields (part, in_alternative). Two things msg.walk() gets wrong here:
+
+        1. It descends into message/rfc822, so an attached email would be
+           saved once as itself and then AGAIN as its inner body parts and
+           inner inline images. An attached message is one file.
+        2. It loses the parent context needed to tell a body alternative from
+           a real file, so we thread down whether we are inside a
+           multipart/alternative.
+        """
+        alt = in_alternative or container.get_content_type() == "multipart/alternative"
+        for part in container.iter_parts():
+            if part.get_content_type() == "message/rfc822":
+                yield part, alt
+                continue
+
+            if part.get_content_maintype() == "multipart":
+                yield from walk(part, alt)
+                continue
+
+            yield part, alt
+
+    if msg.get_content_maintype() == "multipart":
+        candidates = walk(msg)
+    else:
+        candidates = iter(())
+
+    for part, in_alternative in candidates:
+        disp = (part.get("Content-Disposition", "") or "").lower()
+        ctype = part.get_content_type()
+        filename = part.get_filename()
+
+        # The body itself is not an attachment. Two shapes to exclude, neither
+        # of which is captured by an allowlist of subtypes (marketing mail
+        # ships text/x-amp-html; some clients emit text/watch-html):
+        #
+        #   a) any text/* part inside a multipart/alternative, since
+        #      "alternative" means these ARE the body in different formats.
+        #      Outlook puts a Content-ID on its html body part, so a
+        #      cid-based test wrongly treats that body as a file.
+        #   b) an unnamed text/* part with no Content-ID anywhere else.
+        #
+        # A text part that is named or explicitly marked attachment (a
+        # forwarded .txt, an inline .csv) is a real file and survives both.
+        if (part.get_content_maintype() == "text"
+                and not filename
+                and "attachment" not in disp
+                and (in_alternative or not part.get("Content-ID"))):
+            continue
+
+        if not filename:
+            counter[0] += 1
+            if ctype == "message/rfc822":
+                # An attached email carries no filename. Name it from its own
+                # Subject so the saved file is identifiable.
+                inner = part.get_payload()
+                if isinstance(inner, list) and inner:
+                    inner = inner[0]
+                subj = ""
+                try:
+                    subj = str(inner.get("Subject", "") or "")
+                except AttributeError:
+                    pass
+                stem = sanitize_filename(subj, 40) if subj else f"attachment-{counter[0]}"
+                filename = f"{stem}.eml"
+            else:
+                # Inline parts often have no filename, only a Content-ID.
+                # Prefer a readable name derived from the cid.
+                cid = (part.get("Content-ID", "") or "").strip("<>")
+                ext = mimetypes.guess_extension(ctype) or ".bin"
+                stem = sanitize_filename(cid, 40) if cid else f"attachment-{counter[0]}"
+                filename = f"{stem}{ext}"
+
+        yield part, filename
+
+
 def save_attachments(raw_bytes, output_dir):
     """Extract and save attachments alongside the .eml file."""
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
     saved = []
 
-    for part in msg.walk():
-        disp = part.get("Content-Disposition", "")
-        if "attachment" not in disp:
-            continue
-
-        filename = part.get_filename()
-        if not filename:
-            filename = f"attachment-{len(saved) + 1}.bin"
-
+    for part, filename in iter_attachment_parts(msg):
         att_path = output_dir / filename
         if att_path.exists():
             print(f"Attachment already exists, skipping: {att_path}", file=sys.stderr)
@@ -735,15 +825,7 @@ def open_attachments_interactively(raw_bytes):
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
     attachments = []
 
-    for part in msg.walk():
-        disp = part.get("Content-Disposition", "")
-        if "attachment" not in disp:
-            continue
-
-        filename = part.get_filename()
-        if not filename:
-            filename = f"attachment-{len(attachments) + 1}.bin"
-
+    for part, filename in iter_attachment_parts(msg):
         payload = part.get_payload(decode=True)
         if payload:
             # Save to attachments directory
@@ -2614,15 +2696,23 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
     if orig_msg_id:
         fwd["References"] = orig_msg_id
 
-    # Carry over attachments from the original
-    for part in orig.walk():
-        disp = part.get("Content-Disposition", "")
-        if "attachment" not in disp:
-            continue
-        filename = part.get_filename() or "attachment.bin"
+    # Carry over attachments from the original. Uses the same definition as
+    # extraction (iter_attachment_parts), so a message whose images were
+    # pasted into the body -- Content-Disposition: inline with a cid: --
+    # forwards with those images instead of silently dropping them. Filtering
+    # on "attachment" here meant a forwarded screenshot email arrived empty.
+    for part, filename in iter_attachment_parts(orig):
         payload = part.get_payload(decode=True)
         if not payload:
-            continue
+            # message/rfc822 (an attached email) has no decoded payload: its
+            # content is the nested message object. Re-serialize it so an
+            # attached mail survives the forward instead of vanishing.
+            if part.get_content_type() == "message/rfc822":
+                inner = part.get_payload()
+                if isinstance(inner, list) and inner:
+                    payload = inner[0].as_bytes()
+            if not payload:
+                continue
         ctype = part.get_content_type() or "application/octet-stream"
         maintype, subtype = ctype.split("/", 1)
         att = MIMEBase(maintype, subtype)
