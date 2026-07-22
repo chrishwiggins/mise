@@ -1613,6 +1613,35 @@ log_command() {
 open_web() {
     local folder="$1"; shift
     local profile="$chrome_profile"
+
+    # `m 1 -w` means "show me message #1 in Gmail", not "search the inbox for
+    # the literal string 1". gmail_web only knows folders and search queries,
+    # so a bare index used to become `#search/in:inbox+1`, which finds nothing
+    # useful. When every trailing arg is a message index, hand off to the
+    # backend's `open` action instead: it resolves index -> Gmail message id
+    # against the same listing the CLI just showed and opens `#all/<msg_id>`.
+    # Anything else (from:alice, before:2026/03/01, ...) is a real Gmail query
+    # and still goes to gmail_web unchanged.
+    if (( $# > 0 )); then
+        local a all_indices=1
+        for a in "$@"; do
+            [[ "$a" =~ ^[0-9]+$ ]] || { all_indices=0; break; }
+        done
+        if (( all_indices )); then
+            # Pass the folder through as the backend's "sent" modifier so
+            # `m sent 1 -w` opens sent message #1, not inbox #1. The backend
+            # scopes the lookup to in:sent, which also keeps the cache key
+            # aligned with the listing the index came from.
+            local -a scope=()
+            [[ "$folder" == "sent" ]] && scope=(sent)
+            log_info "Opening $folder message(s) $* in Gmail (profile $profile)..."
+            log_command "$@"
+            GMAILS_CHROME_PROFILE="$profile" \
+                exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" \
+                    "${scope[@]+"${scope[@]}"}" "$@" open
+        fi
+    fi
+
     log_info "Opening Gmail ($folder) in browser (profile $profile)..."
     log_command "$@"
     exec gmail_web "$profile" "$folder" "$@"
