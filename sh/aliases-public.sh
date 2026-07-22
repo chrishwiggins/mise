@@ -557,10 +557,11 @@ alias gitpush "echo 'push to github with a human-readable commit message of suff
 alias pbclaude 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile'
 alias liar 'date >> ~/youreabsolutelyright.txt; pbpaste >> ~/youreabsolutelyright.txt; echo "====" >> ~/youreabsolutelyright.txt'
 alias nolie "echo 'no fraud, no placeholder code, no mock code, no random simulated code, only real code that works perfectly for the specified task' | pbcopy"
-alias hideme-start 'scutil --nc start "hide.me VPN (Wireguard)"'
-alias hideme-stop 'scutil --nc stop "hide.me VPN (Wireguard)"'
-alias hideme-status 'scutil --nc status "hide.me VPN (Wireguard)"'
-alias hideme-check 'scutil --nc status "hide.me VPN (Wireguard)" | head -1'
+alias hideme echo i think you mean vpn
+alias hideme-start echo i think you mean vpn start
+alias hideme-stop echo i think you mean vpn stop
+alias hideme-status echo i think you mean vpn status
+alias hideme-check echo i think you mean vpn check
 alias claw 'ssh -i ~/.ssh/google_compute_engine root@23.95.164.201'
 
 skip_verbose_startup:
