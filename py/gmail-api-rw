@@ -2276,13 +2276,28 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
     quoted = "\n".join(f"> {line}" for line in orig_body.splitlines())
     template = f"\n\nOn {orig_date}, {orig_name} wrote:\n{quoted}\n"
 
-    # -t flag: show message text inline (same as gmail-api-rw <index> -t) and exit
-    if getattr(args, 'text', False):
+    # -t/--text has three states after argparse (nargs="?", const=True):
+    #   False  -> flag absent
+    #   True   -> bare -t: inline-preview the built message and exit (old behavior)
+    #   str    -> --text="body": use that string as the reply body, skip the editor
+    text_val = getattr(args, 'text', False)
+    if text_val is True:
         print_message_preview(raw_bytes)
         return
 
-    # Stdin body or interactive editor
-    if not sys.stdin.isatty():
+    inline_text = text_val if isinstance(text_val, str) else None
+
+    # Body source, in priority order: --text="..." string, then stdin, then editor.
+    if inline_text is not None:
+        # Inline body supplied on the command line. The interactive y/n/e/a
+        # confirm below still runs when stdin is a tty, so this does NOT
+        # silently auto-send from an interactive shell.
+        stripped = inline_text.strip()
+        if not stripped:
+            print("Empty --text body, saving as draft instead of sending.", file=sys.stderr)
+            as_draft = True
+        body = (stripped + "\n" if stripped else "") + template
+    elif not sys.stdin.isatty():
         stdin_body = sys.stdin.read().strip()
         if not stdin_body:
             # No actual reply content piped in; save as draft to prevent accidental sends
@@ -2449,10 +2464,14 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
     orig_cc = orig.get("Cc", "")
     orig_msg_id = orig.get("Message-ID", "")
 
-    # -t flag: show message text inline and exit (recipient not required)
-    if text_view:
+    # text_view mirrors do_reply's -t/--text tri-state:
+    #   True -> bare -t: inline preview and exit (recipient not required)
+    #   str  -> --text="body": use that string as the forward body
+    #   False-> flag absent
+    if text_view is True:
         print_message_preview(raw_bytes)
         return
+    inline_text = text_view if isinstance(text_view, str) else None
 
     recipient = _assert_valid_header_addrs(resolve_recipient(recipient), "To")
 
@@ -2472,8 +2491,14 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
     template = f"\n\n{fwd_header}{orig_body}\n"
     fwd_cc = ""
 
-    # Stdin body or interactive editor
-    if not sys.stdin.isatty():
+    # Body source: --text="..." string, then stdin, then interactive editor.
+    if inline_text is not None:
+        stripped = inline_text.strip()
+        if not stripped:
+            print("Empty --text body, saving as draft instead of sending.", file=sys.stderr)
+            as_draft = True
+        body = (stripped + "\n" if stripped else "") + template
+    elif not sys.stdin.isatty():
         stdin_body = sys.stdin.read().strip()
         if not stdin_body:
             print("No body on stdin, saving as draft instead of sending.", file=sys.stderr)
@@ -3323,7 +3348,10 @@ def parse_list_get_args(argv):
     parser.add_argument("-F", "--config", default=None, help="Muttrc config for account isolation")
     parser.add_argument("-e", "--email", default=None, help="Account email (alternative to -F)")
     parser.add_argument("-S", "--stdout", action="store_true", help="Write raw message to stdout (for piping)")
-    parser.add_argument("-t", "--text", action="store_true", help="Print text body to stdout (inline view)")
+    parser.add_argument("-t", "--text", nargs="?", const=True, default=False,
+                        help="Bare -t: print text body to stdout (inline view). "
+                             "With a value (reply/reply-all/fwd only): use that string "
+                             "as the reply body, e.g. reply --text=\"great, thanks!\"")
     parser.add_argument("-x", "--headers", action="store_true", help="Print email headers only (no body content)")
     parser.add_argument("-c", "--just-count", action="store_true", help="Print message count only (for scripting)")
     parser.add_argument("-Q", "--show-account", action="store_true", help="Show active account and exit")
@@ -3517,7 +3545,8 @@ Authentication:
   Uses OAuth via google_auth.py. Tokens are cached per scope in ~/.config/google-tokens/.
   List/download uses gmail-readonly scope. Send/draft uses gmail-compose scope.
   Reply/fwd uses gmail-send scope (readonly + compose combined).
-  First use of send/draft/reply will open a browser for OAuth consent.
+  Trash/archive/read/unread use gmail-modify scope (labels and trash need it).
+  First use of send/draft/reply/trash will open a browser for OAuth consent.
 
 Multi-account (-F and -e):
   -F: Pass a neomutt-style config file containing 'set imap_user="user@example.com"'.
@@ -4035,7 +4064,9 @@ def main():
             query = f"in:sent {query}" if query else "in:sent"
         elif not query:
             query = "in:inbox"
-        reply_scope = "gmail-readonly" if args.text else "gmail-send"
+        # Bare -t (args.text is True) is a preview and needs only readonly.
+        # --text="body" (a string) is a real send and needs the send scope.
+        reply_scope = "gmail-readonly" if args.text is True else "gmail-send"
         service, login_hint = _authenticated_service(args, reply_scope)
 
         # --outbox: read from one account, send from another
@@ -4063,7 +4094,9 @@ def main():
     elif mode == "fwd":
         fwd_rest = [a for a in rest if a != "fwd"]
         args = parse_list_get_args(fwd_rest)
-        if args.index is None or (args.output is None and not args.text):
+        # Only a bare -t preview (args.text is True) waives the recipient.
+        fwd_preview = args.text is True
+        if args.index is None or (args.output is None and not fwd_preview):
             print("Usage: gmail-api-rw fwd INDEX RECIPIENT (e.g., gmail-api-rw fwd 3 user@example.com)", file=sys.stderr)
             sys.exit(1)
         indices = parse_index_token(args.index)
@@ -4073,7 +4106,7 @@ def main():
             sys.exit(1)
         fwd_idx = indices[0]
         recipient = args.output  # the "output" positional is the recipient for fwd
-        fwd_scope = "gmail-readonly" if args.text else "gmail-send"
+        fwd_scope = "gmail-readonly" if args.text is True else "gmail-send"
         service, login_hint = _authenticated_service(args, fwd_scope)
         # Apply same query defaults as listing, so cache keys match
         query = args.query
@@ -4122,7 +4155,7 @@ def main():
                   f"{len(indices)} indices: {indices}", file=sys.stderr)
             sys.exit(1)
         # trash/archive/read/unread need write access; open and thread only need read
-        scope = "gmail-send" if mode in ("trash", "archive", "read", "unread") else "gmail-readonly"
+        scope = "gmail-modify" if mode in ("trash", "archive", "read", "unread") else "gmail-readonly"
         service, login_hint = _authenticated_service(args, scope)
         # Apply same query defaults as listing, so cache keys match
         query = args.query
