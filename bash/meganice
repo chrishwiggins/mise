@@ -1,0 +1,65 @@
+#!/bin/bash
+# meganice -- renice every process matching a grep pattern to maximum niceness.
+# All arguments are passed straight to grep, so grep syntax works:
+#   meganice -i python        # case-insensitive
+#   meganice -E 'ffmpeg|x264' # extended regex, alternation
+#   meganice -w Maui          # whole-word match
+# Matches against the full command line (ps -axo command).
+# macOS clamps niceness to 20, so "mega" = 20.
+set -uo pipefail
+
+NICENESS=20
+
+if [ $# -eq 0 ]; then
+    echo "usage: meganice [grep options] pattern" >&2
+    exit 64
+fi
+
+# Never renice our own ancestry (invoking shell, terminal, a claude/tmux
+# session whose argv happens to contain the pattern, ...).
+ancestors=" $$ "
+p=$$
+while [ "$p" -gt 1 ]; do
+    p=$(ps -o ppid= -p "$p" | tr -d ' ') || break
+    [ -n "$p" ] || break
+    ancestors="$ancestors$p "
+done
+
+# Snapshot ps first, then grep the text, so the grep processes themselves
+# can never appear in the match set.
+ps_out=$(ps -axo pid=,nice=,command=)
+
+matches=$(printf '%s\n' "$ps_out" | grep "$@") || {
+    echo "meganice: no processes match" >&2
+    exit 1
+}
+
+renice_pids=()
+while read -r pid nice cmd; do
+    case "$ancestors" in
+        *" $pid "*) continue ;;
+    esac
+    case "$cmd" in
+        *meganice*|"ps -axo"*) continue ;;
+    esac
+    if [ "$nice" -ge "$NICENESS" ]; then
+        printf 'already %3d: %6d %s\n' "$nice" "$pid" "$cmd"
+        continue
+    fi
+    renice_pids+=("$pid")
+    printf '%3d -> %3d: %6d %s\n' "$nice" "$NICENESS" "$pid" "$cmd"
+done <<< "$matches"
+
+if [ ${#renice_pids[@]} -eq 0 ]; then
+    echo "meganice: nothing to renice" >&2
+    exit 0
+fi
+
+status=0
+for pid in "${renice_pids[@]}"; do
+    if ! err=$(renice "$NICENESS" -p "$pid" 2>&1); then
+        echo "meganice: failed on $pid: $err" >&2
+        status=1
+    fi
+done
+exit $status
