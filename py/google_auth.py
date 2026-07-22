@@ -43,6 +43,10 @@ SCOPE_PRESETS = {
     "docs-readonly": ["https://www.googleapis.com/auth/documents.readonly"],
     "gmail-readonly": ["https://www.googleapis.com/auth/gmail.readonly"],
     "gmail-compose": ["https://www.googleapis.com/auth/gmail.compose"],
+    # trash/archive/read/unread need gmail.modify; readonly+compose cannot
+    # touch labels or the trash. modify covers all read/write except
+    # permanent delete, so it needs no companion scopes.
+    "gmail-modify": ["https://www.googleapis.com/auth/gmail.modify"],
     "gmail-send": [
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.compose",
