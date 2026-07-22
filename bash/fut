@@ -9,4 +9,6 @@ timespec="$1"
 shift
 message="$*"
 
-echo "$message" | mutt -s "$message" "${timespec}@followupthen.com"
+# Use the modern `m send` dispatcher; the old mutt wrapper warned on every
+# run because the body arrives piped rather than on a tty.
+echo "$message" | "$(dirname "$(realpath "$0")")/m" send -s "$message" "${timespec}@followupthen.com"
