@@ -1,0 +1,113 @@
+#!/bin/bash
+# gtrash - bulk-trash (or archive / mark-read) every Gmail message matching a
+# query, in any account configured for gmails (~/mise/py/gmail-api-rw).
+#
+# Usage:
+#   gtrash [OPTIONS] SLUG QUERY...
+#
+#   SLUG      account alias/substring per `gmails -E` (g, u, gv, j, l, ...)
+#   QUERY     Gmail search query; remaining args are joined, so quotes are
+#             optional: gtrash u from:myft@news-alerts.ft.com
+#
+# Options:
+#   -y, --yes      skip the confirmation prompt (for scripts/cron)
+#       --archive  archive instead of trash (query auto-scoped to in:inbox)
+#       --read     mark read instead of trash (query auto-scoped to is:unread)
+#   -h, --help     this help
+#
+# Default op is trash: messages go to Gmail Trash, recoverable for 30 days.
+# Shows the match count and a sample listing, asks y/N, then works in batches
+# of 100 until nothing matches. First use per account+op may open a browser
+# OAuth consent (gmail-modify scope).
+#
+# Examples:
+#   gtrash u from:myft@news-alerts.ft.com
+#   gtrash g 'from:noreply@github.com older_than:1y'
+#   gtrash --read gv is:unread category:promotions
+set -euo pipefail
+
+G=/Users/wiggins/mise/py/gmails
+BATCH=100
+
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
+
+OP=trash
+YES=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -y|--yes) YES=1; shift ;;
+    --archive) [ "$OP" = read ] && { echo "gtrash: --archive and --read are mutually exclusive" >&2; exit 2; }
+               OP=archive; shift ;;
+    --read)    [ "$OP" = archive ] && { echo "gtrash: --archive and --read are mutually exclusive" >&2; exit 2; }
+               OP=read; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) echo "gtrash: unknown option $1" >&2; usage >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+
+[ $# -ge 2 ] || { usage >&2; exit 2; }
+SLUG=$1; shift
+Q="$*"
+
+# Archiving a non-inbox message or marking-read an already-read one leaves the
+# match set unchanged, so those ops must be scoped or the batch loop never ends.
+case "$OP" in
+  archive) EQ="in:inbox ($Q)" ;;
+  read)    EQ="is:unread ($Q)" ;;
+  *)       EQ="$Q" ;;
+esac
+
+# gmails may print an OAuth URL to stdout before the count (token refresh);
+# keep only the final line and insist it is a number.
+count() {
+  local out
+  out=$("$G" -c -e "$SLUG" -q "$EQ" | tail -1)
+  case "$out" in
+    ''|*[!0-9]*) echo "gtrash: could not get a count from gmails (got: $out)." >&2
+                 echo "        If an OAuth URL was shown, complete it and re-run." >&2
+                 exit 1 ;;
+  esac
+  echo "$out"
+}
+
+n=$(count)
+if [ "$n" -eq 0 ]; then
+  echo "No messages match '$EQ' in account '$SLUG'."
+  exit 0
+fi
+
+echo "Account '$SLUG', query: $EQ"
+"$G" -e "$SLUG" -q "$EQ" --count 5
+[ "$n" -gt 5 ] && echo "  ... and $((n - 5)) more"
+
+if [ "$YES" -ne 1 ]; then
+  printf '%s all %d matching message(s)? [y/N] ' "$OP" "$n"
+  read -r reply
+  case "$reply" in y|Y|yes|YES) ;; *) echo "Aborted; nothing changed."; exit 1 ;; esac
+fi
+
+# The count is Gmail's resultSizeEstimate, which saturates (~201) on large
+# result sets, so it may sit unchanged for many rounds while real progress is
+# made. Only treat a non-decreasing count as stuck when it is small enough
+# that one batch should have cleared it; a rounds cap backstops the rest.
+prev=""
+rounds=0
+while [ "$n" -gt 0 ]; do
+  if [ -n "$prev" ] && [ "$prev" -le "$BATCH" ] && [ "$n" -ge "$prev" ]; then
+    echo "gtrash: $prev message(s) matched but a full batch left $n; aborting to avoid a loop." >&2
+    exit 1
+  fi
+  rounds=$((rounds + 1))
+  if [ "$rounds" -gt 1000 ]; then
+    echo "gtrash: 1000 batches without finishing; aborting." >&2
+    exit 1
+  fi
+  prev=$n
+  b=$(( n < BATCH ? n : BATCH ))
+  echo "$n remaining; ${OP}ing $b..."
+  "$G" -e "$SLUG" -q "$EQ" --count "$b" "$OP" "1-$b"
+  n=$(count)
+done
+echo "done: no messages match '$EQ' in account '$SLUG'"
