@@ -12,8 +12,11 @@ AUX_DIR="$(dirname "$SCRIPT_DIR")/aux/m"
 if [[ -z "${COLUMNS:-}" || ! "${COLUMNS:-}" =~ ^[0-9]+$ ]]; then
     _m_cols=""
     if [[ -r /dev/tty ]]; then
-        _m_cols="$(tput cols </dev/tty 2>/dev/null)"
-        [[ "$_m_cols" =~ ^[0-9]+$ ]] || _m_cols="$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)"
+        # 2>/dev/null must precede </dev/tty: redirections apply left to right,
+        # and with no controlling terminal the tty open itself fails and bash
+        # prints "Device not configured" unless stderr is already silenced.
+        _m_cols="$(tput cols 2>/dev/null </dev/tty)"
+        [[ "$_m_cols" =~ ^[0-9]+$ ]] || _m_cols="$(stty size 2>/dev/null </dev/tty | cut -d' ' -f2)"
     fi
     [[ "$_m_cols" =~ ^[0-9]+$ ]] && export COLUMNS="$_m_cols"
     unset _m_cols
