@@ -280,6 +280,10 @@ parsedate_to_datetime = lambda *a, **k: _get_heavy()['parsedate_to_datetime'](*a
 
 def _retry_api_call(func, max_retries=3, base_delay=1.0):
     """Execute API call with exponential backoff on quota/rate limit errors."""
+    # The module-level HttpError is a lazy-loading proxy, not a real exception
+    # class; using it in an except clause raises TypeError. Resolve the real
+    # class here (google modules are already loaded by the time any API call runs).
+    HttpError = _import_google_modules()['HttpError']
     for attempt in range(max_retries + 1):
         try:
             return func()
@@ -2509,14 +2513,14 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
     att_suffix = _sent_attachment_suffix(attach_list)
 
     if as_draft:
-        result = send_service.users().drafts().create(
+        result = _retry_api_call(lambda: send_service.users().drafts().create(
             userId="me", body={"message": {"raw": raw_reply}}
-        ).execute()
+        ).execute())
         print(f"Draft reply saved: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
     else:
-        result = send_service.users().messages().send(
+        result = _retry_api_call(lambda: send_service.users().messages().send(
             userId="me", body={"raw": raw_reply}
-        ).execute()
+        ).execute())
         print(f"Sent reply: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
 
     # Invalidate cache so next listing reflects the new message
@@ -2736,14 +2740,14 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
     att_suffix = _sent_attachment_suffix(carried)
 
     if as_draft:
-        result = service.users().drafts().create(
+        result = _retry_api_call(lambda: service.users().drafts().create(
             userId="me", body={"message": {"raw": raw_fwd}}
-        ).execute()
+        ).execute())
         print(f"Draft forward saved: To={recipient} Subject={fwd_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
     else:
-        result = service.users().messages().send(
+        result = _retry_api_call(lambda: service.users().messages().send(
             userId="me", body={"raw": raw_fwd}
-        ).execute()
+        ).execute())
         print(f"Forwarded: To={recipient} Subject={fwd_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
 
     # Invalidate cache so next listing reflects the new message
@@ -3310,9 +3314,9 @@ def do_send(service, args, from_addr=None):
     if getattr(args, 'draft_id', None):
         try:
             # Send the existing draft
-            result = service.users().drafts().send(
+            result = _retry_api_call(lambda: service.users().drafts().send(
                 userId="me", body={"id": args.draft_id}
-            ).execute()
+            ).execute())
             print(f"Sent draft: id={result.get('id', '?')}", file=sys.stderr)
             return
         except Exception as e:
@@ -3328,9 +3332,9 @@ def do_send(service, args, from_addr=None):
         print_message_preview(raw_bytes)
         return
     encoded = base64.urlsafe_b64encode(raw_bytes).decode()
-    result = service.users().messages().send(
+    result = _retry_api_call(lambda: service.users().messages().send(
         userId="me", body={"raw": encoded}
-    ).execute()
+    ).execute())
 
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
     frm = msg.get("From") or from_addr or _default_from_email() or "(unknown)"
@@ -3365,9 +3369,9 @@ def do_draft(service, args, from_addr=None):
         print_message_preview(raw_bytes)
         return
     encoded = base64.urlsafe_b64encode(raw_bytes).decode()
-    result = service.users().drafts().create(
+    result = _retry_api_call(lambda: service.users().drafts().create(
         userId="me", body={"message": {"raw": encoded}}
-    ).execute()
+    ).execute())
 
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
     frm = msg.get("From") or from_addr or _default_from_email() or "(unknown)"
