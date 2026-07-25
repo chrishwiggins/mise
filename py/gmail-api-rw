@@ -1893,7 +1893,7 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
     kwargs = {"userId": "me", "maxResults": count}
     if query:
         kwargs["q"] = query
-    result = service.users().messages().list(**kwargs).execute()
+    result = _retry_api_call(lambda: service.users().messages().list(**kwargs).execute())
     messages = result.get("messages", [])
 
     if not messages:
@@ -2144,7 +2144,7 @@ def _resolve_message_id(service, index, count, query, account=None,
     kwargs = {"userId": "me", "maxResults": fetch_count}
     if query:
         kwargs["q"] = query
-    result = service.users().messages().list(**kwargs).execute()
+    result = _retry_api_call(lambda: service.users().messages().list(**kwargs).execute())
     messages = result.get("messages", [])
 
     if not messages:
@@ -2164,9 +2164,9 @@ def do_get(service, index, count, query, output, stdout=False, text_view=False, 
     """Download a message by its 1-based index."""
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
-    raw_msg = service.users().messages().get(
+    raw_msg = _retry_api_call(lambda: service.users().messages().get(
         userId="me", id=msg_id, format="raw"
-    ).execute()
+    ).execute())
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
 
     # For peek mode, add metadata headers for agent context
@@ -2282,9 +2282,9 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
         send_account = account
     msg_id = _resolve_message_id(service, index, count, query, account=account,
                                  verify=True)
-    raw_msg = service.users().messages().get(
+    raw_msg = _retry_api_call(lambda: service.users().messages().get(
         userId="me", id=msg_id, format="raw"
-    ).execute()
+    ).execute())
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
 
@@ -2537,9 +2537,9 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
     """Forward a message by index to a new recipient."""
     msg_id = _resolve_message_id(service, index, count, query, account=account,
                                  verify=True)
-    raw_msg = service.users().messages().get(
+    raw_msg = _retry_api_call(lambda: service.users().messages().get(
         userId="me", id=msg_id, format="raw"
-    ).execute()
+    ).execute())
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
     orig = email.message_from_bytes(raw_bytes, policy=email.policy.default)
 
@@ -2911,9 +2911,9 @@ def do_urls(service, index, count, query, account=None, url_index=None):
 
     msg_id = _resolve_message_id(service, index, count, query, account=account)
 
-    raw_msg = service.users().messages().get(
+    raw_msg = _retry_api_call(lambda: service.users().messages().get(
         userId="me", id=msg_id, format="raw"
-    ).execute()
+    ).execute())
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
 
     # Extract text content from the email
@@ -4335,7 +4335,7 @@ def main():
             kwargs = {"userId": "me", "maxResults": args.count}
             if query:
                 kwargs["q"] = query
-            result = service.users().messages().list(**kwargs).execute()
+            result = _retry_api_call(lambda: service.users().messages().list(**kwargs).execute())
             print(result.get("resultSizeEstimate", 0))
             sys.exit(0)
         if args.index is None:
