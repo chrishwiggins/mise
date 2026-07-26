@@ -2414,6 +2414,28 @@ case "$action" in
                 fi
             fi
 
+            # A ppN page token means "give me a LISTING page", so a co-present
+            # bare index must not divert us into READ MODE (which opens a single
+            # message and ignores the page). Drop bare single-index tokens when a
+            # page was requested, and surface what we ignored. Ranges (e.g.
+            # "45-67 pp2") still list on the range path below, and read-intent
+            # flags (-x/-p/-S/-A/...) are honored above, so leave those alone:
+            # only strip when EVERY token is a bare single integer.
+            if [[ -n "$page_offset" && ${#message_numbers[@]} -gt 0 ]]; then
+                _pg_all_bare_single=1
+                for _mn in "${message_numbers[@]}"; do
+                    if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                        _pg_all_bare_single=0
+                        break
+                    fi
+                done
+                if (( _pg_all_bare_single )); then
+                    page_num=$(( page_offset / page_size + 1 ))
+                    log_warn "page 'pp$page_num' requested; ignoring index '${message_numbers[*]}' and listing the page"
+                    message_numbers=()
+                fi
+            fi
+
             if [[ ${#message_numbers[@]} -gt 0 ]]; then
                 if (( peek_flag )); then
                     # ============================================
