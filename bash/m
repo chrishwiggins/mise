@@ -1848,6 +1848,9 @@ MESSAGE ACTIONS
     reply INDEX                      Reply to message
     reply-all INDEX                  Reply-all (includes To and Cc)
     fwd INDEX RECIPIENT             Forward message
+    reply INDEX --text="body"        Reply with this body, skip the editor
+                                     (empty --text="" saves a draft; bare -t
+                                     just previews). fwd/sreply/sfwd too.
     open INDEX                      Open in Gmail web UI
     trash INDEX                     Move to trash
     archive INDEX                   Archive message (removes from inbox)
