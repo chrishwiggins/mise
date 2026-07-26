@@ -26,12 +26,18 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
 ]
 
+# Live OAuth client (project "fnord"). The old ~/.config/google client was
+# deleted by Google (deleted_client) and retired to ~/.config/google-dead-2026-02;
+# the gdrive client below is current. Both use the drive.file scope.
 CREDENTIAL_PATHS = [
+    "~/.config/gdrive/credentials.json",
     "~/.config/gsheets/credentials.json",
     "~/.gsheet/credentials.json",
 ]
 
-TOKEN_PATH = "~/.gdoc_share_token/token.pickle"
+# Share the gdrive-share token cache so an existing valid/refreshable token is
+# reused and no browser login is needed (same client_id and scope).
+TOKEN_PATH = "~/.gdrive_share_token/token.pickle"
 
 
 def find_credentials():
