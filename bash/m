@@ -1796,7 +1796,9 @@ EOF
     m m 3             Archive message #3 (removes from inbox)
 
 FLAGS
-    -w, --web         Force browser instead of CLI
+    -w, --web         Open in the browser instead of the CLI. With a bare
+                      index (m 1 -w, m sent 1 -w) opens THAT message; with a
+                      query (m q from:alice -w) opens the Gmail search
     -N, --no-cache    Bypass listing cache; force fresh fetch
     -i, --important   Filter noisy senders from the listing (view-only; edit
                       ~/.config/m/view-filter.txt). E.g. m -i, m q 'j2' -i
