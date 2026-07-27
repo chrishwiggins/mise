@@ -2199,17 +2199,27 @@ if [[ -z "$account" ]]; then
 fi
 
 # pagination
-page_offset=""; page_size=10; filtered_rest=()
+# index_after_page records whether a bare index token appeared AFTER the ppN
+# token in the original argv. Ordering carries intent under !!-recall:
+# `... 1 pp2` (page appended last) means "list page 2", while
+# `... 1 pp2 18` (index appended last) means "read message 18". The
+# page-vs-index arbitration in the i|q handler keys off this flag.
+page_offset=""; page_size=10; filtered_rest=(); index_after_page=0; _seen_pp=0
 for r in "${rest[@]+"${rest[@]}"}"; do
     if [[ "$r" =~ ^pp([0-9]+)$ ]]; then
+        _seen_pp=1
         page_num="${BASH_REMATCH[1]}"
         if (( page_num > 1 )); then
             page_offset="$((( page_num - 1 ) * page_size))"
         fi
     else
+        if (( _seen_pp )) && [[ "$r" == [0-9] || "$r" == [0-9][0-9] || "$r" == [0-9][0-9][0-9] ]]; then
+            index_after_page=1
+        fi
         filtered_rest+=("$r")
     fi
 done
+unset _seen_pp
 rest=("${filtered_rest[@]+"${filtered_rest[@]}"}")
 
 # look up account
@@ -2419,14 +2429,17 @@ case "$action" in
                 fi
             fi
 
-            # A ppN page token means "give me a LISTING page", so a co-present
-            # bare index must not divert us into READ MODE (which opens a single
-            # message and ignores the page). Drop bare single-index tokens when a
-            # page was requested, and surface what we ignored. Ranges (e.g.
-            # "45-67 pp2") still list on the range path below, and read-intent
-            # flags (-x/-p/-S/-A/...) are honored above, so leave those alone:
-            # only strip when EVERY token is a bare single integer.
-            if [[ -n "$page_offset" && ${#message_numbers[@]} -gt 0 ]]; then
+            # Page-vs-index arbitration: the LAST-typed token wins (matches the
+            # !!-recall habit). A trailing ppN means "give me a LISTING page",
+            # so bare indices typed before it are dropped (with a warning). But
+            # a bare index typed AFTER ppN (e.g. `... 1 pp2 18`) means "read
+            # message 18 from that page": keep the indices and fall through to
+            # READ MODE, which already fetches enough rows for the page and
+            # treats indices as global. Ranges (e.g. "45-67 pp2") still list on
+            # the range path below, and read-intent flags (-x/-p/-S/-A/...) are
+            # honored above, so leave those alone: only strip when EVERY token
+            # is a bare single integer and none followed the page token.
+            if [[ -n "$page_offset" && ${#message_numbers[@]} -gt 0 && "$index_after_page" == "0" ]]; then
                 _pg_all_bare_single=1
                 for _mn in "${message_numbers[@]}"; do
                     if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
