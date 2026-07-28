@@ -1891,15 +1891,19 @@ COMPOSING
     send      Send .eml file or compose (routes to send script)
               --after TIME  Schedule send (e.g. --after "5m" or --after "tomorrow 9am")
     c         Same as send (compose shorthand)
-    draft     Save message to drafts
+    draft INDEX                     Reply to a message but save as a draft
+                                    instead of sending (opens the editor)
 
 MESSAGE ACTIONS
     reply INDEX                      Reply to message
     reply-all INDEX                  Reply-all (includes To and Cc)
     fwd INDEX RECIPIENT             Forward message
-    reply INDEX --text="body"        Reply with this body, skip the editor
-                                     (empty --text="" saves a draft; bare -t
-                                     just previews). fwd/sreply/sfwd too.
+    reply INDEX --text="body"        Reply with this body, skip the editor.
+                                     Shorthand: "m INDEX text=body" implies
+                                     reply (bare text= without dashes is fine).
+                                     Bare -t just previews. An empty body
+                                     (text="") is an error; use "draft" to
+                                     compose a draft. fwd/sreply/sfwd too.
     open INDEX                      Open in Gmail web UI
     trash INDEX                     Move to trash
     archive INDEX                   Archive message (removes from inbox)
