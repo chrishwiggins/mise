@@ -1724,6 +1724,38 @@ parse_action_args() {
         fi
     done
 
+    # Step 2b: no action word, but a body-bearing text token is present, so
+    # imply 'reply'. Users type `m 3 text='foo'` expecting a reply with that
+    # body, but with no action word the token would be dropped (the action-word
+    # rewrite loop below never runs). Trigger STRICTLY on the `=`-with-value
+    # forms `text=...` / `--text=...`; a bare `-t`/`--text` is a read-only
+    # preview and must NOT imply reply. Only imply if the caller allows 'reply'.
+    if [[ -z "$PA_ACTION_WORD" && " $allowed_actions " == *" reply "* ]]; then
+        local _ti=-1
+        for i in "${!PA_REMAINING[@]}"; do
+            case "${PA_REMAINING[i]}" in
+                text=*|--text=*) _ti=$i; break ;;
+            esac
+        done
+        if (( _ti >= 0 )); then
+            log_warn "body given with no action; assuming 'reply'"
+            PA_ACTION_WORD="reply"
+            # Splice a synthetic 'reply' immediately before the text token so the
+            # shared parse below sees a normal action word: tokens before it
+            # become message numbers, the text token becomes a trailing arg.
+            local -a _rebuilt=()
+            local j
+            for ((j=0; j<${#PA_REMAINING[@]}; j++)); do
+                if (( j == _ti )); then
+                    action_word_index=${#_rebuilt[@]}
+                    _rebuilt+=("reply")
+                fi
+                _rebuilt+=("${PA_REMAINING[j]}")
+            done
+            PA_REMAINING=("${_rebuilt[@]}")
+        fi
+    fi
+
     # Step 3: parse message numbers before action word, collect trailing args after
     if [[ -n "$PA_ACTION_WORD" ]]; then
         for ((i=0; i<action_word_index; i++)); do
@@ -1752,6 +1784,13 @@ parse_action_args() {
             if [[ "$targ" == text=* ]]; then
                 log_warn "'text=' isn't a flag; assuming you meant --text="
                 targ="--text=${targ#text=}"
+            fi
+            # An empty body (text=''/--text=''/--text=) used to reach the backend
+            # and silently save an empty draft. Draft now has its own verb: error
+            # here and point the user at it, before any backend invocation.
+            if [[ "$targ" == "--text=" ]]; then
+                log_error "empty body; use 'draft' to compose a draft"
+                exit 1
             fi
             PA_TRAILING_ARGS+=("$targ")
         done
