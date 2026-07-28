@@ -1745,7 +1745,15 @@ parse_action_args() {
             esac
         done
         for ((i=action_word_index+1; i<${#PA_REMAINING[@]}; i++)); do
-            PA_TRAILING_ARGS+=("${PA_REMAINING[i]}")
+            local targ="${PA_REMAINING[i]}"
+            # Bare text=... (missing dashes) would land in the backend's unused
+            # output positional and be silently dropped, so the reply body the
+            # user typed never arrives (bit us 2026-07-27). Rewrite to --text=.
+            if [[ "$targ" == text=* ]]; then
+                log_warn "'text=' isn't a flag; assuming you meant --text="
+                targ="--text=${targ#text=}"
+            fi
+            PA_TRAILING_ARGS+=("$targ")
         done
 
         # m is the user-forgiving layer: default missing index to 1 for actions that need one
