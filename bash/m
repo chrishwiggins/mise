@@ -2040,6 +2040,8 @@ REPLYING & FORWARDING
     m reply 3                             Reply to message #3
     m reply-all 3                         Reply-all to message #3
     m fwd 3 user@example.com              Forward message #3
+    m 3 text="on my way"                  Reply to #3 with this body, no editor
+    m 3 draft                             Compose a reply to #3, save as draft
     m q "from:alice" 1 reply              Find Alice email, reply to first
 
 MANAGING MESSAGES
