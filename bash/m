@@ -2240,6 +2240,32 @@ if [[ -z "$action" ]] && (( ${#rest[@]} > 0 )); then
     done
 fi
 
+# A bare first token that is neither a known action, an account alias, nor an
+# index-shaped value never had a meaning: it fell through to rest, action
+# defaulted to i, and the token was forwarded to the backend as an index,
+# surfacing a confusing "Invalid index: 'foo'". Catch the mistyped-verb case
+# here and say so plainly. Guarded tightly so real rest tokens still pass:
+# only fires when no action word was recognized, no account was chosen, and
+# the first rest token is a plain word (no leading '-', no '=', not numeric,
+# not a range, not a ppN page token). Queries go through `q` (which sets
+# action), and body shorthands carry '=' , so neither is caught here.
+if [[ -z "$action" && ${#rest[@]} -gt 0 ]]; then
+    _first="${rest[0]}"
+    case "$_first" in
+        -*|*=*) : ;;                                   # a flag or a body token
+        [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) : ;;         # bare index
+        [0-9]*-[0-9]*|[0-9]*,[0-9]*) : ;;              # range / multi-select
+        pp[0-9]*) : ;;                                 # page token
+        *[!a-zA-Z0-9_]*) : ;;                          # not a plain word; leave it
+        *)
+            echo "m: unknown action '$_first'" >&2
+            echo "Run 'm --help=actions' for the list of actions." >&2
+            exit 1
+            ;;
+    esac
+    unset _first
+fi
+
 # defaults
 action="${action:-i}"
 
