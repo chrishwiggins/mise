@@ -2899,6 +2899,40 @@ def _parse_index_ranges(spec, maximum):
     return selected or None
 
 
+def _extract_message_urls(raw_bytes):
+    """Return every http(s) URL in a message, deduped, in first-seen order.
+
+    Mines both the rendered text body and the raw HTML href/src attributes.
+    extract_text_body() strips every tag, so in an HTML-only mail (a bare
+    text/html part, no text/plain alternative) the link target is deleted
+    along with the <a> tag and only the anchor text survives -- those
+    messages used to report "No URLs found" even though the body was
+    nothing but a link. Text URLs come first so menu numbering stays stable
+    for mail that prints its links as plain text.
+    """
+    import re
+
+    heavy = _import_heavy_modules()
+    html_mod = heavy['html_mod']
+
+    text_body = html_mod.unescape(extract_text_body(raw_bytes))
+    # Remove line breaks within URLs by looking for split URLs
+    # Pattern: "https: //domain" or "http: //domain"
+    text_body = re.sub(r'https?\s*:\s*//', 'https://', text_body)
+    urls = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]+', text_body)
+
+    for html_body in extract_html_bodies(raw_bytes):
+        urls.extend(extract_urls_from_html(html_mod.unescape(html_body)))
+
+    seen = set()
+    unique_urls = []
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            unique_urls.append(url)
+    return unique_urls
+
+
 def do_urls(service, index, count, query, account=None, url_index=None):
     """Extract URLs from a message and provide interactive menu to open them.
 
@@ -2906,7 +2940,6 @@ def do_urls(service, index, count, query, account=None, url_index=None):
     interactive menu. Used by `m ... urls N K` to open the Kth URL without
     the prompt, while `m ... urls N` keeps the interactive dialog.
     """
-    import re
     import webbrowser
 
     msg_id = _resolve_message_id(service, index, count, query, account=account)
@@ -2916,42 +2949,10 @@ def do_urls(service, index, count, query, account=None, url_index=None):
     ).execute())
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
 
-    # Extract text content from the email
-    text_body = extract_text_body(raw_bytes)
-
-    # Clean up HTML entities and normalize whitespace
-    heavy = _import_heavy_modules()
-    text_body = heavy['html_mod'].unescape(text_body)
-
-    # Remove line breaks within URLs by looking for split URLs
-    # Pattern: "https: //domain" or "http: //domain"
-    text_body = re.sub(r'https?\s*:\s*//', 'https://', text_body)
-
-    # Find URLs using regex - matches http(s) URLs
-    url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-    urls = re.findall(url_pattern, text_body)
-
-    # Also mine the raw HTML for href/src targets. extract_text_body() strips
-    # every tag, so in an HTML-only mail (a bare text/html part, no text/plain
-    # alternative) the link target is deleted along with the <a> tag and only
-    # the anchor text survives. Those messages used to report "No URLs found"
-    # even though the body was nothing but a link. Text URLs come first so the
-    # menu numbering stays stable for mail that prints its links as plain text.
-    for html_body in extract_html_bodies(raw_bytes):
-        html_body = heavy['html_mod'].unescape(html_body)
-        urls.extend(extract_urls_from_html(html_body))
-
-    if not urls:
+    unique_urls = _extract_message_urls(raw_bytes)
+    if not unique_urls:
         print("No URLs found in message", file=sys.stderr)
         return
-
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_urls = []
-    for url in urls:
-        if url not in seen:
-            seen.add(url)
-            unique_urls.append(url)
 
     # Direct-open shortcut: `urls N K` opens the Kth URL with no prompt.
     if url_index is not None:
@@ -3031,11 +3032,7 @@ def do_meets(service, count, query, account=None):
     point is "whatever's already warm", per do_urls's cache-first pattern.
     Falls back to a fresh inbox fetch if there's no cache yet.
     """
-    import re
     import webbrowser
-
-    heavy = _import_heavy_modules()
-    html_mod = heavy['html_mod']
 
     cache_path = _cache_path(account)
     cached_messages = None
@@ -3072,17 +3069,9 @@ def do_meets(service, count, query, account=None):
         raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
         parsed = email.message_from_bytes(raw_bytes, policy=email.policy.default)
 
-        text_body = html_mod.unescape(extract_text_body(raw_bytes))
-        text_body = re.sub(r'https?\s*:\s*//', 'https://', text_body)
-        found = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]+', text_body)
-        for html_body in extract_html_bodies(raw_bytes):
-            found.extend(extract_urls_from_html(html_mod.unescape(html_body)))
-
-        seen_in_msg = set()
-        for url in found:
-            if not _is_meeting_url(url) or url in seen_in_msg:
+        for url in _extract_message_urls(raw_bytes):
+            if not _is_meeting_url(url):
                 continue
-            seen_in_msg.add(url)
             entries.append({
                 "subject": parsed.get("Subject", "(no subject)"),
                 "from": parsed.get("From", "unknown"),
