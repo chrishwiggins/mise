@@ -38,7 +38,7 @@ fi
 #
 # § PUBLIC API (do NOT break — colleagues' aliases call this)
 #   Account aliases: g j u cu l h hNY n z (resolved via accounts.json)
-#   Actions:         i sent q d x urls send c draft reply reply-all fwd
+#   Actions:         i sent q d x urls meets send c draft reply reply-all fwd
 #                    open trash archive thread read unread sfwd sreply
 #                    sreply-all peek
 #   Flags:           -w/--web -N/--no-cache -i/--important --quiet -h/--help --version
@@ -1620,34 +1620,134 @@ open_web() {
     # `m 1 -w` means "show me message #1 in Gmail", not "search the inbox for
     # the literal string 1". gmail_web only knows folders and search queries,
     # so a bare index used to become `#search/in:inbox+1`, which finds nothing
-    # useful. When every trailing arg is a message index, hand off to the
-    # backend's `open` action instead: it resolves index -> Gmail message id
-    # against the same listing the CLI just showed and opens `#all/<msg_id>`.
-    # Anything else (from:alice, before:2026/03/01, ...) is a real Gmail query
-    # and still goes to gmail_web unchanged.
-    if (( $# > 0 )); then
-        local a all_indices=1
-        for a in "$@"; do
-            [[ "$a" =~ ^[0-9]+$ ]] || { all_indices=0; break; }
-        done
-        if (( all_indices )); then
-            # Pass the folder through as the backend's "sent" modifier so
-            # `m sent 1 -w` opens sent message #1, not inbox #1. The backend
-            # scopes the lookup to in:sent, which also keeps the cache key
-            # aligned with the listing the index came from.
-            local -a scope=()
-            [[ "$folder" == "sent" ]] && scope=(sent)
-            log_info "Opening $folder message(s) $* in Gmail (profile $profile)..."
-            log_command "$@"
-            GMAILS_CHROME_PROFILE="$profile" \
-                exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" \
-                    "${scope[@]+"${scope[@]}"}" "$@" open
+    # useful. When a trailing arg is a message index, hand off to the backend's
+    # `open` action instead: it resolves index -> Gmail message id against the
+    # same listing the CLI just showed and opens `#all/<msg_id>`. Anything else
+    # (from:alice, before:2026/03/01, ...) is a real Gmail query and still goes
+    # to gmail_web unchanged.
+    #
+    # `m q fedex 2 -w` means "open message #2 of the fedex listing", the same
+    # thing it means without -w. Concatenating the index into the search string
+    # instead produced `#search/in:inbox+fedex+2`, searching for the literal
+    # "2". Only TRAILING integers count as indices.
+    #
+    # ------------------------------------------------------------------
+    # SUBJECTIVE DESIGN CHOICE: what does a digits-only token mean?
+    # ------------------------------------------------------------------
+    # Read this before "simplifying" the _floor logic below. It looks
+    # over-complicated. It is not; each branch is load-bearing, and the
+    # rule it encodes is a JUDGMENT CALL, not a derivable truth.
+    #
+    # The tension: `m` overloads bare integers with two incompatible
+    # meanings, and both are entrenched in muscle memory and in 500+
+    # aliases that cannot be broken.
+    #
+    #   (a) INDEX  -- `m 1 -w`      = "open message #1 of the listing"
+    #   (b) QUERY  -- `m q 2026 -w` = "search Gmail for the string 2026"
+    #
+    # An arg that is all digits is genuinely ambiguous between these. No
+    # amount of cleverness resolves it from the token alone; the parser
+    # must pick a side, and whichever it picks is wrong for somebody.
+    #
+    # THE RULE WE CHOSE: an explicit `q` action means the user announced
+    # a query, so the first positional is a SEARCH TERM even when it is
+    # all digits. Absent `q` (action defaults to `i`), a lone integer is
+    # an INDEX. Trailing integers after a query term are always indices.
+    #
+    # WHY THIS SIDE: it makes -w agree with the non-web path, which has
+    # applied exactly this rule for years via the `action == q && i == 0`
+    # guard in the bare-integer case of the i|q handler (see below, near
+    # the `[0-9]|[0-9][0-9]|[0-9][0-9][0-9])` branch). Before this fix,
+    # `m q 2026` searched but `m q 2026 -w` opened message #2026 -- the
+    # SAME command with a display flag meant two different things. Two
+    # parsers disagreeing about the same argv is the actual bug; the
+    # specific side chosen matters less than that they now agree.
+    #
+    # WHAT THIS COSTS: you can no longer open a message by index with an
+    # explicit q and no query, i.e. `m q 5 -w` searches for "5" rather
+    # than opening message #5. That spelling never worked reliably
+    # anyway, and `m 5 -w` (no q) still does the index thing. If you
+    # ever DO need "search for a number", `m q 2026 -w` now works; if
+    # you need "open #2026", drop the q.
+    #
+    # WHY $action AND NOT ARG COUNT: an earlier attempt floored the scan
+    # at position 1 whenever 2+ args remained, allowing position 0 to be
+    # an index only when it stood alone. That fails on `m q 2026 -w`:
+    # the literal-q marker is stripped first, leaving `2026` alone, so
+    # the single-arg exception fired and it became an index again. Arg
+    # count cannot distinguish "lone index" from "lone numeric query".
+    # $action can, because the user typed the q. Do not regress this to
+    # a count-based heuristic; it has already been tried and it fails
+    # this exact case.
+    #
+    # Index-splitting applies ONLY to folders that have a numbered listing.
+    # `compose` does not: there every positional is a recipient or subject word,
+    # so `m c 620 -w` must stay a compose window and never become "open inbox
+    # message #620".
+    local -a _wq=("$@") _widx=()
+    if [[ "$folder" == "inbox" || "$folder" == "sent" ]]; then
+        if (( $# > 0 )); then
+            local -a _wargs=("$@")
+            local _i
+            # Strip the literal-q marker BEFORE scanning for indices, so the
+            # floor below lands on the real first query token. `m sent q abigail
+            # 1 -w` and `m i q fedex -w` use this form, where a leading "q"
+            # introduces the query rather than being a search term; the non-web
+            # paths strip it via parse_action_args "literal-q".
+            local _explicit_q=0
+            if [[ "${_wargs[0]:-}" == "q" ]]; then
+                _explicit_q=1
+                _wargs=("${_wargs[@]:1}")
+            fi
+            # $action is q when the user typed `m q ...` (the marker was
+            # consumed as the action word rather than reaching us in "$@").
+            # Either spelling counts as "the user announced a query".
+            [[ "$action" == "q" ]] && _explicit_q=1
+            # The floor is where the index scan STOPS. With an explicit query,
+            # position 0 is a search term and is off-limits (_floor=1). Without
+            # one, a lone integer is an index (_floor=0).
+            local _floor=0
+            (( _explicit_q )) && _floor=1
+            for (( _i=${#_wargs[@]}-1; _i>=_floor; _i-- )); do
+                [[ "${_wargs[_i]}" =~ ^[0-9]+$ ]] || break
+                _widx=("${_wargs[_i]}" "${_widx[@]+"${_widx[@]}"}")
+            done
+            _wq=()
+            local _n=$(( ${#_wargs[@]} - ${#_widx[@]} ))
+            for (( _i=0; _i<_n; _i++ )); do _wq+=("${_wargs[_i]}"); done
         fi
     fi
 
+    if (( ${#_widx[@]} > 0 )); then
+        # Pass the folder through as the backend's "sent" modifier so
+        # `m sent 1 -w` opens sent message #1, not inbox #1. The backend
+        # scopes the lookup to in:sent, which also keeps the cache key
+        # aligned with the listing the index came from.
+        local -a scope=()
+        [[ "$folder" == "sent" ]] && scope=(sent)
+        # Any leading non-index args are the Gmail query the index was listed
+        # against; hand them to the backend as -q so index to message-id
+        # resolution runs against the SAME listing the CLI just showed.
+        local -a qflag=()
+        if (( ${#_wq[@]} > 0 )); then
+            qflag=(-q "${_wq[*]}")
+            log_info "Opening $folder message(s) ${_widx[*]} from query '${_wq[*]}' in Gmail (profile $profile)..."
+        else
+            log_info "Opening $folder message(s) ${_widx[*]} in Gmail (profile $profile)..."
+        fi
+        log_command "$@"
+        GMAILS_CHROME_PROFILE="$profile" \
+            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" \
+                "${scope[@]+"${scope[@]}"}" "${qflag[@]+"${qflag[@]}"}" \
+                "${_widx[@]}" open
+    fi
+
+    # No index: this is a real Gmail search. Use _wq rather than "$@" so the
+    # literal-q marker word stripped above does not land in the search string
+    # (`m sent q abigail -w` must search 'abigail', not 'q abigail').
     log_info "Opening Gmail ($folder) in browser (profile $profile)..."
     log_command "$@"
-    exec gmail_web "$profile" "$folder" "$@"
+    exec gmail_web "$profile" "$folder" "${_wq[@]+"${_wq[@]}"}"
 }
 
 # ========================================================================
@@ -1810,7 +1910,7 @@ parse_action_args() {
 # smart_send() function removed - logic consolidated into direct_send()
 # This eliminates the need for the external send script
 
-ACTIONS_SHORT="i sent q d x urls scheduled"
+ACTIONS_SHORT="i sent q d x urls meets scheduled"
 ACTIONS_SEND="send c"
 ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive thread read unread sfwd sreply sreply-all"
 
@@ -1874,6 +1974,7 @@ READING
     q         search                 Search with Gmail query syntax
     d         drafts                 View drafts (web only)
     x         spam                   Check spam folder
+    meets                            Scan cached list for Zoom/Meet links; pick one to open
 
     INDEX        Read one message (e.g. m 3)
     START-END    List those index rows (e.g. m 45-67) — listing, not bodies
@@ -2064,6 +2165,7 @@ ADVANCED WORKFLOWS
     m -N q "from:alice"                  Force fresh search (bypass cache)
     m urls 3                             Extract URLs from message #3 (interactive menu)
     m q shapiro 7 urls 2                  Open the 2nd URL in message #7 directly (no menu)
+    m h meets                            Scan cached list for Zoom/Meet links, pick one to open
 EOF
             ;;
         *)
@@ -2268,6 +2370,28 @@ if [[ -z "$action" && ${#rest[@]} -gt 0 ]]; then
     unset _first
 fi
 
+# A bare `-N` token (e.g. `m q abigail -2`) has no meaning in either layer.
+# It looks like a flag, so the unknown-action guard above passes it through
+# via its `-*` case, and it reaches the backend's parse_index_token, which
+# splits on '-', gets an empty first piece, and dies with the opaque
+# "Invalid index range: '-2'". Reject it here instead, naming both plausible
+# intents. Deliberately NOT auto-rewritten to `-n N`: the index/query
+# extraction downstream would pull the N out as a message index and leave
+# `-n` stranded with no value, yielding `-q abigail 2 -n` and a different
+# backend error. Two readings this ambiguous are the user's to resolve.
+if (( ${#rest[@]} > 0 )); then
+    for _t in "${rest[@]}"; do
+        if [[ "$_t" =~ ^-([0-9]+)$ ]]; then
+            _n="${BASH_REMATCH[1]}"
+            log_error "'-$_n' is not a flag or an index."
+            echo "  To show $_n messages:   m ${account:+$account }${action:-i} ... -n $_n" >&2
+            echo "  To read message #$_n:   m ${account:+$account }${action:-i} ... $_n" >&2
+            exit 1
+        fi
+    done
+    unset _t _n
+fi
+
 # defaults
 action="${action:-i}"
 
@@ -2416,6 +2540,19 @@ case "$action" in
                 case "$arg" in
                     --raw)
                         raw_save_flag=1
+                        ;;
+                    -n|--count)
+                        # -n N is the backend's --count. Keep the flag AND its
+                        # value together in filtered_args, and mark the value
+                        # consumed so the bare-integer case below cannot claim
+                        # it as a message index. Without this, `m q abigail -n 2`
+                        # became `-q abigail 2 -n`, stranding -n with no value.
+                        filtered_args+=("$arg")
+                        next_idx=$(( i + 1 ))
+                        if [[ -n "${rest[next_idx]:-}" && "${rest[next_idx]}" =~ ^[0-9]+$ ]]; then
+                            filtered_args+=("${rest[next_idx]}")
+                            rest[next_idx]="__M_CONSUMED__"
+                        fi
                         ;;
                     -S|--save)
                         # -S FILE saves the raw .eml to FILE (backend OUTPUT
@@ -2800,6 +2937,20 @@ case "$action" in
                     open)
                         if (( save_attachments_only_flag )); then
                             open_after_save_flag=1
+                        fi
+                        ;;
+                    -n|--count)
+                        # The sent listing path builds its own `-n "$page_size"`
+                        # (see the gmail_cmd construction below) and ignores
+                        # filtered_args, so forwarding the flag here would be
+                        # dropped. Set page_size instead, and mark the value
+                        # consumed so it is not read as a message index.
+                        next_idx=$(( i + 1 ))
+                        if [[ -n "${rest[next_idx]:-}" && "${rest[next_idx]}" =~ ^[0-9]+$ ]]; then
+                            page_size="${rest[next_idx]}"
+                            rest[next_idx]="__M_CONSUMED__"
+                        else
+                            filtered_args+=("$arg")
                         fi
                         ;;
                     -S|--save|-save)
@@ -3205,6 +3356,11 @@ case "$action" in
         ;;
     urls)
         # Extract URLs from message
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        ;;
+    meets)
+        # Scan the most recently cached message list for Zoom/Meet links
+        # and offer a menu to open one. e.g. `m h meets`.
         exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     scheduled)

@@ -3010,6 +3010,129 @@ def do_urls(service, index, count, query, account=None, url_index=None):
 
 
 # ---------------------------------------------------------------------------
+# Meeting-link scan (m h meets): find Zoom/Meet links across the cached list
+# ---------------------------------------------------------------------------
+
+_MEETING_URL_RE_PARTS = (r"zoom\.us", r"zoom\.com", r"meet\.google\.com")
+
+
+def _is_meeting_url(url):
+    heavy = _import_heavy_modules()
+    re_mod = heavy['re']
+    host = re_mod.sub(r'^https?://', '', url).split('/')[0].lower()
+    return any(re_mod.search(pat, host) for pat in _MEETING_URL_RE_PARTS)
+
+
+def do_meets(service, count, query, account=None):
+    """Scan the most recently cached message list for Zoom/Meet links.
+
+    Reuses whatever `m i`/`m q`/etc. last cached for this account (any count
+    or query), not just an exact match on the current count/query -- the
+    point is "whatever's already warm", per do_urls's cache-first pattern.
+    Falls back to a fresh inbox fetch if there's no cache yet.
+    """
+    import re
+    import webbrowser
+
+    heavy = _import_heavy_modules()
+    html_mod = heavy['html_mod']
+
+    cache_path = _cache_path(account)
+    cached_messages = None
+    if cache_path.exists():
+        try:
+            data = json.loads(cache_path.read_text())
+            cached_messages = data.get("messages")
+        except (json.JSONDecodeError, KeyError):
+            cached_messages = None
+
+    if not cached_messages:
+        print("No cached message list found; fetching inbox...", file=sys.stderr)
+        kwargs = {"userId": "me", "maxResults": count}
+        if query:
+            kwargs["q"] = query
+        result = _retry_api_call(lambda: service.users().messages().list(**kwargs).execute())
+        cached_messages = result.get("messages", [])
+        _cache_message_ids(cached_messages, count, query, account=account)
+
+    if not cached_messages:
+        print("No messages found.", file=sys.stderr)
+        return
+
+    entries = []  # each: {"subject", "from", "date", "url"}
+    for msg_ref in cached_messages:
+        try:
+            raw_msg = _retry_api_call(lambda: service.users().messages().get(
+                userId="me", id=msg_ref["id"], format="raw"
+            ).execute())
+        except Exception as e:
+            print(f"  warning: could not fetch message {msg_ref.get('id', '?')}: {e}",
+                  file=sys.stderr)
+            continue
+        raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+        parsed = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+
+        text_body = html_mod.unescape(extract_text_body(raw_bytes))
+        text_body = re.sub(r'https?\s*:\s*//', 'https://', text_body)
+        found = re.findall(r'https?://[^\s<>"{}|\\^`\[\]]+', text_body)
+        for html_body in extract_html_bodies(raw_bytes):
+            found.extend(extract_urls_from_html(html_mod.unescape(html_body)))
+
+        seen_in_msg = set()
+        for url in found:
+            if not _is_meeting_url(url) or url in seen_in_msg:
+                continue
+            seen_in_msg.add(url)
+            entries.append({
+                "subject": parsed.get("Subject", "(no subject)"),
+                "from": parsed.get("From", "unknown"),
+                "date": parsed.get("Date", ""),
+                "url": url,
+            })
+
+    if not entries:
+        print("No Zoom or Google Meet links found in cached messages.", file=sys.stderr)
+        return
+
+    print(f"Found {len(entries)} meeting link(s):", file=sys.stderr)
+    for i, e in enumerate(entries, 1):
+        display_url = e["url"] if len(e["url"]) <= 60 else e["url"][:57] + "..."
+        print(f"  {i}. [{e['date']} {e['from']}] {e['subject']} -- {display_url}",
+              file=sys.stderr)
+
+    if not sys.stdin.isatty() or not sys.stderr.isatty():
+        for i, e in enumerate(entries, 1):
+            print(f"{i}. {e['url']}")
+        return
+
+    try:
+        print("Open which? (number, 'a' for all, q to quit): ", end="", file=sys.stderr)
+        sys.stderr.flush()
+        choice = sys.stdin.readline().strip()
+
+        if choice.lower() in ('q', 'quit', ''):
+            return
+
+        if choice.lower() in ('a', 'all'):
+            selected = list(range(1, len(entries) + 1))
+        else:
+            selected = _parse_index_ranges(choice, len(entries))
+
+        if selected is None:
+            print(f"Invalid choice. Use a number 1-{len(entries)}.", file=sys.stderr)
+            return
+
+        for n in selected:
+            url_to_open = entries[n - 1]["url"]
+            print(f"Opening: {url_to_open}", file=sys.stderr)
+            webbrowser.open(url_to_open)
+
+    except (KeyboardInterrupt, EOFError):
+        print("\nCanceled", file=sys.stderr)
+        return
+
+
+# ---------------------------------------------------------------------------
 # Thread view
 # ---------------------------------------------------------------------------
 
@@ -4103,7 +4226,7 @@ def main():
         if arg in ("-F", "--config", "-e", "--email", "-n", "--count", "-q", "--query"):
             skip_next = True  # next arg is the flag's value
             continue
-        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "open", "thread", "read", "unread", "inbox", "urls"):
+        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "open", "thread", "read", "unread", "inbox", "urls", "meets"):
             mode = arg
             mode_index = i
             break
@@ -4316,6 +4439,16 @@ def main():
             query = "in:inbox"
         do_urls(service, msg_index, args.count, query, account=login_hint,
                 url_index=url_index)
+    elif mode == "meets":
+        mode_rest = [a for a in rest if a != mode]
+        args = parse_list_get_args(mode_rest)
+        service, login_hint = _authenticated_service(args, "gmail-readonly")
+        query = args.query
+        if sent_mode:
+            query = f"in:sent {query}" if query else "in:sent"
+        elif not query:
+            query = "in:inbox"
+        do_meets(service, args.count, query, account=login_hint)
     else:
         args = parse_list_get_args(rest)
         service, login_hint = _authenticated_service(args, "gmail-readonly")
