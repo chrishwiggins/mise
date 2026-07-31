@@ -38,6 +38,8 @@ fi
 #
 # § PUBLIC API (do NOT break — colleagues' aliases call this)
 #   Account aliases: g j u cu l h hNY n z (resolved via accounts.json)
+#                    Comma-list for multi-account, e.g. h,g,cu (read-only
+#                    actions only; see § MULTI-ACCOUNT)
 #   Actions:         i sent q d x urls meets send c draft reply reply-all fwd
 #                    open trash archive thread read unread sfwd sreply
 #                    sreply-all peek
@@ -2158,6 +2160,11 @@ MULTI-ACCOUNT EXAMPLES
     m j sent                              Joint account sent messages
     m l reply 1                           Lake account reply to message #1
 
+    m h,g i                               Inbox for hackNY AND personal, one after another
+    m h,g,cu meets                        Zoom/Meet links across 3 accounts in one command
+    (Comma-list runs the same command once per account, in order. Read-only
+    actions only, e.g. i/sent/q/urls/meets; send/reply/trash refuse to fan out.)
+
 ADVANCED WORKFLOWS
     m q "is:unread" 1-3 -p               Peek at first 3 unread emails
     m sent 1 fwd user@ex.com             Forward your sent message #1
@@ -2192,6 +2199,7 @@ EOF
 # After the loop, the action router (case "$action") consumes `rest`.
 web=0; dry_run=0; no_cache=0; important_filter=0
 action=""; account=""; rest=()
+multi_accounts=(); multi_account_index=-1
 i=0; args=("$@")
 
 # `open` is both a top-level action (open msg in web UI) and a trailing
@@ -2288,6 +2296,20 @@ while (( i < ${#args[@]} )); do
         action="$arg"
     elif [[ "$arg" == "m" ]] && [[ -z "$action" ]]; then
         action="archive"
+    elif [[ -z "$account" ]] && [[ "$arg" == *,* ]] && [[ -n "${ACCTS[${arg%%,*}]:-}" ]]; then
+        # Multi-account syntax: `m h,g,cu i` runs the same command once per
+        # alias. Validate every comma-separated piece up front (all-or-
+        # nothing) so a typo fails loudly here instead of producing a
+        # confusing downstream error from just the first bad alias reached.
+        IFS=',' read -r -a multi_accounts <<< "$arg"
+        for _ma in "${multi_accounts[@]}"; do
+            if [[ -z "${ACCTS[$_ma]:-}" ]]; then
+                log_error "unknown account alias '$_ma' in '$arg'"
+                exit 1
+            fi
+        done
+        unset _ma
+        multi_account_index=$i
     elif [[ -z "$account" ]] && [[ -n "${ACCTS[$arg]:-}" ]]; then
         account="$arg"
     else
@@ -2394,6 +2416,54 @@ fi
 
 # defaults
 action="${action:-i}"
+
+# ========================================================================
+# § MULTI-ACCOUNT: `m h,g,cu i` fans out one command across N accounts
+# ========================================================================
+# Self-invocation, not a loop inside every dispatch branch: every existing
+# single-account code path below (account defaulting, gmail_acct, the
+# entire `case "$action" in` router) is untouched and unaware this exists.
+# Each recursive call is a normal, single-account `m` invocation exactly
+# like today; this block only fires when multi_accounts was populated by
+# the comma-list branch in the parsing loop above, and it always exits
+# before reaching the single-account code.
+if (( ${#multi_accounts[@]} > 0 )); then
+    # Mutating/destructive actions must not silently fan out to N mailboxes
+    # from one typed command, since that is a plausible real mistake (send,
+    # reply, or trash fired at every account because the user habitually
+    # types a multi-account alias), not a feature. Read-only actions are fine.
+    case "$action" in
+        send|c|draft|reply|reply-all|fwd|sfwd|sreply|sreply-all|trash|archive|read|unread)
+            log_error "multi-account (${multi_accounts[*]}) is for read-only actions."
+            echo "  '$action' mutates/sends mail; run it once per account instead." >&2
+            exit 1
+            ;;
+    esac
+
+    worst_exit=0
+    for _acct in "${multi_accounts[@]}"; do
+        log_info "=== ${LABELS[$_acct]:-$_acct} ($_acct) ==="
+        # Rebuild argv from the ORIGINAL args, substituting just the
+        # comma-list token with this one alias. Do not rebuild from $rest:
+        # it has already been mutated by flag-stripping earlier in the
+        # parse loop and no longer reflects the user's original argv.
+        _child_args=()
+        for _j in "${!args[@]}"; do
+            if [[ "$_j" == "$multi_account_index" ]]; then
+                _child_args+=("$_acct")
+            else
+                _child_args+=("${args[_j]}")
+            fi
+        done
+        # `|| _rc=$?` so one failing account doesn't kill the whole loop
+        # under `set -e`, giving every account a chance to run; the worst
+        # exit code seen is what `m` finally reports.
+        _rc=0
+        "$0" "${_child_args[@]}" || _rc=$?
+        (( _rc > worst_exit )) && worst_exit=$_rc
+    done
+    exit "$worst_exit"
+fi
 
 # Set default account from config file, fallback to environment variable, then 'g'
 if [[ -z "$account" ]]; then

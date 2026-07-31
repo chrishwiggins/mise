@@ -1,5 +1,7 @@
 # Plan: `m` multi-account syntax (`m h,g meets`, `m h,g,cu i`)
 
+Status: done. All four steps implemented and verified in `bash/m`.
+
 ## Goal
 
 `m` currently resolves exactly one account alias per invocation (`$account`,
