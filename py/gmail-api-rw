@@ -3014,14 +3014,21 @@ def do_urls(service, index, count, query, account=None, url_index=None):
 # Meeting-link scan (m h meets): find Zoom/Meet links across the cached list
 # ---------------------------------------------------------------------------
 
-_MEETING_URL_RE_PARTS = (r"zoom\.us", r"zoom\.com", r"meet\.google\.com")
+_MEETING_URL_HOSTS = ("zoom.us", "zoom.com", "meet.google.com")
 
 
 def _is_meeting_url(url):
+    """True if url's host is (or is a subdomain of) a known meeting host.
+
+    Host-anchored, not substring search: "notzoom.us.evil.com" or
+    "evilzoom.com.attacker.net" must NOT match just because "zoom.us" or
+    "zoom.com" appears somewhere in the string. Strip a trailing port
+    before comparing so "zoom.us:443" still matches.
+    """
     heavy = _import_heavy_modules()
     re_mod = heavy['re']
-    host = re_mod.sub(r'^https?://', '', url).split('/')[0].lower()
-    return any(re_mod.search(pat, host) for pat in _MEETING_URL_RE_PARTS)
+    host = re_mod.sub(r'^https?://', '', url).split('/')[0].split(':')[0].lower()
+    return any(host == d or host.endswith('.' + d) for d in _MEETING_URL_HOSTS)
 
 
 def do_meets(service, count, query, account=None):
