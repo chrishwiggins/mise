@@ -1819,6 +1819,13 @@ parse_action_args() {
     local action_word_index=-1
     local i
     for i in "${!PA_REMAINING[@]}"; do
+        # In positional-q mode, PA_REMAINING[0] is the search query, not an
+        # action. Skip it so a query term that happens to equal an action word
+        # (`m u q archive`) isn't consumed as the action AND left in PA_QUERY,
+        # which produced a malformed `-q archive archive` backend call.
+        if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
+            continue
+        fi
         if [[ " $allowed_actions " == *" ${PA_REMAINING[i]} "* ]]; then
             PA_ACTION_WORD="${PA_REMAINING[i]}"
             action_word_index=$i
