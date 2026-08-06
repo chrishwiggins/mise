@@ -27,7 +27,7 @@ CODE_ALIASES = {
     "MIL": "MXP",  # Milan
     "ROM": "FCO",  # Rome
     "MOW": "SVO",  # Moscow
-    "SAO": "GRU",  # Sao Paulo
+    # SAO omitted: airportsdata has SAO (Campo de Marte, Sao Paulo), same tz as GRU
     "RIO": "GIG",  # Rio de Janeiro
     "BUE": "EZE",  # Buenos Aires
     "YTO": "YYZ",  # Toronto
@@ -123,10 +123,10 @@ def convert_time(time_str: str, from_code: str, to_code: str, date=None, fix=Fal
         if fix:
             return f"{out_hour:02d}:{to_dt.minute:02d}{am_pm_suffix}{day_change}"
 
-        # Otherwise, preserve original case of am/pm
-        am_pm_lower = am_pm.lower()
-        am_pm_case = am_pm_lower if am_pm == am_pm.lower() else "AM" if am_pm_suffix.strip() == "AM" else "PM"
-        am_pm_suffix = am_pm_case if am_pm_case in ("am", "pm") else am_pm_case.upper()
+        # Otherwise, keep the case style of the original suffix but use the
+        # converted meridiem (9:00am Tokyo is 8:00pm, not 8:00am, in New York)
+        computed = am_pm_suffix.strip()
+        am_pm_suffix = computed.lower() if am_pm.islower() else computed
 
     if fix:
         # With --fix, standardize to HH:MM (24-hour format if no am/pm)
