@@ -2933,6 +2933,256 @@ def _extract_message_urls(raw_bytes):
     return unique_urls
 
 
+# Query-string parameter keys to strip from displayed/opened URLs. Matched
+# case-insensitively. Everything not in this allowlist is preserved, because
+# params like id/token/s can be load-bearing for the target page.
+_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "marketing_company", "fbclid", "gclid", "mc_cid", "mc_eid",
+}
+
+
+def _unwrap_proofpoint(url):
+    """Return the real URL inside a Proofpoint urldefense wrapper, else url.
+
+    Handles the two wrapper shapes:
+
+      v3:  https://urldefense.com/v3/__<REAL_URL>__;<token>
+           The real URL sits between `/v3/__` and `__;`. v3 also `*`-escapes
+           some characters (a bare `*` is a single-char marker, `**` a run).
+           The common case has no `*` at all; when `*` is present we cannot
+           reliably reverse it here, so we leave the extracted substring as-is
+           rather than corrupt the link.
+
+      v2:  https://urldefense.proofpoint.com/v2/url?u=<enc>&d=...&...
+           The `u=` param is percent-decoded after `-`->`%` and `_`->`/`.
+
+    On anything malformed, returns the ORIGINAL url unchanged.
+    """
+    import re
+    from urllib.parse import unquote, urlsplit, parse_qs
+
+    try:
+        if "urldefense.com/v3/__" in url or "urldefense.proofpoint.com/v3/__" in url:
+            m = re.search(r'/v3/__(.*?)__;', url)
+            if not m:
+                return url
+            inner = m.group(1)
+            if "*" in inner:
+                # Escaped run present; don't risk corrupting it.
+                return unquote(inner)
+            return unquote(inner)
+        if "urldefense.proofpoint.com/v2/url" in url or "urldefense.com/v2/url" in url:
+            qs = parse_qs(urlsplit(url).query)
+            enc = qs.get("u", [None])[0]
+            if not enc:
+                return url
+            enc = enc.replace("-", "%").replace("_", "/")
+            return unquote(enc)
+    except Exception:
+        return url
+    return url
+
+
+def _strip_tracking_params(url):
+    """Drop known tracking params (case-insensitive keys) from url's query.
+
+    Preserves every non-tracking param in original order, keeps the fragment,
+    and drops a now-empty `?`. Returns the original url on any failure.
+    """
+    from urllib.parse import (urlsplit, urlunsplit, parse_qsl, urlencode)
+
+    try:
+        parts = urlsplit(url)
+        if not parts.query:
+            return url
+        kept = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=True)
+                if k.lower() not in _TRACKING_PARAMS]
+        new_query = urlencode(kept)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path,
+                           new_query, parts.fragment))
+    except Exception:
+        return url
+
+
+def _normalize_display_url(url):
+    """Unwrap Proofpoint wrappers then strip tracking params. Pure.
+
+    Returns the cleaned URL, or the original url on any failure. The result is
+    what gets both DISPLAYED and OPENED, so unwrapping here means a menu
+    selection opens the real target, not the tracked wrapper.
+    """
+    try:
+        return _strip_tracking_params(_unwrap_proofpoint(url))
+    except Exception:
+        return url
+
+
+def _common_url_prefix(urls):
+    """Longest common string prefix across urls, backed off to the last '/'.
+
+    Returns "" if there's no useful shared prefix. Backing off to the last
+    slash keeps the legend ending on a path boundary instead of mid-token.
+    """
+    if not urls:
+        return ""
+    s1 = min(urls)
+    s2 = max(urls)
+    n = 0
+    for a, b in zip(s1, s2):
+        if a != b:
+            break
+        n += 1
+    prefix = s1[:n]
+    slash = prefix.rfind("/")
+    if slash < 0:
+        return ""
+    return prefix[:slash + 1]
+
+
+def _render_url_menu(unique_urls, out=None):
+    """Print a numbered URL menu, using a shared-prefix legend when useful.
+
+    With >=3 urls sharing a >=30-char common prefix, prints the prefix once as
+    a legend line and renders each row as `  {i}. [prefix]{tail}`, middle-
+    truncating only tails longer than ~120 chars so the distinguishing end
+    stays visible. Otherwise prints full untruncated URLs, one per line.
+    Prints only; returns nothing.
+    """
+    if out is None:
+        out = sys.stderr
+
+    prefix = _common_url_prefix(unique_urls)
+    use_legend = len(unique_urls) >= 3 and len(prefix) >= 30
+
+    if use_legend:
+        print(f"  [prefix] {prefix}", file=out)
+        for i, url in enumerate(unique_urls, 1):
+            tail = url[len(prefix):] if url.startswith(prefix) else url
+            if len(tail) > 120:
+                tail = tail[:60] + "..." + tail[-40:]
+            print(f"  {i}. [prefix]{tail}", file=out)
+    else:
+        for i, url in enumerate(unique_urls, 1):
+            print(f"  {i}. {url}", file=out)
+
+
+# Chrome renders the HTML to PDF. There is no bare `chrome` on PATH on this
+# machine; the full app path is the one md2pdf uses, and the flag set below is
+# the same battle-tested one (headless, no browser chrome, no header/footer).
+_CHROME_APP = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def _message_to_html(raw_bytes):
+    """Build one self-contained HTML document for a message, for PDF rendering.
+
+    Uniform shape for every message: a compact From/To/Subject/Date header block
+    so a saved PDF is self-identifying offline, then the body. Body is the
+    message's own text/html part when present (rendered faithfully); for a
+    plain-text-only mail the text body is HTML-escaped inside <pre> so it still
+    renders. Pure: returns an HTML string, touches no files.
+    """
+    import html as _html
+
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    hdr = {}
+    for name in ("From", "To", "Subject", "Date"):
+        val = msg.get(name)
+        if val:
+            hdr[name] = str(val)
+
+    header_rows = "".join(
+        f'<tr><td class="hk">{_html.escape(k)}</td>'
+        f'<td class="hv">{_html.escape(v)}</td></tr>'
+        for k, v in hdr.items()
+    )
+
+    html_bodies = extract_html_bodies(raw_bytes)
+    if html_bodies:
+        body_html = html_bodies[0]
+    else:
+        text = extract_text_body(raw_bytes) or "(empty message)"
+        body_html = f"<pre>{_html.escape(text)}</pre>"
+
+    return (
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+        "<style>"
+        "body{font-family:-apple-system,Helvetica,Arial,sans-serif;margin:24px;}"
+        "table.hdr{border-collapse:collapse;margin-bottom:16px;font-size:12px;"
+        "width:100%;}"
+        "table.hdr td{border:0;padding:1px 6px;vertical-align:top;}"
+        "td.hk{color:#666;font-weight:bold;white-space:nowrap;width:1%;}"
+        "td.hv{color:#111;}"
+        "hr.sep{border:0;border-top:1px solid #ccc;margin:0 0 16px 0;}"
+        "pre{white-space:pre-wrap;word-wrap:break-word;font-family:"
+        "ui-monospace,Menlo,monospace;font-size:12px;}"
+        "img{max-width:100%;height:auto;}"
+        "</style></head><body>"
+        f"<table class=\"hdr\">{header_rows}</table><hr class=\"sep\">"
+        f"{body_html}"
+        "</body></html>"
+    )
+
+
+def do_pdf(service, indices, count, query, account=None):
+    """Render one PDF per selected message into /tmp/spool/pdf/.
+
+    Mirrors do_trash/do_archive's list-and-loop shape and do_get's raw fetch.
+    Each message becomes its own PDF (never merged), named like the .eml cache
+    (generate_filename) with .eml swapped for .pdf and collision-versioned.
+    """
+    import subprocess
+    import tempfile
+
+    if not Path(_CHROME_APP).exists():
+        print(f"Chrome not found at {_CHROME_APP}; cannot render PDF.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    out_dir = Path("/tmp/spool/pdf")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written = []
+    for index in indices:
+        msg_id = _resolve_message_id(service, index, count, query, account=account)
+        raw_msg = _retry_api_call(lambda: service.users().messages().get(
+            userId="me", id=msg_id, format="raw"
+        ).execute())
+        raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+
+        doc = _message_to_html(raw_bytes)
+        pdf_path = versioned_path(
+            out_dir / generate_filename(raw_bytes).replace(".eml", ".pdf"))
+
+        with tempfile.NamedTemporaryFile(
+                suffix=".html", mode="w", encoding="utf-8", delete=False) as f:
+            f.write(doc)
+            html_path = f.name
+        try:
+            result = subprocess.run(
+                [_CHROME_APP, "--headless", "--disable-gpu",
+                 f"--print-to-pdf={pdf_path}",
+                 "--print-to-pdf-no-header", "--no-pdf-header-footer",
+                 html_path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        finally:
+            try:
+                os.unlink(html_path)
+            except OSError:
+                pass
+
+        if result.returncode == 0 and pdf_path.exists():
+            written.append(pdf_path)
+            print(f"Saved: {pdf_path}", file=sys.stderr)
+        else:
+            print(f"Failed to render PDF for message {index} "
+                  f"(chrome exit {result.returncode})", file=sys.stderr)
+
+    if not written:
+        sys.exit(1)
+    print(f"Wrote {len(written)} PDF(s) to {out_dir}/", file=sys.stderr)
+
+
 def do_urls(service, index, count, query, account=None, url_index=None):
     """Extract URLs from a message and provide interactive menu to open them.
 
@@ -2950,6 +3200,10 @@ def do_urls(service, index, count, query, account=None, url_index=None):
     raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
 
     unique_urls = _extract_message_urls(raw_bytes)
+    # Normalize ONCE: unwrap Proofpoint wrappers + strip tracking params. Both
+    # display and open use this list, so a menu selection opens the real
+    # target rather than the wrapped/tracked URL.
+    unique_urls = [_normalize_display_url(u) for u in unique_urls]
     if not unique_urls:
         print("No URLs found in message", file=sys.stderr)
         return
@@ -2960,9 +3214,7 @@ def do_urls(service, index, count, query, account=None, url_index=None):
             print(f"URL number {url_index} out of range; message has "
                   f"{len(unique_urls)} URL(s).", file=sys.stderr)
             # Still show the list so the user can see what was available.
-            for i, url in enumerate(unique_urls, 1):
-                display_url = url if len(url) <= 80 else url[:77] + "..."
-                print(f"  {i}. {display_url}", file=sys.stderr)
+            _render_url_menu(unique_urls)
             sys.exit(1)
         url_to_open = unique_urls[url_index - 1]
         print(f"Opening: {url_to_open}", file=sys.stderr)
@@ -2971,10 +3223,7 @@ def do_urls(service, index, count, query, account=None, url_index=None):
 
     # Show interactive menu
     print(f"Found {len(unique_urls)} URL(s):", file=sys.stderr)
-    for i, url in enumerate(unique_urls, 1):
-        # Truncate very long URLs for display
-        display_url = url if len(url) <= 80 else url[:77] + "..."
-        print(f"  {i}. {display_url}", file=sys.stderr)
+    _render_url_menu(unique_urls)
 
     # Check if we're in an interactive terminal
     if not sys.stdin.isatty() or not sys.stderr.isatty():
@@ -4222,7 +4471,7 @@ def main():
         if arg in ("-F", "--config", "-e", "--email", "-n", "--count", "-q", "--query"):
             skip_next = True  # next arg is the flag's value
             continue
-        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "open", "thread", "read", "unread", "inbox", "urls", "meets"):
+        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "open", "thread", "read", "unread", "inbox", "urls", "meets", "pdf"):
             mode = arg
             mode_index = i
             break
@@ -4389,6 +4638,24 @@ def main():
         else:
             do_thread(service, indices[0], args.count, query, account=login_hint,
                      text_view=args.text, headers_only=args.headers)
+    elif mode == "pdf":
+        # One PDF per selected message. Same list-and-loop shape as trash/archive,
+        # so `m 1-4,5 pdf` gets range parsing as the primary selector for free.
+        mode_rest = [a for a in rest if a != mode]
+        indices, filtered_rest = collect_indices(mode_rest)
+        args = parse_list_get_args(filtered_rest)
+        if not indices:
+            print("Usage: gmail-api-rw pdf INDEX [INDEX ...] "
+                  "(e.g., gmail-api-rw pdf 3 or gmail-api-rw pdf 1,3-5)",
+                  file=sys.stderr)
+            sys.exit(1)
+        service, login_hint = _authenticated_service(args, "gmail-readonly")
+        query = args.query
+        if sent_mode:
+            query = f"in:sent {query}" if query else "in:sent"
+        elif not query:
+            query = "in:inbox"
+        do_pdf(service, indices, args.count, query, account=login_hint)
     elif mode == "urls":
         mode_rest = [a for a in rest if a != mode]
         # Preserve typed order so a SECOND bare integer can mean "open this URL

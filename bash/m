@@ -1232,6 +1232,10 @@ direct_send() {
     while [[ $i -lt ${#send_args[@]} ]]; do
         case "${send_args[i]}" in
             -e)
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "-e needs an account right after it (e.g. -e u); it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 account="${send_args[i+1]}"
                 ((i+=2))
                 ;;
@@ -1259,6 +1263,10 @@ direct_send() {
                 ((i+=2))
                 ;;
             -s|--subject)
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "-s needs a subject right after it (e.g. -s \"hello\"); it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 subject="${send_args[i+1]}"
                 ((i+=2))
                 ;;
@@ -1267,10 +1275,18 @@ direct_send() {
                 # name may be a real contact (nfile.asc), which only the Python
                 # backend knows about. gmail-api-rw's _assert_valid_header_addrs
                 # is the single source of truth for rejecting unresolvable Cc/Bcc.
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "-c needs an address right after it; it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 cc_addrs+=("$(_resolve_alias "${send_args[i+1]}")")
                 ((i+=2))
                 ;;
             -b|--bcc)
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "-b needs an address right after it; it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 bcc_addrs+=("$(_resolve_alias "${send_args[i+1]}")")
                 ((i+=2))
                 ;;
@@ -1283,6 +1299,10 @@ direct_send() {
                 i=$((i+1))
                 ;;
             --after)
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "--after needs a time right after it (e.g. --after '5m'); it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 after_time="${send_args[i+1]}"
                 ((i+=2))
                 ;;
@@ -1880,21 +1900,18 @@ parse_action_args() {
     if [[ -n "$PA_ACTION_WORD" ]]; then
         for ((i=0; i<action_word_index; i++)); do
             local arg="${PA_REMAINING[i]}"
-            case "$arg" in
-                [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                    # Skip query string for positional-q mode (rest[0] is query)
-                    if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
-                        continue
-                    fi
-                    PA_MESSAGE_NUMBERS+=("$arg")
-                    ;;
-                [0-9]-[0-9]|[0-9]-[0-9][0-9]|[0-9][0-9]-[0-9][0-9])
-                    if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
-                        continue
-                    fi
-                    PA_MESSAGE_NUMBERS+=("$arg")
-                    ;;
-            esac
+            # An index token is a bare integer, a range, or a comma-list of both
+            # (1, 1-5, 1,3-5). The old case arms only matched single 1-3 digit
+            # ints and simple N-M ranges, so a comma-list index before an action
+            # word (e.g. `m 1,3-5 --pdf`, which routes through here) was silently
+            # dropped. Match the full shape the top-level loop uses instead.
+            if [[ "$arg" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
+                # Skip query string for positional-q mode (rest[0] is query)
+                if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
+                    continue
+                fi
+                PA_MESSAGE_NUMBERS+=("$arg")
+            fi
         done
         for ((i=action_word_index+1; i<${#PA_REMAINING[@]}; i++)); do
             local targ="${PA_REMAINING[i]}"
@@ -1952,7 +1969,7 @@ parse_action_args() {
 
 ACTIONS_SHORT="i sent q d x urls meets scheduled"
 ACTIONS_SEND="send c"
-ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive thread read unread sfwd sreply sreply-all"
+ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive thread read unread sfwd sreply sreply-all pdf"
 
 usage() {
     local topic="${1:-basic}"
@@ -2266,6 +2283,11 @@ while (( i < ${#args[@]} )); do
         # flag here was dead: nothing downstream ever read it, so `m ... --urls`
         # silently dumped the body instead of extracting URLs.
         rest+=("urls")
+    elif [[ "$arg" == "--pdf" ]]; then
+        # `--pdf` is an alias for the `pdf` action word (one PDF per selected
+        # message into /tmp/spool/pdf/). Same routing rationale as `--urls`:
+        # push it into rest so `m 1-4,5 --pdf` behaves like `m 1-4,5 pdf`.
+        rest+=("pdf")
     elif [[ "$arg" == "--cal" ]]; then
         # `--cal` is advertised in the usage banner but was never implemented:
         # there is no `cal` mode in gmail-api-rw and no handler here, so the old
@@ -2324,6 +2346,20 @@ while (( i < ${#args[@]} )); do
         else
             log_error "--after requires a time argument"
             echo "Examples: --after '5m', --after 'tomorrow 9am', --after '2024-05-24 14:30'" >&2
+            exit 1
+        fi
+    elif [[ "$arg" == "-e" ]]; then
+        # -e <alias>: explicit account selection (mutt-style; mlook emits
+        # `m send addr -e u`). Must be consumed HERE, before the
+        # account-resolution branch: without this branch the alias was
+        # stolen as the account (so routing looked right) while the bare
+        # `-e` leaked into rest and blew up direct_send's parser under
+        # set -u ("send_args[i+1]: unbound variable").
+        if (( i + 1 < ${#args[@]} )) && [[ -n "${ACCTS[${args[i+1]}]:-}" ]]; then
+            i=$((i + 1))
+            account="${args[i]}"
+        else
+            log_error "-e requires a known account alias (e.g. -e u); got '${args[i+1]:-nothing}'"
             exit 1
         fi
     elif [[ -z "$action" ]] && [[ "$arg" == "open" ]] && (( attach_save_in_args )); then
@@ -2584,9 +2620,9 @@ case "$action" in
             done
 
             # If we have -A open, remove 'open' from the action words list
-            action_words="reply reply-all fwd draft open trash archive thread read unread sfwd sreply sreply-all urls grep"
+            action_words="reply reply-all fwd draft open trash archive thread read unread sfwd sreply sreply-all urls pdf grep"
             if [[ "$has_trailing_open" == "1" ]]; then
-                action_words="reply reply-all fwd draft trash archive thread read unread sfwd sreply sreply-all urls grep"
+                action_words="reply reply-all fwd draft trash archive thread read unread sfwd sreply sreply-all urls pdf grep"
             fi
 
             # Delegate arg parsing to the shared helper; q-action treats rest[0] as query.
@@ -3484,6 +3520,11 @@ case "$action" in
         ;;
     urls)
         # Extract URLs from message
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        ;;
+    pdf)
+        # Render one PDF per selected message into /tmp/spool/pdf/. The backend
+        # does all index/range parsing and fan-out (e.g. `m 1-4,5 pdf`).
         exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     meets)
