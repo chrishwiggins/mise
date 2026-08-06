@@ -33,6 +33,10 @@ pip-delete-this-directory.txt
 CONTEXT_LETTER.md
 *CONTEXT*
 
+# Session-local scratch (end-of-session notes; never publish)
+[Nn][Ee][Xx][Tt].md
+[Rr][Ee][Tt][Rr][Oo].md
+
 # Temporary files
 tmp.*
 temp_*
