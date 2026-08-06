@@ -1780,6 +1780,17 @@ open_web() {
 #   PA_MESSAGE_NUMBERS - array of indices found before action word
 #   PA_TRAILING_ARGS   - array of args after the action word
 #   PA_REMAINING       - array equal to input rest minus consumed query tokens
+
+# Compose actions target exactly ONE message; bulk verbs (trash/archive/
+# read/unread/thread/open/urls) legitimately take many. Callers use this to
+# decide whether last-index-wins collapse applies to an action word.
+_is_single_target_action() {
+    case "$1" in
+        reply|reply-all|fwd|forward|sfwd|sreply|sreply-all|draft) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 parse_action_args() {
     local query_mode="$1"; shift
     local caller_action="$1"; shift
@@ -1912,6 +1923,26 @@ parse_action_args() {
                     PA_MESSAGE_NUMBERS=("1")
                     ;;
             esac
+        fi
+
+        # Last-index-wins for !!-augmented compose actions, mirroring the
+        # single-message READ collapse in the i|q and sent handlers:
+        # `m 1 4 reply-all` is `m 1 4` recalled with !! plus an action
+        # appended, so the target is 4, not 1 (bit us 2026-08-06). Collapse
+        # only when EVERY token is a bare single integer; ranges/comma-lists
+        # stay multi. Bulk verbs (trash/archive/...) keep their full list.
+        if _is_single_target_action "$PA_ACTION_WORD" && (( ${#PA_MESSAGE_NUMBERS[@]} > 1 )); then
+            local _all_bare_single=1 _mn
+            for _mn in "${PA_MESSAGE_NUMBERS[@]}"; do
+                if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                    _all_bare_single=0
+                    break
+                fi
+            done
+            if (( _all_bare_single )); then
+                log_warn "'$PA_ACTION_WORD' takes one message; using last index #${PA_MESSAGE_NUMBERS[-1]}"
+                PA_MESSAGE_NUMBERS=("${PA_MESSAGE_NUMBERS[-1]}")
+            fi
         fi
     fi
 }
@@ -3423,6 +3454,26 @@ case "$action" in
         ;;
     draft|reply|reply-all|fwd|open|trash|archive|thread|read|unread|sfwd|sreply|sreply-all)
         # Pass-through to gmail-api-rw
+        # Last-index-wins for !!-augmented compose actions: `m 1 4 reply-all`
+        # is `m 1 4` recalled with !! plus the action appended, so the target
+        # is 4, not 1 (the backend otherwise acts on the FIRST index; bit us
+        # 2026-08-06). Collapse only when rest is ENTIRELY bare single
+        # integers, so flag-carrying invocations and ranges/comma-lists are
+        # left untouched. Bulk verbs (trash/archive/...) keep their full list.
+        if _is_single_target_action "$action" && (( ${#rest[@]} > 1 )); then
+            _all_bare_single=1
+            for _mn in "${rest[@]}"; do
+                if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                    _all_bare_single=0
+                    break
+                fi
+            done
+            if (( _all_bare_single )); then
+                log_warn "'$action' takes one message; using last index #${rest[-1]}"
+                rest=("${rest[-1]}")
+            fi
+            unset _all_bare_single _mn
+        fi
         # Special handling for reply/fwd actions: default to message #1 if no index provided
         if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all)$ ]] && [[ ${#rest[@]} -eq 0 ]]; then
             log_warn "No message index provided, assuming message #1"
