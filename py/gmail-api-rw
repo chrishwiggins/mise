@@ -2494,6 +2494,13 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
             else:
                 print("Please answer y(es), n(o), e(dit), or a(ttachments).", file=sys.stderr)
 
+    # Editor-typed To/Cc can carry a malformed token (e.g. a truncated
+    # 'x@cumc'); Gmail rejects that after compose as 'Invalid Cc header'.
+    # Refuse here instead; the draft is already recovered to
+    # /tmp/spool/last-draft-edit.eml by edit_headers_and_body.
+    reply_addr = _assert_valid_header_addrs(reply_addr, "To")
+    cc_addrs = _assert_valid_header_addrs(cc_addrs, "Cc")
+
     # Build reply message
     reply = MIMEText(body, "plain", "utf-8")
     reply["To"] = reply_addr
@@ -2691,6 +2698,11 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
                 continue
             else:
                 print("Please answer y(es), n(o), or e(dit) to re-edit.", file=sys.stderr)
+
+    # Same guard as do_reply: reject editor-typed malformed To/Cc before
+    # Gmail bounces the composed message as 'Invalid Cc header'.
+    recipient = _assert_valid_header_addrs(recipient, "To")
+    fwd_cc = _assert_valid_header_addrs(fwd_cc, "Cc")
 
     fwd = MIMEText(body, "plain", "utf-8")
     fwd["To"] = recipient
@@ -3604,6 +3616,15 @@ def _build_raw_bytes(args, from_addr=None):
             print(f"Warning: -s '{args.subject}' ignored (-H .eml file has its own Subject)",
                   file=sys.stderr)
         raw_bytes = Path(args.header_file).read_bytes()
+        # Validate address headers from the .eml the same way the
+        # command-line path does; a malformed token (e.g. 'x@cumc' with no
+        # dotted domain) otherwise reaches Gmail and bounces as an opaque
+        # 'Invalid Cc header' traceback after auth and compose.
+        hdr_msg = email.message_from_bytes(raw_bytes, policy=email.policy.compat32)
+        for hdr_label in ("To", "Cc", "Bcc"):
+            hdr_val = hdr_msg.get(hdr_label)
+            if hdr_val:
+                _assert_valid_header_addrs(hdr_val, hdr_label)
         if not sys.stdin.isatty():
             body = sys.stdin.read()
             if body.strip():
