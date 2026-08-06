@@ -15,10 +15,41 @@ except ImportError:
 # Load IATA airport codes
 AIRPORTS = airportsdata.load("IATA")
 
+# IATA metropolitan area codes are not airports, so airportsdata has no entry
+# for them. Map each to a representative airport in that metro area.
+CODE_ALIASES = {
+    "NYC": "JFK",  # New York
+    "LON": "LHR",  # London
+    "CHI": "ORD",  # Chicago
+    "WAS": "IAD",  # Washington DC
+    "PAR": "CDG",  # Paris
+    "TYO": "HND",  # Tokyo
+    "MIL": "MXP",  # Milan
+    "ROM": "FCO",  # Rome
+    "MOW": "SVO",  # Moscow
+    "SAO": "GRU",  # Sao Paulo
+    "RIO": "GIG",  # Rio de Janeiro
+    "BUE": "EZE",  # Buenos Aires
+    "YTO": "YYZ",  # Toronto
+    "YMQ": "YUL",  # Montreal
+    "OSA": "KIX",  # Osaka
+    "SEL": "ICN",  # Seoul
+    "BJS": "PEK",  # Beijing
+    "STO": "ARN",  # Stockholm
+}
+
+
+def resolve_code(code: str) -> str:
+    """Resolve a metro-area code (e.g. NYC) to a real airport code (e.g. JFK)"""
+    code = code.upper()
+    if code in AIRPORTS:
+        return code
+    return CODE_ALIASES.get(code, code)
+
 
 def get_timezone(code: str):
     """Get timezone for an airport code"""
-    airport = AIRPORTS.get(code.upper())
+    airport = AIRPORTS.get(resolve_code(code))
     if not airport:
         return None
     return pytz.timezone(airport["tz"])
@@ -177,24 +208,28 @@ def main():
 Examples:
   %(prog)s JFK LAX
     Reads from stdin, converts JFK (New York) times to LAX (Los Angeles) time
-    
+
   %(prog)s ORD NRT
     Converts from ORD (Chicago) time to NRT (Tokyo) time
-    
+
   echo "Meeting at 14:30 and dinner at 19.00" | %(prog)s LHR CDG
     Converts LHR (London) times to CDG (Paris) timezone
-    
+
 Supported time formats:
   HH:MM (14:30)
   HH.MM (14.30)
   HHhMM (14h30)
   H:MM am/pm (6:30pm, 11:00am)
-  
+
 Common IATA codes:
   USA: JFK/LGA/EWR (NYC), LAX (LA), ORD (Chicago), DEN (Denver), SFO (San Francisco)
   Europe: LHR (London), CDG (Paris), FRA (Frankfurt), AMS (Amsterdam), MAD (Madrid)
   Asia: NRT/HND (Tokyo), HKG (Hong Kong), SIN (Singapore), PEK (Beijing), ICN (Seoul)
   Other: SYD (Sydney), YYZ (Toronto), GRU (São Paulo), DXB (Dubai)
+
+Metro area codes (resolved to a representative airport):
+  NYC -> JFK, LON -> LHR, CHI -> ORD, WAS -> IAD, PAR -> CDG, TYO -> HND
+  (also MIL, ROM, MOW, RIO, BUE, YTO, YMQ, OSA, SEL, BJS, STO)
         """,
     )
 
@@ -228,22 +263,35 @@ Common IATA codes:
 
         if found:
             print(f"Airports matching '{args.search}':")
-            for code, info in sorted(found):
+            for code, info in sorted(found, key=lambda pair: pair[0]):
                 print(
                     f"  {code}: {info.get('name', 'Unknown')} - {info.get('city', '')}, {info.get('country', '')}"
                 )
         else:
             print(f"No airports found matching '{args.search}'")
+
+        # Also surface metro-area aliases whose target airport matched
+        matched_codes = {code for code, _ in found}
+        aliases = sorted(
+            (alias, target)
+            for alias, target in CODE_ALIASES.items()
+            if target in matched_codes and alias != target
+        )
+        if aliases:
+            print()
+            print("Metro area codes:")
+            for alias, target in aliases:
+                print(f"  {alias}: treated as {target}")
         return
 
     # Validate airport codes
-    from_airport = AIRPORTS.get(args.from_code.upper())
+    from_airport = AIRPORTS.get(resolve_code(args.from_code))
     if not from_airport:
         print(f"Error: Unknown airport code '{args.from_code}'", file=sys.stderr)
         print(f"Use '{sys.argv[0]} --search CITY' to find codes", file=sys.stderr)
         sys.exit(1)
 
-    to_airport = AIRPORTS.get(args.to_code.upper())
+    to_airport = AIRPORTS.get(resolve_code(args.to_code))
     if not to_airport:
         print(f"Error: Unknown airport code '{args.to_code}'", file=sys.stderr)
         print(f"Use '{sys.argv[0]} --search CITY' to find codes", file=sys.stderr)
@@ -258,13 +306,17 @@ Common IATA codes:
         from_offset = from_tz.utcoffset(now).total_seconds() / 3600
         to_offset = to_tz.utcoffset(now).total_seconds() / 3600
 
+        def label(code):
+            resolved = resolve_code(code)
+            return resolved if resolved == code.upper() else f"{code.upper()} ({resolved})"
+
         print(
-            f"{args.from_code.upper()}: {from_airport.get('name', 'Unknown')} - {from_airport.get('city', '')}"
+            f"{label(args.from_code)}: {from_airport.get('name', 'Unknown')} - {from_airport.get('city', '')}"
         )
         print(f"  Timezone: {from_tz.zone} (UTC{from_offset:+.0f})")
         print()
         print(
-            f"{args.to_code.upper()}: {to_airport.get('name', 'Unknown')} - {to_airport.get('city', '')}"
+            f"{label(args.to_code)}: {to_airport.get('name', 'Unknown')} - {to_airport.get('city', '')}"
         )
         print(f"  Timezone: {to_tz.zone} (UTC{to_offset:+.0f})")
         print()

@@ -79,8 +79,8 @@ alias mma "open 'https://mail.google.com/mail/u/0/x/?&s=a'"
 #alias gcal fox https://www.google.com/calendar/
 #alias gcal chrome http://www.google.com/calendar/render
 # alias gcal fox https://www.google.com/calendar/b/0/render
-alias gcal pers-gmail-browser https://www.google.com/calendar/b/0/render
-alias gcals "pers-gmail-browser 'https://calendar.google.com/calendar/u/0/r/search?q=\!:*'"
+alias gcal chrome-profile-open 0 https://www.google.com/calendar/b/0/render
+alias gcals "chrome-profile-open 0 'https://calendar.google.com/calendar/u/0/r/search?q=\!:*'"
 alias ccal chrome https://www.google.com/calendar/b/0/render
 # NB: 'gc' intended for use with google <- /usr/local/bin/google
 alias gc google calendar add

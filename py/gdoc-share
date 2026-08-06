@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """
-Upload a markdown file to Google Drive as a Google Doc and share it.
+Upload a markdown file to Google Drive as a Google Doc and share it,
+or share an existing Google Doc directly by URL/ID.
 
 Usage:
     gdoc-share FILE.md EMAIL [DOC_NAME]
+    gdoc-share DOC_URL_OR_ID EMAIL
 
 Examples:
     gdoc-share ./notes.md alice@gmail.com
     gdoc-share ~/docs/readme.md bob@example.com "Project Readme"
+    gdoc-share 'https://docs.google.com/document/d/1AbC.../edit' alice@gmail.com
+    gdoc-share 1AbC...  alice@gmail.com
 
-The file will be converted to a Google Doc and created in your Drive root.
-If DOC_NAME is not provided, the local file's basename (without extension) is used.
+If the first argument is a Google Docs/Drive URL or a bare doc ID, the
+existing document is shared directly (no upload). Otherwise the file will be
+converted to a Google Doc and created in your Drive root. If DOC_NAME is not
+provided, the local file's basename (without extension) is used.
 """
 
+import re
 import sys
 from pathlib import Path
 import pickle
@@ -145,13 +152,50 @@ def get_doc_url(doc_id):
     return f"https://docs.google.com/document/d/{doc_id}/edit"
 
 
+DOC_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{25,}$")
+DOC_URL_RE = re.compile(
+    r"docs\.google\.com/document/d/([a-zA-Z0-9_-]+)|"
+    r"drive\.google\.com/file/d/([a-zA-Z0-9_-]+)|"
+    r"drive\.google\.com/open\?id=([a-zA-Z0-9_-]+)"
+)
+
+
+def extract_doc_id(arg):
+    """If arg is a Google Docs/Drive URL or a bare doc ID, return the doc ID. Else None."""
+    match = DOC_URL_RE.search(arg)
+    if match:
+        return next(g for g in match.groups() if g)
+    if DOC_ID_RE.match(arg):
+        return arg
+    return None
+
+
 def main():
     if len(sys.argv) < 3:
         print(__doc__, file=sys.stderr)
         sys.exit(1)
 
-    local_file = Path(sys.argv[1]).expanduser().resolve()
     email = sys.argv[2]
+
+    # Basic email validation
+    if "@" not in email or "." not in email:
+        print(f"Error: {email} does not look like a valid email", file=sys.stderr)
+        sys.exit(1)
+
+    creds = get_credentials()
+    service = build("drive", "v3", credentials=creds)
+
+    doc_id = extract_doc_id(sys.argv[1])
+
+    if doc_id:
+        print(f"Sharing existing doc {doc_id} with {email}...", file=sys.stderr)
+        share_doc(service, doc_id, email)
+        url = get_doc_url(doc_id)
+        print(f"Done! Document shared with {email}", file=sys.stderr)
+        print(url)
+        return
+
+    local_file = Path(sys.argv[1]).expanduser().resolve()
     doc_name = sys.argv[3] if len(sys.argv) > 3 else None
 
     # Validate file
@@ -161,14 +205,6 @@ def main():
     if not local_file.is_file():
         print(f"Error: {local_file} is not a file", file=sys.stderr)
         sys.exit(1)
-
-    # Basic email validation
-    if "@" not in email or "." not in email:
-        print(f"Error: {email} does not look like a valid email", file=sys.stderr)
-        sys.exit(1)
-
-    creds = get_credentials()
-    service = build("drive", "v3", credentials=creds)
 
     print(f"Uploading {local_file} as Google Doc...", file=sys.stderr)
     doc_id = upload_markdown_as_doc(service, local_file, doc_name=doc_name)
