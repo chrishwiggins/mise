@@ -3601,13 +3601,31 @@ def _attach_files(msg, attachments):
     return msg
 
 
+# Header punctuation with an honest ASCII equivalent. A subject typed with an
+# en dash or curly quote should go out as plain ASCII, not as an RFC2047
+# encoded word nobody can read in raw form (and Chris's style rules ban these
+# characters anyway). Letters are deliberately absent: an accented name like
+# Muller-with-umlaut stays correct via RFC2047 rather than being mangled.
+_HDR_ASCII_PUNCT = str.maketrans({
+    0x2010: "-", 0x2011: "-", 0x2012: "-", 0x2013: "-",  # hyphens, en dash
+    0x2014: "-", 0x2015: "-", 0x2212: "-",               # em dash, minus
+    0x2018: "'", 0x2019: "'", 0x201A: "'", 0x201B: "'",  # curly singles
+    0x201C: '"', 0x201D: '"', 0x201E: '"',               # curly doubles
+    0x2026: "...",                                       # ellipsis
+    0x00A0: " ", 0x2002: " ", 0x2003: " ", 0x2009: " ",  # exotic spaces
+    0x200B: "", 0xFEFF: "",                              # zero-width junk
+})
+
+
 def _rfc2047_encode_raw_headers(raw_bytes):
-    """RFC2047-encode any non-ASCII header values in a raw headers+body blob.
+    """ASCII-fy header values in a raw headers+body blob.
 
     A hand-edited .eml can carry raw UTF-8 in a header (e.g. an en dash in
     Subject). Shipped as-is through the API, intermediate agents mangle those
-    bytes and recipients see mojibake ('Ã¢ÂÂ'). Address headers encode only
-    display names, never the addresses themselves. Body is left untouched.
+    bytes and recipients see mojibake ('Ã¢ÂÂ'). Punctuation transliterates
+    to plain ASCII via _HDR_ASCII_PUNCT; whatever remains non-ASCII (accented
+    names) gets RFC2047-encoded. Address headers encode only display names,
+    never the addresses themselves. Body is left untouched.
     """
     from email.header import Header
     for sep in (b"\r\n\r\n", b"\n\n"):
@@ -3621,9 +3639,15 @@ def _rfc2047_encode_raw_headers(raw_bytes):
         return raw_bytes  # all-ASCII headers: nothing to encode
     except UnicodeDecodeError:
         pass
+    head_text = head.decode("utf-8", errors="replace").translate(_HDR_ASCII_PUNCT)
+    try:
+        # Transliteration alone got us to ASCII: done, structure untouched.
+        return head_text.encode("ascii") + found + body
+    except UnicodeEncodeError:
+        pass
     # Unfold continuation lines so each logical header encodes as one unit.
     lines = []
-    for ln in head.decode("utf-8", errors="replace").split("\n"):
+    for ln in head_text.split("\n"):
         ln = ln.rstrip("\r")
         if ln[:1] in (" ", "\t") and lines:
             lines[-1] += " " + ln.strip()
