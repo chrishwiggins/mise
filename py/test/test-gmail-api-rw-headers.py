@@ -70,10 +70,11 @@ def test_valid_cc_builds():
     assert b"mcn2119@cumc.columbia.edu" in raw
 
 
-def test_nonascii_headers_rfc2047_encoded():
-    subj = f"Re: Removal of Joint Appointment {DASH} Dr. W (Systems Biology)"
+def test_punctuation_transliterated_to_ascii():
+    """Dashes and curly quotes become plain ASCII, no RFC2047 needed."""
+    curly = chr(0x2019)
+    subj = f"Re: Removal of Joint Appointment {DASH} Dr. W{curly}s (Systems Biology)"
     path = _eml("To: a@example.edu\n"
-                "Cc: \"Müller, J\" <jm@example.edu>, b@example.edu\n"
                 f"Subject: {subj}\n"
                 "\n"
                 f"Body dash {DASH} must be untouched.\n")
@@ -81,13 +82,30 @@ def test_nonascii_headers_rfc2047_encoded():
 
     head, body = raw.split(b"\n\n", 1)
     head.decode("ascii")  # raises if any non-ASCII survived in headers
+    msg = email.message_from_bytes(raw, policy=email.policy.compat32)
+    assert msg["Subject"] == subj.replace(DASH, "-").replace(curly, "'")
+    assert "=?" not in msg["Subject"], "punctuation should not need RFC2047"
+    assert DASH.encode() in body, "body bytes were altered"
+
+
+def test_accented_names_rfc2047_encoded():
+    """Letters are not mangled to ASCII; they get RFC2047 encoding."""
+    subj = f"minutes {DASH} committee"
+    path = _eml("To: a@example.edu\n"
+                "Cc: \"Müller, J\" <jm@example.edu>, b@example.edu\n"
+                f"Subject: {subj}\n"
+                "\n"
+                "body\n")
+    raw = gm._build_raw_bytes(_args(path))
+
+    head, _ = raw.split(b"\n\n", 1)
+    head.decode("ascii")
 
     msg = email.message_from_bytes(raw, policy=email.policy.compat32)
-    assert str(make_header(decode_header(msg["Subject"]))) == subj
+    assert msg["Subject"] == "minutes - committee"
     cc = str(make_header(decode_header(msg["Cc"])))
     assert "jm@example.edu" in cc and "b@example.edu" in cc
     assert "Müller" in cc
-    assert DASH.encode() in body, "body bytes were altered"
 
 
 def test_ascii_draft_passes_through_unchanged():
