@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""claude-cohab: know when two Claude Code sessions share a git repo.
+
+Claude Code sessions cannot reliably see each other from inside the
+sandboxed Bash tool (ps enumeration is restricted and /tmp is virtualized
+per session). Hooks, however, run unsandboxed with the CLI process as
+their parent, so each session can maintain a heartbeat file and scan the
+others' deterministically.
+
+Registry: ~/.claude/cohab/<session_id>.json
+  {"session_id", "pid", "cwd", "toplevel", "ts"}
+A session is live if its recorded pid is alive AND that pid's command
+still looks like the claude CLI (guards against pid reuse). Stale files
+are deleted on every scan.
+
+Subcommands (beat/end are for hooks; list is for humans and scripts):
+  beat   UserPromptSubmit hook: read hook JSON on stdin, write/update this
+         session's heartbeat, then print a one-line warning to stdout
+         (which the harness injects as context) if any OTHER live session
+         has its cwd in the same git repo.
+  end    SessionEnd hook: read hook JSON on stdin, remove this session's
+         heartbeat file.
+  list [DIR]
+         Human-readable list of live sessions. With DIR, only sessions
+         whose cwd is inside DIR's repo. Exit 0 if any listed, 1 if none.
+  install-hooks
+         Wire beat/end (and the bulk-git-add blocker, if present in
+         ~/.claude/hooks) into ~/.claude/settings.json. Refuses to run
+         while any Claude session is alive, because settings hot-reload
+         into every running session; run it from a plain terminal after
+         closing them. Backs up settings.json first. Idempotent.
+
+Wiring (in ~/.claude/settings.json):
+  UserPromptSubmit -> /Users/wiggins/mise/py/claude-cohab beat
+  SessionEnd       -> /Users/wiggins/mise/py/claude-cohab end
+
+Limitation: a session's repo is derived from its cwd, so a session
+editing files in a repo it is not cd'ed into (e.g. a /tmp scratch dir)
+is not attributed to that repo.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REGISTRY = Path.home() / ".claude" / "cohab"
+
+
+def repo_toplevel(directory):
+    """Toplevel of the git repo containing directory, or None."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", directory, "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
+
+
+def pid_is_claude(pid):
+    """True if pid is alive and its command looks like the claude CLI."""
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError, TypeError):
+        return False
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return False
+    # Require the executable itself to be the claude CLI; a substring match
+    # would false-positive on hook shells whose args mention ~/.claude/...
+    argv0 = out.stdout.strip().split()[0] if out.stdout.strip() else ""
+    return argv0.rsplit("/", 1)[-1] == "claude"
+
+
+def claude_ancestor_pid():
+    """Nearest ancestor pid whose executable is the claude CLI.
+
+    Hooks may be spawned via an intermediate sh -c, so the direct parent is
+    not guaranteed to be the CLI; walk up until we find it. Falls back to
+    the direct parent if no claude ancestor is visible.
+    """
+    pid = os.getppid()
+    fallback = pid
+    for _ in range(10):
+        try:
+            out = subprocess.run(
+                ["/bin/ps", "-o", "ppid=,command=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout.strip()
+        except Exception:
+            break
+        if not out:
+            break
+        parts = out.split(None, 2)
+        if len(parts) < 2:
+            break
+        ppid, argv0 = parts[0], parts[1]
+        if argv0.rsplit("/", 1)[-1] == "claude":
+            return pid
+        pid = int(ppid)
+        if pid <= 1:
+            break
+    return fallback
+
+
+def read_hook_input():
+    """Parse the hook JSON the harness passes on stdin."""
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def own_file(session_id):
+    return REGISTRY / f"{session_id}.json"
+
+
+def scan(exclude_session_id=None):
+    """Yield live session records, deleting stale registry files."""
+    if not REGISTRY.is_dir():
+        return []
+    live = []
+    for f in REGISTRY.glob("*.json"):
+        try:
+            rec = json.loads(f.read_text())
+        except Exception:
+            f.unlink(missing_ok=True)
+            continue
+        if rec.get("session_id") == exclude_session_id:
+            continue
+        if not pid_is_claude(rec.get("pid")):
+            f.unlink(missing_ok=True)
+            continue
+        live.append(rec)
+    return live
+
+
+def cmd_beat():
+    data = read_hook_input()
+    session_id = data.get("session_id")
+    cwd = data.get("cwd") or os.getcwd()
+    if not session_id:
+        return 0  # nothing to register under; stay silent
+    REGISTRY.mkdir(parents=True, exist_ok=True)
+    rec = {
+        "session_id": session_id,
+        "pid": claude_ancestor_pid(),
+        "cwd": cwd,
+        "toplevel": repo_toplevel(cwd),
+        "ts": int(time.time()),
+    }
+    own_file(session_id).write_text(json.dumps(rec) + "\n")
+
+    if not rec["toplevel"]:
+        return 0
+    others = [s for s in scan(exclude_session_id=session_id) if s.get("toplevel") == rec["toplevel"]]
+    if others:
+        descr = "; ".join(
+            f"pid {s['pid']} in {s['cwd']} (last active {time.strftime('%H:%M', time.localtime(s['ts']))})"
+            for s in others
+        )
+        print(
+            f"[cohab] {len(others)} other live Claude session(s) share this repo "
+            f"({rec['toplevel']}): {descr}. Coordinate commits: git add explicit "
+            f"paths only, and expect the tree to change between your commands."
+        )
+    return 0
+
+
+def cmd_end():
+    data = read_hook_input()
+    session_id = data.get("session_id")
+    if session_id:
+        own_file(session_id).unlink(missing_ok=True)
+    return 0
+
+
+def cmd_list(directory=None):
+    sessions = scan()
+    if directory:
+        top = repo_toplevel(directory)
+        if not top:
+            print(f"{directory} is not in a git repo", file=sys.stderr)
+            return 1
+        sessions = [s for s in sessions if s.get("toplevel") == top]
+    if not sessions:
+        print("no live registered Claude sessions" + (f" in {directory}" if directory else ""))
+        return 1
+    for s in sorted(sessions, key=lambda s: s["ts"], reverse=True):
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(s["ts"]))
+        print(f"pid {s['pid']:>7}  {when}  {s.get('toplevel') or '-'}  cwd={s['cwd']}  session={s['session_id']}")
+    return 0
+
+
+SELF = "/Users/wiggins/mise/py/claude-cohab"
+BLOCKER = str(Path.home() / ".claude" / "hooks" / "block-bulk-git-add.py")
+
+
+def running_claude_processes():
+    """(pid, command) for every live claude CLI process except the daemon."""
+    try:
+        out = subprocess.run(
+            ["/bin/ps", "-axo", "pid=,command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    except Exception:
+        return None  # cannot tell; caller must fail closed
+    procs = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid, command = parts
+        argv0 = command.split()[0]
+        if argv0.rsplit("/", 1)[-1] != "claude":
+            continue
+        if " daemon run " in f" {command} ":
+            continue  # the background daemon tolerates settings reloads
+        procs.append((int(pid), command))
+    return procs
+
+
+def cmd_install_hooks():
+    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_SESSION_ID"):
+        print(
+            "REFUSING: this is running inside a Claude session (whose sandboxed "
+            "process view also hides other sessions). Run from a plain terminal.",
+            file=sys.stderr,
+        )
+        return 1
+    procs = running_claude_processes()
+    if procs is None:
+        print("cannot enumerate processes; refusing to touch settings.json", file=sys.stderr)
+        return 1
+    if procs:
+        print(
+            "REFUSING: settings.json hot-reloads into every live session, and "
+            f"{len(procs)} Claude session(s) are running:",
+            file=sys.stderr,
+        )
+        for pid, command in procs:
+            print(f"  pid {pid}: {command[:100]}", file=sys.stderr)
+        print("Close them (or /exit each) and re-run from a plain terminal.", file=sys.stderr)
+        return 1
+
+    settings_path = Path.home() / ".claude" / "settings.json"
+    settings = json.loads(settings_path.read_text())
+    hooks = settings.setdefault("hooks", {})
+
+    def entry(command, timeout=10, matcher=None):
+        e = {"hooks": [{"type": "command", "command": command, "timeout": timeout}]}
+        if matcher:
+            e["matcher"] = matcher
+        return e
+
+    def wired(event, command):
+        return any(
+            h.get("command") == command
+            for grp in hooks.get(event, [])
+            for h in grp.get("hooks", [])
+        )
+
+    changed = []
+    wanted = [
+        ("UserPromptSubmit", f"{SELF} beat", None),
+        ("SessionEnd", f"{SELF} end", None),
+    ]
+    if Path(BLOCKER).exists():
+        wanted.append(("PreToolUse", BLOCKER, "Bash"))
+    for event, command, matcher in wanted:
+        if wired(event, command):
+            continue
+        hooks.setdefault(event, []).append(entry(command, matcher=matcher))
+        changed.append(f"{event} -> {command}")
+
+    if not changed:
+        print("already wired; nothing to do")
+        return 0
+    backup = settings_path.with_suffix(f".json.bak-{time.strftime('%Y%m%d%H%M%S')}")
+    backup.write_text(settings_path.read_text())
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+    print(f"backup: {backup}")
+    for c in changed:
+        print(f"wired: {c}")
+    return 0
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in ("beat", "end", "list", "install-hooks"):
+        print(__doc__, file=sys.stderr)
+        return 2
+    cmd = sys.argv[1]
+    if cmd == "beat":
+        return cmd_beat()
+    if cmd == "end":
+        return cmd_end()
+    if cmd == "install-hooks":
+        return cmd_install_hooks()
+    return cmd_list(sys.argv[2] if len(sys.argv) > 2 else None)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
