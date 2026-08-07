@@ -64,6 +64,27 @@ def test_24h_stays_24h():
     assert tz2tz.convert_time("14:30", "JFK", "LHR", date=date) == "19:30"
 
 
+def test_ampm_spacing_preserved():
+    """The input's whitespace before am/pm survives conversion."""
+    date = datetime(2026, 8, 6)
+    assert tz2tz.convert_time("6:30 pm", "JFK", "LHR", date=date) == "11:30 pm"
+    assert tz2tz.convert_time("6:30pm", "JFK", "LHR", date=date) == "11:30pm"
+
+
+def test_metro_alias_text_untouched():
+    """Metro-alias source codes convert times but are never rewritten in
+    the text; real airport codes still are. (JFK/LAX share DST rules, so
+    the 3-hour offset is stable year-round.)"""
+    assert (
+        tz2tz.process_text("Leaving NYC at 14:30", "NYC", "LAX")
+        == "Leaving NYC at 11:30"
+    )
+    assert (
+        tz2tz.process_text("Leaving JFK at 14:30", "JFK", "LAX")
+        == "Leaving LAX at 11:30"
+    )
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

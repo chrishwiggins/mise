@@ -58,12 +58,13 @@ def get_timezone(code: str):
 def convert_time(time_str: str, from_code: str, to_code: str, date=None, fix=False) -> str:
     """Convert time from one airport timezone to another"""
     # Parse time - supports formats like HH:MM, HH.MM, HHhMM, and 12-hour formats like 6:30pm, 11:00am
-    time_match = re.match(r"(\d{1,2})[.:h](\d{2})[ \t]*(am|pm|AM|PM)?", time_str)
+    time_match = re.match(r"(\d{1,2})[.:h](\d{2})([ \t]*)(am|pm|AM|PM)?", time_str)
     if not time_match:
         return time_str
 
     hour, minute = int(time_match.group(1)), int(time_match.group(2))
-    am_pm = time_match.group(3)
+    sep = time_match.group(3)
+    am_pm = time_match.group(4)
 
     # Convert 12-hour format to 24-hour format
     if am_pm:
@@ -123,10 +124,11 @@ def convert_time(time_str: str, from_code: str, to_code: str, date=None, fix=Fal
         if fix:
             return f"{out_hour:02d}:{to_dt.minute:02d}{am_pm_suffix}{day_change}"
 
-        # Otherwise, keep the case style of the original suffix but use the
-        # converted meridiem (9:00am Tokyo is 8:00pm, not 8:00am, in New York)
+        # Otherwise, keep the case style and spacing of the original suffix but
+        # use the converted meridiem (9:00am Tokyo is 8:00pm in New York)
         computed = am_pm_suffix.strip()
-        am_pm_suffix = computed.lower() if am_pm.islower() else computed
+        cased = computed.lower() if am_pm.islower() else computed
+        am_pm_suffix = f"{sep}{cased}"
 
     if fix:
         # With --fix, standardize to HH:MM (24-hour format if no am/pm)
@@ -181,9 +183,14 @@ def process_text(text: str, from_code: str, to_code: str, fix=False) -> str:
     # Then, convert times
     result = re.sub(time_pattern, replace_time, result)
 
-    # Substitute airport codes (case-insensitive)
+    # Substitute airport codes (case-insensitive). Metro-area aliases (NYC,
+    # LON, ...) are left untouched in the text: their times convert, but
+    # "NYC" in prose stays "NYC" (decided 2026-08-07).
     from_code_upper = from_code.upper()
     to_code_upper = to_code.upper()
+
+    if from_code_upper not in AIRPORTS:
+        return result
 
     def replace_airport_code(match):
         matched_text = match.group(0)
@@ -230,6 +237,7 @@ Common IATA codes:
 Metro area codes (resolved to a representative airport):
   NYC -> JFK, LON -> LHR, CHI -> ORD, WAS -> IAD, PAR -> CDG, TYO -> HND
   (also MIL, ROM, MOW, RIO, BUE, YTO, YMQ, OSA, SEL, BJS, STO)
+  Times convert, but metro codes in the text itself are left unchanged.
         """,
     )
 
