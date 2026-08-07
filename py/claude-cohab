@@ -235,6 +235,12 @@ def running_claude_processes():
             continue
         if " daemon run " in f" {command} ":
             continue  # the background daemon tolerates settings reloads
+        if "bg-spare" in command or "/spare/" in command:
+            # Pre-warmed idle pool processes (bg-spare and their pty hosts):
+            # not closable sessions, and a spare claimed later re-reads
+            # settings anyway. Without this exclusion, install-hooks would
+            # refuse forever even after every real session is closed.
+            continue
         procs.append((int(pid), command))
     return procs
 
