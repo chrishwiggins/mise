@@ -3601,6 +3601,50 @@ def _attach_files(msg, attachments):
     return msg
 
 
+def _rfc2047_encode_raw_headers(raw_bytes):
+    """RFC2047-encode any non-ASCII header values in a raw headers+body blob.
+
+    A hand-edited .eml can carry raw UTF-8 in a header (e.g. an en dash in
+    Subject). Shipped as-is through the API, intermediate agents mangle those
+    bytes and recipients see mojibake ('Ã¢ÂÂ'). Address headers encode only
+    display names, never the addresses themselves. Body is left untouched.
+    """
+    from email.header import Header
+    for sep in (b"\r\n\r\n", b"\n\n"):
+        head, found, body = raw_bytes.partition(sep)
+        if found:
+            break
+    else:
+        head, found, body = raw_bytes, b"", b""
+    try:
+        head.decode("ascii")
+        return raw_bytes  # all-ASCII headers: nothing to encode
+    except UnicodeDecodeError:
+        pass
+    # Unfold continuation lines so each logical header encodes as one unit.
+    lines = []
+    for ln in head.decode("utf-8", errors="replace").split("\n"):
+        ln = ln.rstrip("\r")
+        if ln[:1] in (" ", "\t") and lines:
+            lines[-1] += " " + ln.strip()
+        else:
+            lines.append(ln)
+    out = []
+    for ln in lines:
+        if ":" in ln and any(ord(ch) > 127 for ch in ln):
+            name, _, val = ln.partition(":")
+            if name.strip().lower() in ("to", "cc", "bcc", "from", "reply-to"):
+                pairs = getaddresses([val.strip()])
+                val = " " + ", ".join(
+                    formataddr(p, charset="utf-8") for p in pairs)
+            else:
+                val = " " + Header(val.strip(), "utf-8").encode()
+            out.append(f"{name}:{val}")
+        else:
+            out.append(ln)
+    return "\n".join(out).encode("ascii", errors="replace") + found + body
+
+
 def _build_raw_bytes(args, from_addr=None):
     """Build raw email bytes from send/draft args. Shared by do_send and do_draft."""
     if args.attach:
@@ -3625,6 +3669,7 @@ def _build_raw_bytes(args, from_addr=None):
             hdr_val = hdr_msg.get(hdr_label)
             if hdr_val:
                 _assert_valid_header_addrs(hdr_val, hdr_label)
+        raw_bytes = _rfc2047_encode_raw_headers(raw_bytes)
         if not sys.stdin.isatty():
             body = sys.stdin.read()
             if body.strip():
