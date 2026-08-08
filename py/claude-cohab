@@ -23,12 +23,15 @@ Subcommands (beat/end are for hooks; list is for humans and scripts):
   list [DIR]
          Human-readable list of live sessions. With DIR, only sessions
          whose cwd is inside DIR's repo. Exit 0 if any listed, 1 if none.
-  install-hooks
+  install-hooks [--wait]
          Wire beat/end (and the bulk-git-add blocker, if present in
          ~/.claude/hooks) into ~/.claude/settings.json. Refuses to run
          while any Claude session is alive, because settings hot-reload
          into every running session; run it from a plain terminal after
-         closing them. Backs up settings.json first. Idempotent.
+         closing them. With --wait, polls every 15s and installs the
+         moment the last session exits, so you can start it first and
+         close windows at your leisure. Backs up settings.json first.
+         Idempotent.
 
 Wiring (in ~/.claude/settings.json):
   UserPromptSubmit -> /Users/wiggins/mise/py/claude-cohab beat
@@ -245,7 +248,7 @@ def running_claude_processes():
     return procs
 
 
-def cmd_install_hooks():
+def cmd_install_hooks(wait=False):
     if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_SESSION_ID"):
         print(
             "REFUSING: this is running inside a Claude session (whose sandboxed "
@@ -253,6 +256,24 @@ def cmd_install_hooks():
             file=sys.stderr,
         )
         return 1
+    if wait:
+        last = -1
+        while True:
+            procs = running_claude_processes()
+            if procs is None:
+                print("cannot enumerate processes; refusing", file=sys.stderr)
+                return 1
+            if not procs:
+                print("all Claude sessions closed; installing now.")
+                break
+            if len(procs) != last:
+                last = len(procs)
+                print(
+                    f"waiting: {len(procs)} Claude session(s) still open "
+                    f"(checking every 15s; close them at your leisure, ctrl-C to abort)",
+                    flush=True,
+                )
+            time.sleep(15)
     procs = running_claude_processes()
     if procs is None:
         print("cannot enumerate processes; refusing to touch settings.json", file=sys.stderr)
@@ -320,7 +341,7 @@ def main():
     if cmd == "end":
         return cmd_end()
     if cmd == "install-hooks":
-        return cmd_install_hooks()
+        return cmd_install_hooks(wait="--wait" in sys.argv[2:])
     return cmd_list(sys.argv[2] if len(sys.argv) > 2 else None)
 
 
