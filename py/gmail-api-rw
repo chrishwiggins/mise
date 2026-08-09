@@ -1163,6 +1163,24 @@ def extract_urls_from_html(html_text):
     return urls
 
 
+def _text_is_html(s):
+    """True when a supposed text/plain body is actually HTML markup.
+
+    Some senders stuff a full HTML blockquote into the text/plain MIME part.
+    That part is returned verbatim by extract_text_body (the _strip_html step
+    only fires on the HTML-fallback branch), so the terminal shows raw tags and
+    inline style="...". This detector is deliberately conservative: it matches
+    only common structural/inline tags, word-boundary anchored, so a genuine
+    plain-text body with a stray angle bracket ("5 < 6 pm, bring the <thing>")
+    does not trip it.
+    """
+    if not s:
+        return False
+    return bool(re.search(
+        r'</?(div|span|table|tr|td|blockquote|p|br|a|b|i|strong|body|html|font)\b',
+        s, re.IGNORECASE))
+
+
 def extract_text_body(raw_bytes):
     """Extract text/plain body from raw email bytes, falling back to stripped HTML."""
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
@@ -1183,6 +1201,9 @@ def extract_text_body(raw_bytes):
         for part in msg.walk():
             result = _check_part(part)
             if result is not None:
+                # Some mail puts full HTML inside the text/plain part; strip it.
+                if _text_is_html(result):
+                    result = _strip_html(result)
                 text = _clean_unicode_noise(result)
                 # Fix broken URLs with spaces after protocol (https: // -> https://)
                 import re
@@ -1191,6 +1212,9 @@ def extract_text_body(raw_bytes):
     else:
         result = _check_part(msg)
         if result is not None:
+            # Some mail puts full HTML inside the text/plain part; strip it.
+            if _text_is_html(result):
+                result = _strip_html(result)
             text = _clean_unicode_noise(result)
             # Fix broken URLs with spaces after protocol (https: // -> https://)
             import re
