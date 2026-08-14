@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Answer "does this Claude Code command / skill / agent exist?" from the filesystem.
+
+Built 2026-08-07 after two wrong assertions in one session: that `/whatsnext`
+existed (it never has) and that a slash command could be symlinked to an agent
+definition (different loaders, different frontmatter). Both were one directory
+listing away. This makes the listing a single command so there is no excuse to
+answer from memory.
+
+Usage:
+  cmd-exists whatsnext            # one name, any kind
+  cmd-exists next gtd enhance     # several
+  cmd-exists --list               # everything, grouped by kind
+  cmd-exists --list skills        # one kind: commands | skills | agents | hooks
+
+Exit status: 0 if every queried name was found, 1 if any was missing.
+"""
+import argparse
+import os
+import sys
+
+HOME = os.path.expanduser("~")
+
+KINDS = {
+    # kind: (directory, how a name maps to a path, what invokes it)
+    "command": (
+        os.path.join(HOME, ".claude", "commands"),
+        lambda d, n: os.path.join(d, n + ".md"),
+        "slash command, typed as /{name}",
+    ),
+    "skill": (
+        os.path.join(HOME, ".claude", "skills"),
+        lambda d, n: os.path.join(d, n, "SKILL.md"),
+        "skill, invoked via the Skill tool or /{name}",
+    ),
+    "agent": (
+        os.path.join(HOME, ".claude", "agents"),
+        lambda d, n: os.path.join(d, n + ".md"),
+        "subagent, invoked via the Agent tool with subagent_type; NOT slash-invocable",
+    ),
+    "hook": (
+        os.path.join(HOME, ".claude", "hooks"),
+        None,  # hooks are matched by prefix, not exact name
+        "hook script, wired in settings.json",
+    ),
+}
+
+
+def entries(kind):
+    """Every existing name of this kind, sorted."""
+    d = KINDS[kind][0]
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for e in sorted(os.listdir(d)):
+        p = os.path.join(d, e)
+        if kind == "skill":
+            if os.path.isdir(p) and os.path.exists(os.path.join(p, "SKILL.md")):
+                out.append(e)
+        elif kind == "hook":
+            if os.path.isfile(p) and not e.startswith("."):
+                out.append(e)
+        else:
+            if e.endswith(".md"):
+                out.append(e[:-3])
+    return out
+
+
+def find(name):
+    """Return [(kind, path, note)] for every kind under which `name` exists."""
+    hits = []
+    for kind, (d, topath, note) in KINDS.items():
+        if kind == "hook":
+            for e in entries("hook"):
+                if e.startswith(name) or name in e:
+                    hits.append((kind, os.path.join(d, e), note))
+            continue
+        p = topath(d, name)
+        if os.path.exists(p):
+            hits.append((kind, p, note))
+    return hits
+
+
+def near(name, limit=4):
+    """Names of any kind that share a prefix or contain the query."""
+    out = []
+    for kind in ("command", "skill", "agent"):
+        for e in entries(kind):
+            if e == name:
+                continue
+            if e.startswith(name[:4]) or name in e or e in name:
+                out.append(f"{e} ({kind})")
+    return sorted(set(out))[:limit]
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True, description=__doc__)
+    ap.add_argument("names", nargs="*", help="names to check, without a leading slash")
+    ap.add_argument(
+        "--list",
+        nargs="?",
+        const="all",
+        metavar="KIND",
+        help="list everything, or one of: commands skills agents hooks",
+    )
+    a = ap.parse_args()
+
+    if a.list:
+        want = (
+            list(KINDS)
+            if a.list == "all"
+            else [k for k in KINDS if k + "s" == a.list or k == a.list]
+        )
+        if not want:
+            print(f"unknown kind: {a.list}", file=sys.stderr)
+            return 1
+        for kind in want:
+            es = entries(kind)
+            print(f"== {kind}s ({len(es)}) in {KINDS[kind][0]}")
+            for e in es:
+                print(f"   {e}")
+            print()
+        return 0
+
+    if not a.names:
+        ap.print_help()
+        return 1
+
+    missing = 0
+    for raw in a.names:
+        name = raw.lstrip("/")
+        hits = find(name)
+        if hits:
+            for kind, path, note in hits:
+                print(f"YES  {name}: {kind} at {path}")
+                print(f"     {note}")
+        else:
+            missing += 1
+            print(f"NO   {name}: does not exist as a command, skill, or agent.")
+            n = near(name)
+            if n:
+                print(f"     closest existing: {', '.join(n)}")
+    return 1 if missing else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
