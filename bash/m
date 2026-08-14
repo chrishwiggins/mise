@@ -2744,14 +2744,19 @@ case "$action" in
                         ;;
                     [0-9]*-[0-9]* | [0-9]*,[0-9]*)
                         # Message range (e.g. 1-5, 45-120) or comma-list (1,3,8).
+                        # q-action exception FIRST: rest[0] is the query, not an
+                        # index, and must not reach filtered_args either. A query
+                        # like '2,098.71' matches this glob but fails the shape
+                        # regex below; validating shape first duplicated the query
+                        # into filtered_args, which the backend read as a
+                        # positional index ("Invalid index: '098.71'").
+                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                            continue
+                        fi
                         # Validate the full shape so we don't swallow stray tokens
                         # that merely contain a digit and a dash.
                         if [[ ! "$arg" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
                             filtered_args+=("$arg")
-                            continue
-                        fi
-                        # Same q-action exception: rest[0] is the query, not an index.
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
                             continue
                         fi
                         message_numbers+=("$arg")
@@ -3121,14 +3126,20 @@ case "$action" in
                         ;;
                     [0-9]*-[0-9]* | [0-9]*,[0-9]*)
                         # Message range (e.g. 1-5, 45-120) or comma-list (1,3,8).
+                        # q-exception FIRST, mirroring the i|q arm: a query-ish
+                        # token must never fall through to filtered_args. Here
+                        # $action is always "sent" (query arrives via literal-q
+                        # extraction) and filtered_args is currently write-only,
+                        # so this ordering is latent; keep it correct anyway so
+                        # wiring filtered_args into a backend call later cannot
+                        # resurrect the "Invalid index" leak.
+                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                            continue
+                        fi
                         # Validate the full shape so we don't swallow stray tokens
                         # that merely contain a digit and a dash.
                         if [[ ! "$arg" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
                             filtered_args+=("$arg")
-                            continue
-                        fi
-                        # Same q-action exception: rest[0] is the query, not an index.
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
                             continue
                         fi
                         message_numbers+=("$arg")
