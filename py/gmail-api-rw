@@ -1942,18 +1942,22 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
                 fetch_errors[idx] = exception
         return _cb
 
-    batch = service.new_batch_http_request()
-    for i, msg_stub in enumerate(messages):
-        batch.add(
-            service.users().messages().get(
-                userId="me",
-                id=msg_stub["id"],
-                format="metadata",
-                metadataHeaders=meta_headers,
-            ),
-            callback=_make_callback(i),
-        )
-    batch.execute()
+    # Gmail's batch endpoint rejects >100 inner requests (HTTP 400), so chunk
+    # large listings into successive batches of at most 100.
+    BATCH_LIMIT = 100
+    for start in range(0, len(messages), BATCH_LIMIT):
+        batch = service.new_batch_http_request()
+        for i, msg_stub in enumerate(messages[start:start + BATCH_LIMIT], start):
+            batch.add(
+                service.users().messages().get(
+                    userId="me",
+                    id=msg_stub["id"],
+                    format="metadata",
+                    metadataHeaders=meta_headers,
+                ),
+                callback=_make_callback(i),
+            )
+        batch.execute()
 
     # Batch gets can intermittently fail a single sub-request (Gmail 500s under
     # load) while the rest succeed, leaving a lone "(fetch error)" row. Retry
