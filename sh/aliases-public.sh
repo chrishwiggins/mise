@@ -563,5 +563,6 @@ alias hideme-stop echo i think you mean vpn stop
 alias hideme-status echo i think you mean vpn status
 alias hideme-check echo i think you mean vpn check
 alias claw 'ssh -i ~/.ssh/google_compute_engine root@23.95.164.201'
+alias lostdmv "open 'https://eservices.dmv.ny.gov/TAP/eServices/?Link=MiscLinks.ReplaceCrd'"
 
 skip_verbose_startup:
