@@ -2871,8 +2871,13 @@ case "$action" in
                 fi
 
                 # Execute command - it will save files and copy "/peek {path}" to clipboard
-                # Redirect output to suppress message display during peek
-                if "${peek_cmd[@]}" >/dev/null 2>&1; then
+                # Capture stderr so warnings (range past last match) and real
+                # errors surface instead of a bare red X, while still
+                # suppressing the per-message chatter during peek
+                peek_err=$(mktemp)
+                if "${peek_cmd[@]}" >/dev/null 2>"$peek_err"; then
+                    grep '⚠' "$peek_err" >&2 || true
+                    rm -f "$peek_err"
                     # Get the "/peek {path}" command from clipboard
                     peek_command=$(pbpaste)
 
@@ -2884,6 +2889,8 @@ case "$action" in
                     fi
                 else
                     echo "❌ Failed to save messages for peek" >&2
+                    tail -3 "$peek_err" >&2 || true
+                    rm -f "$peek_err"
                     exit 1
                 fi
                 else
@@ -3236,8 +3243,13 @@ case "$action" in
                     peek_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -peek)
 
                     # Execute command - it will save files and copy "/peek {path}" to clipboard
-                    # Redirect output to suppress message display during peek
-                    if "${peek_cmd[@]}" >/dev/null 2>&1; then
+                    # Capture stderr so warnings (range past last match) and
+                    # real errors surface instead of a bare failure line, while
+                    # still suppressing the per-message chatter during peek
+                    peek_err=$(mktemp)
+                    if "${peek_cmd[@]}" >/dev/null 2>"$peek_err"; then
+                        grep '⚠' "$peek_err" >&2 || true
+                        rm -f "$peek_err"
                         # Get the "/peek {path}" command from clipboard
                         peek_command=$(pbpaste)
 
@@ -3247,7 +3259,9 @@ case "$action" in
                             echo "⚠️ Expected /peek command in clipboard, got: $peek_command" >&2
                         fi
                     else
-                        echo "⚠️ Failed to save messages for peek" >&2
+                        echo "❌ Failed to save messages for peek" >&2
+                        tail -3 "$peek_err" >&2 || true
+                        rm -f "$peek_err"
                         exit 1
                     fi
                 elif (( save_flag )); then
