@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 STATE_FILE = Path.home() / ".power_state.json"
+NOSLEEP_PID_FILE = Path.home() / ".power_nosleep.pid"
 
 # Homebrew paths that may not be in PATH when invoked from certain contexts
 _EXTRA_PATHS = ["/opt/homebrew/bin", "/usr/local/bin"]
@@ -219,6 +220,32 @@ def load_state():
         return json.loads(STATE_FILE.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def nosleep_pid():
+    """Return PID of a caffeinate we started that is still alive, else None."""
+    if not NOSLEEP_PID_FILE.exists():
+        return None
+    try:
+        pid = int(NOSLEEP_PID_FILE.read_text().strip())
+        os.kill(pid, 0)  # existence check only
+        return pid
+    except (ValueError, ProcessLookupError, PermissionError, OSError):
+        NOSLEEP_PID_FILE.unlink(missing_ok=True)
+        return None
+
+
+def release_nosleep():
+    """Kill our caffeinate process if running. Return True if one was killed."""
+    pid = nosleep_pid()
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 15)
+    except OSError:
+        pass
+    NOSLEEP_PID_FILE.unlink(missing_ok=True)
+    return True
 
 
 # ── actions ──────────────────────────────────────────────────────────────
@@ -458,12 +485,22 @@ def apply_default(args):
 def apply_restore(args):
     """Restore settings from saved state."""
     state = load_state()
-    if not state:
+    nosleep_active = nosleep_pid() is not None
+    if not state and not nosleep_active:
         print("no saved state found - use `power --default` for Apple factory settings")
         sys.exit(1)
 
     print(tint("power --restore", 1) + " - restoring previous settings\n")
     results, report = make_reporter()
+
+    if nosleep_active:
+        release_nosleep()
+        report("nosleep", True, "caffeinate killed")
+
+    if not state:
+        print("\n".join(results))
+        print()
+        return
 
     if state.get("brightness") is not None:
         ok = set_brightness(state["brightness"])
@@ -527,6 +564,10 @@ def show_status(args):
         if val:
             print(f"  {key:14s}{val}")
 
+    pid = nosleep_pid()
+    if pid:
+        print(f"  nosleep:      active (caffeinate pid {pid})")
+
     if STATE_FILE.exists():
         print(f"\n  saved state:  {STATE_FILE}")
         print(f"  (run `power --restore` to revert)")
@@ -540,6 +581,38 @@ def show_status(args):
             print(f"    {cpu:5.1f}%  {comm} (pid {pid})")
 
     print()
+
+
+def apply_nosleep(args):
+    """Keep the system awake via caffeinate; display may still sleep."""
+    print(tint("power --nosleep", 1) + " - keeping system awake\n")
+
+    pid = nosleep_pid()
+    if pid:
+        print(f"  already active (caffeinate pid {pid})")
+        print(f"  run `power --restore` to release\n")
+        return
+
+    cmd = ["caffeinate", "-is"]
+    if args.for_min:
+        cmd += ["-t", str(args.for_min * 60)]
+
+    if args.dry_run:
+        print(f"  (dry run) would launch: {' '.join(cmd)}\n")
+        return
+
+    proc = subprocess.Popen(
+        cmd, start_new_session=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    NOSLEEP_PID_FILE.write_text(str(proc.pid) + "\n")
+
+    dur = f"for {args.for_min} minutes" if args.for_min else "until released"
+    print(f"  caffeinate running (pid {proc.pid}), {dur}")
+    print(f"  display may still sleep; closing the lid will still sleep the machine")
+    batt = battery_info()
+    print(f"\n  battery: {battery_bar(batt['pct'])}  ({batt['source']})")
+    print(f"  run `power --restore` to release\n")
 
 
 def apply_compute(args):
@@ -599,6 +672,8 @@ examples:
   power -l --dry-run        show what would change, don't apply
   power --compute           screen dims, system stays awake for long jobs
   power -c -b 0.1           compute mode with very dim screen
+  power --nosleep           keep system awake, change nothing else (no sudo)
+  power --nosleep --for 90  keep awake for 90 minutes, then auto-release
 """,
     )
 
@@ -611,6 +686,8 @@ examples:
                       help="restore settings from before low-power was applied")
     mode.add_argument("-c", "--compute", action="store_true",
                       help="screen dims, system never sleeps (for long jobs)")
+    mode.add_argument("--nosleep", action="store_true",
+                      help="keep system awake via caffeinate (no sudo, no other changes)")
     mode.add_argument("-d", "--default", action="store_true",
                       help="apply Apple factory default settings")
 
@@ -637,6 +714,9 @@ examples:
     p.add_argument("--cpu-threshold", type=float, default=15.0, metavar="PCT",
                    help="CPU %% threshold for --kill-hogs (default: 15)")
 
+    p.add_argument("--for", type=int, default=0, dest="for_min", metavar="MIN",
+                   help="with --nosleep: auto-release after MIN minutes (default: until --restore)")
+
     p.add_argument("-n", "--dry-run", action="store_true",
                    help="show what would be done without changing anything")
 
@@ -650,6 +730,8 @@ examples:
         if args.dry_run:
             print(tint("power --dry-run", 1) + " (no changes will be made)\n")
         apply_compute(args)
+    elif args.nosleep:
+        apply_nosleep(args)
     elif args.status:
         show_status(args)
     elif args.restore:
