@@ -1787,7 +1787,7 @@ open_web() {
 # actually type the commands; don't try to unify them.
 #
 # Inputs:
-#   $1: query mode -- "positional-q" (rest[0] is query if action=q),
+#   $1: query mode -- "positional-q" (first non-flag token is query if action=q),
 #       "literal-q" (rest contains "q <query>" pair to extract), or "none"
 #   $2: caller's $action (used by positional-q mode)
 #   $3: space-separated list of action words to recognize (e.g.
@@ -1797,6 +1797,8 @@ open_web() {
 # Outputs (via global vars; arrays must be declared by caller):
 #   PA_ACTION_WORD   - action word found, or ""
 #   PA_QUERY         - parsed query string, or ""
+#   PA_QUERY_INDEX   - index of the query token in PA_REMAINING (positional-q
+#                      mode only), or -1 when no query token exists / other modes
 #   PA_MESSAGE_NUMBERS - array of indices found before action word
 #   PA_TRAILING_ARGS   - array of args after the action word
 #   PA_REMAINING       - array equal to input rest minus consumed query tokens
@@ -1819,6 +1821,7 @@ parse_action_args() {
 
     PA_ACTION_WORD=""
     PA_QUERY=""
+    PA_QUERY_INDEX=-1
     PA_MESSAGE_NUMBERS=()
     PA_TRAILING_ARGS=()
     PA_REMAINING=()
@@ -1840,7 +1843,27 @@ parse_action_args() {
         # positional-q or none: rest is unchanged
         PA_REMAINING=("${input[@]+"${input[@]}"}")
         if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" ]]; then
-            PA_QUERY="${PA_REMAINING[0]:-}"
+            # The query is the first token that is not a recognized flag (or a
+            # flag's value). Blindly taking rest[0] broke `m h --all q 'to:x'`:
+            # --all is not an m flag, so it lands at rest[0] ahead of the real
+            # query, became the -q value, and the backend died with
+            # "argument -q/--query: expected one argument". Gmail negation
+            # terms (-from:x, -label:foo, -word) are not in these lists, so
+            # they still read as queries.
+            local _pa_skip_novalue=" -v --verbose -p --peek --meta -x --headers -j --summary -c -Q --draft --all -N --verify-account -A --save-attachments-only --open-attachments --raw -t --text -S --save -h --help "
+            local _pa_skip_value=" -n --count -a --attach -e -F --outbox "
+            local _qj=0
+            while (( _qj < ${#PA_REMAINING[@]} )); do
+                if [[ "$_pa_skip_novalue" == *" ${PA_REMAINING[_qj]} "* ]]; then
+                    _qj=$((_qj + 1))
+                elif [[ "$_pa_skip_value" == *" ${PA_REMAINING[_qj]} "* ]]; then
+                    _qj=$((_qj + 2))
+                else
+                    PA_QUERY="${PA_REMAINING[_qj]}"
+                    PA_QUERY_INDEX=$_qj
+                    break
+                fi
+            done
         fi
     fi
 
@@ -1850,11 +1873,12 @@ parse_action_args() {
     local action_word_index=-1
     local i
     for i in "${!PA_REMAINING[@]}"; do
-        # In positional-q mode, PA_REMAINING[0] is the search query, not an
-        # action. Skip it so a query term that happens to equal an action word
-        # (`m u q archive`) isn't consumed as the action AND left in PA_QUERY,
-        # which produced a malformed `-q archive archive` backend call.
-        if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
+        # In positional-q mode, PA_REMAINING[PA_QUERY_INDEX] is the search
+        # query, not an action. Skip it so a query term that happens to equal
+        # an action word (`m u q archive`) isn't consumed as the action AND
+        # left in PA_QUERY, which produced a malformed `-q archive archive`
+        # backend call.
+        if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
             continue
         fi
         if [[ " $allowed_actions " == *" ${PA_REMAINING[i]} "* ]]; then
@@ -1906,8 +1930,8 @@ parse_action_args() {
             # word (e.g. `m 1,3-5 --pdf`, which routes through here) was silently
             # dropped. Match the full shape the top-level loop uses instead.
             if [[ "$arg" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
-                # Skip query string for positional-q mode (rest[0] is query)
-                if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
+                # Skip the query token for positional-q mode
+                if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
                     continue
                 fi
                 PA_MESSAGE_NUMBERS+=("$arg")
@@ -2735,22 +2759,22 @@ case "$action" in
                         fi
                         ;;
                     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                        # Single message number — but if action is 'q' and this
-                        # is rest[0], it's the query string (e.g. 'm q 31'), not an index.
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                        # Single message number; but if action is 'q' and this
+                        # is the query token, it's the query string (e.g. 'm q 31'), not an index.
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
                             continue
                         fi
                         message_numbers+=("$arg")
                         ;;
                     [0-9]*-[0-9]* | [0-9]*,[0-9]*)
                         # Message range (e.g. 1-5, 45-120) or comma-list (1,3,8).
-                        # q-action exception FIRST: rest[0] is the query, not an
+                        # q-action exception FIRST: the query token is not an
                         # index, and must not reach filtered_args either. A query
                         # like '2,098.71' matches this glob but fails the shape
                         # regex below; validating shape first duplicated the query
                         # into filtered_args, which the backend read as a
                         # positional index ("Invalid index: '098.71'").
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
                             continue
                         fi
                         # Validate the full shape so we don't swallow stray tokens
@@ -2763,7 +2787,7 @@ case "$action" in
                         ;;
                     *)
                         # Skip the query string argument for 'q' action (it's already in query_string)
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
                             continue
                         fi
                         # Skip action words and flags that are handled separately
@@ -3117,9 +3141,9 @@ case "$action" in
                         # filename already eaten by a preceding -S/--save
                         ;;
                     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                        # Single message number — but if action is 'q' and this
-                        # is rest[0], it's the query string (e.g. 'm q 31'), not an index.
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                        # Single message number; but if action is 'q' and this
+                        # is the query token, it's the query string (e.g. 'm q 31'), not an index.
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
                             continue
                         fi
                         message_numbers+=("$arg")
@@ -3133,7 +3157,7 @@ case "$action" in
                         # so this ordering is latent; keep it correct anyway so
                         # wiring filtered_args into a backend call later cannot
                         # resurrect the "Invalid index" leak.
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
                             continue
                         fi
                         # Validate the full shape so we don't swallow stray tokens
