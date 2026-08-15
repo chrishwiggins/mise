@@ -1846,7 +1846,7 @@ parse_action_args() {
             # "argument -q/--query: expected one argument". Gmail negation
             # terms (-from:x, -label:foo, -word) are not in these lists, so
             # they still read as queries.
-            local _pa_skip_novalue=" -v --verbose -p --peek --meta -x --headers -j --summary -c -Q --draft --all -N --verify-account -A --save-attachments-only --open-attachments --raw -t --text -S --save -h --help "
+            local _pa_skip_novalue=" -v --verbose -p --peek --meta -x --headers -j --summary -c -Q --draft --all -N --verify-account -A --save-attachments-only --open-attachments --raw -t --text -h --help "
             local _pa_skip_value=" -n --count -a --attach -e -F --outbox "
             local _qj=0
             while (( _qj < ${#PA_REMAINING[@]} )); do
@@ -1854,6 +1854,17 @@ parse_action_args() {
                     _qj=$((_qj + 1))
                 elif [[ "$_pa_skip_value" == *" ${PA_REMAINING[_qj]} "* ]]; then
                     _qj=$((_qj + 2))
+                elif [[ "${PA_REMAINING[_qj]}" == "-S" || "${PA_REMAINING[_qj]}" == "--save" ]]; then
+                    # -S FILE consumes a following non-flag token as the save
+                    # path (mirroring the downstream flag scan); bare -S is
+                    # raw-to-stdout and consumes nothing. Treating -S as
+                    # valueless here made `m -S out.txt q '<terms>'` take the
+                    # FILENAME as the query.
+                    if [[ -n "${PA_REMAINING[_qj+1]:-}" && "${PA_REMAINING[_qj+1]}" != -* ]]; then
+                        _qj=$((_qj + 2))
+                    else
+                        _qj=$((_qj + 1))
+                    fi
                 else
                     PA_QUERY="${PA_REMAINING[_qj]}"
                     PA_QUERY_INDEX=$_qj
