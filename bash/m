@@ -1612,10 +1612,6 @@ if [[ -n "${M_DEFAULT_ACCOUNT:-}" ]]; then
     fi
 fi
 
-if [[ "${M_RANGE_WARNING_LIMIT:-50}" -lt 1 ]]; then
-    M_RANGE_WARNING_LIMIT=50
-fi
-
 # ========================================================================
 # § LOGGING — emoji-tagged stderr (color signals intent)
 # ========================================================================
@@ -2162,7 +2158,6 @@ CONFIG FILES
 
 ENVIRONMENT VARIABLES
     M_DEFAULT_ACCOUNT=g               Default account
-    M_RANGE_WARNING_LIMIT=50          Warn on ranges larger than this
     M_QUIET_MODE=0                    Suppress progress messages (0/1)
 
 TAB COMPLETION
@@ -2701,6 +2696,7 @@ case "$action" in
             open_attachments_flag=0
             save_attachments_only_flag=0
             open_after_save_flag=0
+            all_mail_flag=0
             save_file=""
             raw_save_flag=0
             for i in "${!rest[@]}"; do
@@ -2754,14 +2750,17 @@ case "$action" in
                         save_attachments_only_flag=1
                         ;;
                     --all)
-                        # On a listing, --all means "no page cap". The backend's
+                        # --all means ALL MAIL: fold Gmail's in:anywhere into
+                        # the query, which widens scope to Spam and Trash on
+                        # top of the default search scope (inbox, sent,
+                        # archive, and every category tab). The backend's
                         # --all is reply-all, a silent no-op here, so consuming
                         # it (rather than passing it through) loses nothing;
                         # reply flows never reach this loop (the action-word
                         # exec above fires first), so reply-all is unaffected.
                         # Hit 2026-08-14: `m h --all q '<terms>'` was typed
-                        # expecting more than the default 10 rows.
-                        page_size=500
+                        # expecting everything-including-spam-and-trash scope.
+                        all_mail_flag=1
                         ;;
                     open)
                         if (( save_attachments_only_flag )); then
@@ -2809,6 +2808,17 @@ case "$action" in
                         ;;
                 esac
             done
+
+            # --all: widen scope to everything, Spam and Trash included. Done
+            # here, after the flag scan and before any backend call, so every
+            # downstream path (peek, list, read-one, normal) inherits it.
+            if (( all_mail_flag )); then
+                if [[ -n "$query_string" ]]; then
+                    query_string="in:anywhere ${query_string}"
+                else
+                    query_string="in:anywhere"
+                fi
+            fi
 
             # Default the index to 1 (most recent) when the user clearly meant
             # to act on a single message but left the number off. A read-intent
