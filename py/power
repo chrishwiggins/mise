@@ -532,9 +532,9 @@ def apply_restore(args):
         ok = set_bluetooth(state["bluetooth"])
         report("bluetooth", ok, "on" if state["bluetooth"] else "off")
 
-    if state.get("wifi") is not None and not state["wifi"]:
-        set_wifi(True)
-        report("wifi", True, "on")
+    if state.get("wifi") is not None:
+        set_wifi(state["wifi"])
+        report("wifi", True, "on" if state["wifi"] else "off")
 
     if state.get("displaysleep"):
         set_pmset("displaysleep", state["displaysleep"])
