@@ -204,7 +204,15 @@ def get_pmset_val(key):
 # ── state save / restore ─────────────────────────────────────────────────
 
 def save_state():
-    """Snapshot current settings to disk so we can restore later."""
+    """Snapshot current settings to disk so we can restore later.
+
+    An existing snapshot is kept, not overwritten: it predates the first
+    profile application, so it is the user's true baseline. Applying a
+    profile twice must not record the already-degraded state as
+    "previous". Returns the fresh state, or None if a snapshot existed.
+    """
+    if STATE_FILE.exists():
+        return None
     state = {
         "brightness": get_brightness(),
         "bluetooth": get_bluetooth(),
@@ -372,8 +380,7 @@ def apply_low_power(args):
     dry = args.dry_run
     print(tint("power", 1) + " - saving current state and applying low-power profile\n")
 
-    if not dry:
-        save_state()
+    fresh = save_state() is not None if not dry else False
     results, report = make_reporter()
 
     # brightness
@@ -443,7 +450,10 @@ def apply_low_power(args):
     batt = battery_info()
     print(f"\n  battery: {battery_bar(batt['pct'])}  ({batt['source']})")
     if not dry:
-        print(f"\n  state saved to {STATE_FILE}")
+        if fresh:
+            print(f"\n  state saved to {STATE_FILE}")
+        else:
+            print(f"\n  keeping earlier snapshot {STATE_FILE}")
         print(f"  run `power --restore` to undo\n")
     else:
         print(f"\n  (dry run - no changes made)\n")
@@ -639,8 +649,7 @@ def apply_compute(args):
     dry = args.dry_run
     print(tint("power --compute", 1) + " - screen dims, system stays awake\n")
 
-    if not dry:
-        save_state()
+    fresh = save_state() is not None if not dry else False
     results, report = make_reporter()
 
     # brightness - dim it
@@ -673,7 +682,10 @@ def apply_compute(args):
     batt = battery_info()
     print(f"\n  battery: {battery_bar(batt['pct'])}  ({batt['source']})")
     if not dry:
-        print(f"\n  state saved to {STATE_FILE}")
+        if fresh:
+            print(f"\n  state saved to {STATE_FILE}")
+        else:
+            print(f"\n  keeping earlier snapshot {STATE_FILE}")
         print(f"  run `power --restore` to undo\n")
     else:
         print(f"\n  (dry run - no changes made)\n")
