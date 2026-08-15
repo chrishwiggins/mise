@@ -2753,6 +2753,16 @@ case "$action" in
                     -A|--save-attachments-only)
                         save_attachments_only_flag=1
                         ;;
+                    --all)
+                        # On a listing, --all means "no page cap". The backend's
+                        # --all is reply-all, a silent no-op here, so consuming
+                        # it (rather than passing it through) loses nothing;
+                        # reply flows never reach this loop (the action-word
+                        # exec above fires first), so reply-all is unaffected.
+                        # Hit 2026-08-14: `m h --all q '<terms>'` was typed
+                        # expecting more than the default 10 rows.
+                        page_size=500
+                        ;;
                     open)
                         if (( save_attachments_only_flag )); then
                             open_after_save_flag=1
