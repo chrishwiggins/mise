@@ -188,6 +188,12 @@ def get_dark_mode():
     return raw == "true" if raw else None
 
 
+def get_reduce_transparency():
+    """Return True if reduce-transparency is enabled (unset key means False)."""
+    raw = run(["defaults", "read", "com.apple.universalaccess", "reduceTransparency"])
+    return raw == "1"
+
+
 def get_pmset_val(key):
     """Read a single pmset value for current power source."""
     raw = run(["pmset", "-g"]) or ""
@@ -204,6 +210,7 @@ def save_state():
         "bluetooth": get_bluetooth(),
         "wifi": get_wifi(),
         "dark_mode": get_dark_mode(),
+        "reduce_transparency": get_reduce_transparency(),
         "displaysleep": get_pmset_val("displaysleep"),
         "sleep": get_pmset_val("sleep"),
         "powernap": get_pmset_val("powernap"),
@@ -542,8 +549,9 @@ def apply_restore(args):
         set_pmset("powernap", state.get("powernap", "1"))
         report("pmset", True, "restored")
 
-    set_reduce_transparency(False)
-    report("reduce transparency", True, "off")
+    rt = bool(state.get("reduce_transparency", False))
+    set_reduce_transparency(rt)
+    report("reduce transparency", True, "on" if rt else "off")
 
     print("\n".join(results))
     STATE_FILE.unlink(missing_ok=True)
@@ -574,6 +582,8 @@ def show_status(args):
     dm = get_dark_mode()
     if dm is not None:
         print(f"  dark mode:    {'on' if dm else 'off'}")
+
+    print(f"  transparency: {'reduced' if get_reduce_transparency() else 'normal'}")
 
     for key in ("displaysleep", "sleep", "powernap"):
         val = get_pmset_val(key)
