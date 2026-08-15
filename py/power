@@ -235,6 +235,22 @@ def nosleep_pid():
         return None
 
 
+def start_nosleep(minutes=0):
+    """Spawn a detached caffeinate -is (idempotent); return its PID."""
+    pid = nosleep_pid()
+    if pid:
+        return pid
+    cmd = ["caffeinate", "-is"]
+    if minutes:
+        cmd += ["-t", str(minutes * 60)]
+    proc = subprocess.Popen(
+        cmd, start_new_session=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    NOSLEEP_PID_FILE.write_text(str(proc.pid) + "\n")
+    return proc.pid
+
+
 def release_nosleep():
     """Kill our caffeinate process if running. Return True if one was killed."""
     pid = nosleep_pid()
@@ -593,22 +609,15 @@ def apply_nosleep(args):
         print(f"  run `power --restore` to release\n")
         return
 
-    cmd = ["caffeinate", "-is"]
-    if args.for_min:
-        cmd += ["-t", str(args.for_min * 60)]
-
     if args.dry_run:
-        print(f"  (dry run) would launch: {' '.join(cmd)}\n")
+        extra = f" -t {args.for_min * 60}" if args.for_min else ""
+        print(f"  (dry run) would launch: caffeinate -is{extra}\n")
         return
 
-    proc = subprocess.Popen(
-        cmd, start_new_session=True,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    NOSLEEP_PID_FILE.write_text(str(proc.pid) + "\n")
+    pid = start_nosleep(args.for_min)
 
     dur = f"for {args.for_min} minutes" if args.for_min else "until released"
-    print(f"  caffeinate running (pid {proc.pid}), {dur}")
+    print(f"  caffeinate running (pid {pid}), {dur}")
     print(f"  display may still sleep; closing the lid will still sleep the machine")
     batt = battery_info()
     print(f"\n  battery: {battery_bar(batt['pct'])}  ({batt['source']})")
@@ -642,6 +651,13 @@ def apply_compute(args):
                f"display sleep {args.display_sleep}m, system sleep NEVER, powernap off")
     else:
         report("pmset", False, "skipped (--no-pmset)")
+
+    # pmset -b is battery-only; hold a caffeinate assertion so AC is covered too
+    if not dry:
+        pid = start_nosleep(args.for_min)
+        report("caffeinate", True, f"pid {pid}, keeps system awake on AC or battery")
+    else:
+        report("caffeinate", True, "would hold sleep assertion")
 
     print("\n".join(results))
     batt = battery_info()
@@ -715,7 +731,8 @@ examples:
                    help="CPU %% threshold for --kill-hogs (default: 15)")
 
     p.add_argument("--for", type=int, default=0, dest="for_min", metavar="MIN",
-                   help="with --nosleep: auto-release after MIN minutes (default: until --restore)")
+                   help="with --nosleep/--compute: auto-release caffeinate after MIN minutes "
+                        "(default: until --restore)")
 
     p.add_argument("-n", "--dry-run", action="store_true",
                    help="show what would be done without changing anything")
