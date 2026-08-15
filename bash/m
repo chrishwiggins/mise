@@ -3390,13 +3390,25 @@ case "$action" in
         # The compose verb treats every positional as a recipient, so an index
         # plus a message-action word would be coined into junk recipients
         # (1@gmail.com, fwd@gmail.com) and nearly emailed to strangers. If the
-        # args begin with <integer> <message-action>, the user meant the SENT
-        # action (sfwd/sreply) or the per-message action, not compose. Refuse
-        # loudly with the correct command instead of fabricating recipients.
-        if (( ${#rest[@]} >= 2 )) \
-           && [[ "${rest[0]}" =~ ^[0-9]+$ ]] \
-           && [[ " reply reply-all fwd forward draft open trash archive thread read unread urls " == *" ${rest[1]} "* ]]; then
-            _idx="${rest[0]}"; _act="${rest[1]}"; _tail=("${rest[@]:2}")
+        # first POSITIONALS are <integer> <message-action>, the user meant the
+        # SENT action (sfwd/sreply) or the per-message action, not compose.
+        # Refuse loudly with the correct command instead of fabricating
+        # recipients. Anchoring at rest[0] literally was fail-open: a leading
+        # flag (`m send -v 1 fwd`) shifted the integer off index 0 and the
+        # junk recipients went through (same class as the q-query rest[0] bug,
+        # 2026-08-15), so skip leading flags and their values first.
+        _sg=0
+        while (( _sg < ${#rest[@]} )); do
+            case "${rest[_sg]}" in
+                -s|--subject|-a|--attach|-c|--cc|-b|--bcc) _sg=$((_sg + 2)) ;;
+                -*) _sg=$((_sg + 1)) ;;
+                *) break ;;
+            esac
+        done
+        if (( ${#rest[@]} >= _sg + 2 )) \
+           && [[ "${rest[_sg]}" =~ ^[0-9]+$ ]] \
+           && [[ " reply reply-all fwd forward draft open trash archive thread read unread urls " == *" ${rest[_sg+1]} "* ]]; then
+            _idx="${rest[_sg]}"; _act="${rest[_sg+1]}"; _tail=("${rest[@]:_sg+2}")
             case "$_act" in
                 fwd|forward) _suggest="m sent ${_idx} fwd ${_tail[*]}  (or: m sfwd ${_idx} ${_tail[*]})" ;;
                 reply)       _suggest="m sent ${_idx} reply  (or: m sreply ${_idx})" ;;
