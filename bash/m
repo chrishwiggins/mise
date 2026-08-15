@@ -2026,6 +2026,8 @@ FLAGS
     -N, --no-cache    Bypass listing cache; force fresh fetch
     -i, --important   Filter noisy senders from the listing (view-only; edit
                       ~/.config/m/view-filter.txt). E.g. m -i, m q 'j2' -i
+    --all             Search ALL mail (adds in:anywhere: Spam and Trash too).
+                      E.g. m --all q 'to:someone', m q 'invoice' --all
     -S [FILE]         Save message: -S FILE writes decoded text; bare -S to spool
     --raw             With -S, save original MIME bytes (base64) + attachments
     -p, --peek        Save message(s) and put a /peek command on the clipboard
@@ -2128,6 +2130,8 @@ SEARCH SYNTAX
 BASIC SEARCH
     m q "from:alice"                  Search by sender
     m -q "subject:urgent"             Alternative syntax
+    m --all q "from:alice"            Search ALL mail, Spam and Trash
+                                      included (adds in:anywhere)
 
 ADVANCED SEARCH
     m -q "QUERY" INDEX                Read message INDEX from results
