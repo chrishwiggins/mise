@@ -42,11 +42,18 @@ APPLE_DEFAULTS = {
 # ── helpers ──────────────────────────────────────────────────────────────
 
 def run(cmd, capture=True, sudo=False):
-    """Run a shell command, return stdout or None on failure."""
+    """Run a shell command; return stdout ("" is success) or None on failure.
+
+    Failure = timeout, missing binary, or nonzero exit. Sudo gets a longer
+    timeout so an interactive password prompt isn't killed mid-type.
+    """
     if sudo:
         cmd = ["sudo"] + cmd
     try:
-        r = subprocess.run(cmd, capture_output=capture, text=True, timeout=10)
+        r = subprocess.run(cmd, capture_output=capture, text=True,
+                           timeout=60 if sudo else 10)
+        if r.returncode != 0:
+            return None
         return r.stdout.strip() if capture else None
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
@@ -322,10 +329,9 @@ def set_dark_mode(on):
 
 
 def set_pmset(key, val, sudo=True):
-    """Set a pmset value."""
+    """Set a pmset value. Returns False if the command failed or timed out."""
     cmd = ["pmset", "-b", key, str(val)]
-    run(cmd, sudo=sudo)
-    return True
+    return run(cmd, sudo=sudo) is not None
 
 
 def set_reduce_transparency(on):
@@ -419,12 +425,14 @@ def apply_low_power(args):
 
     # pmset
     if not args.no_pmset:
+        ok = True
         if not dry:
-            set_pmset("displaysleep", args.display_sleep)
-            set_pmset("sleep", args.system_sleep)
-            set_pmset("powernap", 0)
-        report("pmset", True,
-               f"display sleep {args.display_sleep}m, system sleep {args.system_sleep}m, powernap off")
+            ok = all([set_pmset("displaysleep", args.display_sleep),
+                      set_pmset("sleep", args.system_sleep),
+                      set_pmset("powernap", 0)])
+        report("pmset", ok,
+               f"display sleep {args.display_sleep}m, system sleep {args.system_sleep}m, powernap off"
+               if ok else "failed (sudo denied or timed out)")
     else:
         report("pmset", False, "skipped (--no-pmset)")
 
@@ -488,12 +496,14 @@ def apply_default(args):
 
     # pmset
     if not args.no_pmset:
+        ok = True
         if not dry:
-            set_pmset("displaysleep", d["displaysleep"])
-            set_pmset("sleep", d["sleep"])
-            set_pmset("powernap", d["powernap"])
-        report("pmset", True,
-               f"display sleep {d['displaysleep']}m, system sleep {d['sleep']}m, powernap on")
+            ok = all([set_pmset("displaysleep", d["displaysleep"]),
+                      set_pmset("sleep", d["sleep"]),
+                      set_pmset("powernap", d["powernap"])])
+        report("pmset", ok,
+               f"display sleep {d['displaysleep']}m, system sleep {d['sleep']}m, powernap on"
+               if ok else "failed (sudo denied or timed out)")
     else:
         report("pmset", False, "skipped (--no-pmset)")
 
@@ -554,10 +564,10 @@ def apply_restore(args):
         report("wifi", True, "on" if state["wifi"] else "off")
 
     if state.get("displaysleep"):
-        set_pmset("displaysleep", state["displaysleep"])
-        set_pmset("sleep", state.get("sleep", "10"))
-        set_pmset("powernap", state.get("powernap", "1"))
-        report("pmset", True, "restored")
+        ok = all([set_pmset("displaysleep", state["displaysleep"]),
+                  set_pmset("sleep", state.get("sleep", "10")),
+                  set_pmset("powernap", state.get("powernap", "1"))])
+        report("pmset", ok, "restored" if ok else "failed (sudo denied or timed out)")
 
     rt = bool(state.get("reduce_transparency", False))
     set_reduce_transparency(rt)
@@ -662,12 +672,14 @@ def apply_compute(args):
 
     # pmset: display can sleep, system NEVER sleeps
     if not args.no_pmset:
+        ok = True
         if not dry:
-            set_pmset("displaysleep", args.display_sleep)
-            set_pmset("sleep", 0)
-            set_pmset("powernap", 0)
-        report("pmset", True,
-               f"display sleep {args.display_sleep}m, system sleep NEVER, powernap off")
+            ok = all([set_pmset("displaysleep", args.display_sleep),
+                      set_pmset("sleep", 0),
+                      set_pmset("powernap", 0)])
+        report("pmset", ok,
+               f"display sleep {args.display_sleep}m, system sleep NEVER, powernap off"
+               if ok else "failed (sudo denied or timed out)")
     else:
         report("pmset", False, "skipped (--no-pmset)")
 
