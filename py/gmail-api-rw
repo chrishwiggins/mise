@@ -2141,8 +2141,16 @@ def do_list(service, count, query, account=None, sent=False, verbose=False,
 # Get mode
 # ---------------------------------------------------------------------------
 
+class IndexOutOfRange(Exception):
+    """A requested 1-based index exceeds the number of matched messages."""
+    def __init__(self, index, total):
+        super().__init__(f"Index {index} out of range (1-{total}).")
+        self.index = index
+        self.total = total
+
+
 def _resolve_message_id(service, index, count, query, account=None,
-                        verify=False):
+                        verify=False, out_of_range_ok=False):
     """Resolve a 1-based index to a Gmail message ID, using cache when safe.
 
     If verify=True, confirm the cached ID is accessible via messages.get
@@ -2180,6 +2188,8 @@ def _resolve_message_id(service, index, count, query, account=None,
         sys.exit(1)
 
     if index < 1 or index > len(messages):
+        if out_of_range_ok:
+            raise IndexOutOfRange(index, len(messages))
         print(f"Index {index} out of range (1-{len(messages)}).", file=sys.stderr)
         sys.exit(1)
 
@@ -2188,9 +2198,24 @@ def _resolve_message_id(service, index, count, query, account=None,
     return messages[index - 1]["id"]
 
 
-def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None, grab=False, headers_only=False, open_attachments=False, save_attachments_only=False):
+def _resolve_batch_id(service, index, indices, count, query, account=None):
+    """Resolve one index of a batch loop; None when the batch range runs past
+    the last match (with a one-time warning). Callers break on None: indices
+    are sorted, so everything after the first miss is also out of range.
+    Single-index batches still hard-exit inside _resolve_message_id."""
+    try:
+        return _resolve_message_id(service, index, count, query, account=account,
+                                   out_of_range_ok=len(indices) > 1)
+    except IndexOutOfRange as oor:
+        print(f"⚠️  Only {oor.total} messages matched; "
+              f"skipping {oor.index}-{max(indices)}.", file=sys.stderr)
+        return None
+
+
+def do_get(service, index, count, query, output, stdout=False, text_view=False, account=None, grab=False, headers_only=False, open_attachments=False, save_attachments_only=False, out_of_range_ok=False):
     """Download a message by its 1-based index."""
-    msg_id = _resolve_message_id(service, index, count, query, account=account)
+    msg_id = _resolve_message_id(service, index, count, query, account=account,
+                                 out_of_range_ok=out_of_range_ok)
 
     raw_msg = _retry_api_call(lambda: service.users().messages().get(
         userId="me", id=msg_id, format="raw"
@@ -2802,7 +2827,9 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
 def do_trash(service, indices, count, query, account=None):
     """Move one or more messages to trash by 1-based index."""
     for index in indices:
-        msg_id = _resolve_message_id(service, index, count, query, account=account)
+        msg_id = _resolve_batch_id(service, index, indices, count, query, account=account)
+        if msg_id is None:
+            break
 
         meta = service.users().messages().get(
             userId="me", id=msg_id, format="metadata",
@@ -2825,7 +2852,9 @@ def do_trash(service, indices, count, query, account=None):
 def do_archive(service, indices, count, query, account=None):
     """Archive one or more messages (remove from inbox, keep in All Mail)."""
     for index in indices:
-        msg_id = _resolve_message_id(service, index, count, query, account=account)
+        msg_id = _resolve_batch_id(service, index, indices, count, query, account=account)
+        if msg_id is None:
+            break
 
         meta = service.users().messages().get(
             userId="me", id=msg_id, format="metadata",
@@ -2851,7 +2880,9 @@ def do_archive(service, indices, count, query, account=None):
 def do_mark_read(service, indices, count, query, account=None):
     """Mark one or more messages as read."""
     for index in indices:
-        msg_id = _resolve_message_id(service, index, count, query, account=account)
+        msg_id = _resolve_batch_id(service, index, indices, count, query, account=account)
+        if msg_id is None:
+            break
         service.users().messages().modify(
             userId="me", id=msg_id,
             body={"removeLabelIds": ["UNREAD"]},
@@ -2862,7 +2893,9 @@ def do_mark_read(service, indices, count, query, account=None):
 def do_mark_unread(service, indices, count, query, account=None):
     """Mark one or more messages as unread."""
     for index in indices:
-        msg_id = _resolve_message_id(service, index, count, query, account=account)
+        msg_id = _resolve_batch_id(service, index, indices, count, query, account=account)
+        if msg_id is None:
+            break
         service.users().messages().modify(
             userId="me", id=msg_id,
             body={"addLabelIds": ["UNREAD"]},
@@ -3184,7 +3217,9 @@ def do_pdf(service, indices, count, query, account=None):
 
     written = []
     for index in indices:
-        msg_id = _resolve_message_id(service, index, count, query, account=account)
+        msg_id = _resolve_batch_id(service, index, indices, count, query, account=account)
+        if msg_id is None:
+            break
         raw_msg = _retry_api_call(lambda: service.users().messages().get(
             userId="me", id=msg_id, format="raw"
         ).execute())
@@ -4862,13 +4897,23 @@ def main():
         else:
             indices = parse_index_token(args.index)
             peek_paths = []
+            # Multi-index requests degrade gracefully past the last match;
+            # a single explicit index still hard-errors on out-of-range.
+            multi = len(indices) > 1
             for idx in indices:
-                result = do_get(service, idx, args.count, query, args.output,
-                                stdout=args.stdout, text_view=args.text,
-                                account=login_hint, grab=grab_mode,
-                                headers_only=args.headers,
-                                open_attachments=getattr(args, 'open_attachments', False),
-                                save_attachments_only=getattr(args, 'save_attachments_only', False))
+                try:
+                    result = do_get(service, idx, args.count, query, args.output,
+                                    stdout=args.stdout, text_view=args.text,
+                                    account=login_hint, grab=grab_mode,
+                                    headers_only=args.headers,
+                                    open_attachments=getattr(args, 'open_attachments', False),
+                                    save_attachments_only=getattr(args, 'save_attachments_only', False),
+                                    out_of_range_ok=multi)
+                except IndexOutOfRange as oor:
+                    # Indices are sorted, so everything after this is also out of range
+                    print(f"⚠️  Only {oor.total} messages matched; "
+                          f"skipping {oor.index}-{max(indices)}.", file=sys.stderr)
+                    break
                 if result:
                     peek_paths.append(result)
             if peek_paths:
