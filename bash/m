@@ -2286,7 +2286,7 @@ EOF
 #      sets $account
 #   5. Anything else accumulates in `rest`
 # After the loop, the action router (case "$action") consumes `rest`.
-web=0; dry_run=0; no_cache=0; important_filter=0
+web=0; dry_run=0; no_cache=0; important_filter=0; spam_mail_flag=0; all_mail_flag=0
 action=""; account=""; rest=()
 multi_accounts=(); multi_account_index=-1
 i=0; args=("$@")
@@ -2337,6 +2337,14 @@ while (( i < ${#args[@]} )); do
         # senders) to the listing/query. Non-destructive; nothing is muted,
         # marked read, or trashed. Applied below where query_string is finalized.
         important_filter=1
+    elif [[ "$arg" == "--all" ]]; then
+        # --all means ALL MAIL: search everywhere (Inbox, Sent, Archive, Spam, Trash).
+        # Will be applied in the action handler after query parsing.
+        all_mail_flag=1
+    elif [[ "$arg" == "--spam" ]]; then
+        # --spam means SPAM FOLDER ONLY: search only in the spam folder.
+        # Will be applied in the action handler after query parsing.
+        spam_mail_flag=1
     elif [[ "$arg" == "--quiet" ]]; then
         M_QUIET_MODE=1
     elif [[ "$arg" == "-h" || "$arg" == "--help" || "$arg" == "?" ]]; then
@@ -2706,12 +2714,18 @@ case "$action" in
             fi
 
             # Parse remaining arguments to find peek flags, verbose flags, meta flag, and message numbers
+            # Note: all_mail_flag and spam_mail_flag may have been set by the main parsing loop (--all/--spam),
+            # but we also check rest[] for them again to support mixed usage (e.g., `m i --all` with --all in rest).
             verbose_flag=0
             meta_flag=0
             open_attachments_flag=0
             save_attachments_only_flag=0
             open_after_save_flag=0
-            all_mail_flag=0
+            # Preserve global flags set by main parser, but allow them to be overridden by rest[] scan
+            all_mail_flag_from_global=$all_mail_flag
+            spam_mail_flag_from_global=$spam_mail_flag
+            all_mail_flag=$all_mail_flag_from_global
+            spam_mail_flag=$spam_mail_flag_from_global
             save_file=""
             raw_save_flag=0
             for i in "${!rest[@]}"; do
@@ -2777,6 +2791,14 @@ case "$action" in
                         # expecting everything-including-spam-and-trash scope.
                         all_mail_flag=1
                         ;;
+                    --spam)
+                        # --spam means SPAM FOLDER ONLY: fold Gmail's in:spam into
+                        # the query, which narrows scope to just the spam folder.
+                        # Useful when searching for a message that may have been
+                        # misflagged as spam. Can be combined with other searches:
+                        # `m --spam q 'grieco'` searches spam for grieco-related messages.
+                        spam_mail_flag=1
+                        ;;
                     open)
                         if (( save_attachments_only_flag )); then
                             open_after_save_flag=1
@@ -2832,6 +2854,18 @@ case "$action" in
                     query_string="in:anywhere ${query_string}"
                 else
                     query_string="in:anywhere"
+                fi
+            fi
+
+            # --spam: narrow scope to spam folder only. Takes precedence over
+            # --all if both are given (spam is more specific). Done here, after
+            # the flag scan and before any backend call, so every downstream path
+            # (peek, list, read-one, normal) inherits it.
+            if (( spam_mail_flag )); then
+                if [[ -n "$query_string" ]]; then
+                    query_string="in:spam ${query_string}"
+                else
+                    query_string="in:spam"
                 fi
             fi
 
