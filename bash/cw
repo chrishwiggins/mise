@@ -2,32 +2,42 @@
 # cw - manage chrishwiggins.com
 #
 # Usage:
+#   cw pub <file> <slug>      publish file to files.chrishwiggins.com/<slug>
 #   cw 301 <slug> <url>       permanent redirect chrishwiggins.com/<slug> -> <url>
 #   cw 302 <slug> <url>       temporary redirect
-#   cw rm <slug> [...]        remove redirect(s)
-#   cw ls                     list redirects
+#   cw rm <slug> [...]        remove published file(s) or redirect(s)
+#   cw ls                     list published files and redirects
 #   cw open <slug>            open URL in browser
 #
 # Examples:
+#   cw pub slides.pdf a.pdf   -> https://files.chrishwiggins.com/a.pdf
 #   cw 301 b http://ex.com   -> 301 chrishwiggins.com/b -> http://ex.com
-#   cw rm a b                 remove redirects a and b
+#   cw rm a.pdf b             remove file a.pdf and redirect b
 #   cw ls                     show what's live
 #
-# Backend: Cloudflare Single Redirects (dynamic redirect ruleset) on the
-# chrishwiggins.com zone. The former RackNerd VPS backend
-# (root@23.95.164.201) was cancelled 2026-05-26; its IP now belongs to
-# someone else. Do NOT re-accept SSH host keys for that address. If an
-# ssh/scp to it prompts about a changed host key, the answer is no.
+# Two backends, because they answer different questions:
 #
-# cw pub is disabled: file publishing needs a storage backend (R2 or
-# GitHub Pages) that has not been set up since the VPS was terminated.
-# Files previously published under /var/www/html/files/ are gone, and
-# https://chrishwiggins.com/<slug> returns 521 for them because
-# Cloudflare still cannot reach the dead origin.
+#   Files    -> Cloudflare R2 bucket `share`, served at
+#               https://files.chrishwiggins.com (custom domain on that
+#               bucket). Uploads go through wrangler, which authenticates
+#               with its own OAuth token, NOT the API token below; the API
+#               token has no R2 scope.
+#   Redirects-> Cloudflare Single Redirects (dynamic redirect ruleset) on
+#               the chrishwiggins.com zone, via the API token below.
 #
-# The apex 301s to https://www.columbia.edu/~chw2 via a separate
-# Cloudflare rule. Single Redirects run before Page Rules in
-# Cloudflare's traffic sequence, so per-slug rules created here win.
+# The former RackNerd VPS backend (root@23.95.164.201) was cancelled
+# 2026-05-26; its IP now belongs to someone else. Do NOT re-accept SSH host
+# keys for that address. If an ssh/scp to it prompts about a changed host
+# key, the answer is no. Files published under the old /var/www/html/files/
+# are gone; anything that mattered has to be re-published.
+#
+# Files land on files.chrishwiggins.com rather than chrishwiggins.com/<slug>
+# because the apex has no origin any more: its A record is a placeholder and
+# only redirect rules answer there.
+#
+# The apex 301s to https://www.columbia.edu/~chw2 via a separate Cloudflare
+# rule. Single Redirects run before Page Rules in Cloudflare's traffic
+# sequence, so per-slug rules created here win.
 
 set -euo pipefail
 
@@ -36,6 +46,8 @@ TOKEN_FILE="$HOME/.config/cloudflare/token"
 API="https://api.cloudflare.com/client/v4"
 EP="$API/zones/$ZONE/rulesets/phases/http_request_dynamic_redirect/entrypoint"
 DOMAIN="https://chrishwiggins.com"
+BUCKET="share"
+FILES="https://files.chrishwiggins.com"
 
 usage() {
     sed -nE '2,/^$/s/^# ?//p' "$0"
@@ -98,10 +110,20 @@ do_redirect() {
 
 case "${1:-}" in
     pub|pbu|add|push)
-        echo "Error: cw pub is disabled. The VPS backend (23.95.164.201) was cancelled 2026-05-26."
-        echo "That IP now belongs to someone else; do not scp to it or accept its host key."
-        echo "Redirects still work (cw 301/302); file hosting needs a new backend (R2 or GitHub Pages)."
-        exit 1
+        [ $# -lt 3 ] && { echo "Usage: cw pub <file> <slug>"; exit 1; }
+        FILE="$2"; SLUG="$3"
+        [ ! -f "$FILE" ] && { echo "Error: $FILE not found"; exit 1; }
+        check_slug "$SLUG"
+        command -v wrangler >/dev/null 2>&1 || {
+            echo "Error: wrangler not found. Uploads need it (the API token has no R2 scope)." >&2
+            exit 1
+        }
+        # --remote so this hits the real bucket, not a local simulation.
+        wrangler r2 object put "$BUCKET/$SLUG" --file="$FILE" --remote >/dev/null || {
+            echo "Error: upload failed. If this is an auth error, run: wrangler login" >&2
+            exit 1
+        }
+        echo "$FILES/$SLUG"
         ;;
     301|302)
         CODE="$1"; shift
@@ -113,18 +135,37 @@ case "${1:-}" in
         [ $# -lt 1 ] && { echo "Usage: cw rm <slug> [...]"; exit 1; }
         RULES=$(get_rules)
         CHANGED=false
+        MISSING=false
         for slug in "$@"; do
             check_slug "$slug"
+            FOUND=false
             EXPR="(http.request.uri.path eq \"/${slug}\")"
             if echo "$RULES" | jq -e --arg e "$EXPR" 'any(.[]; .expression == $e)' >/dev/null; then
                 RULES=$(echo "$RULES" | jq --arg e "$EXPR" '[.[] | select(.expression != $e)]')
                 echo "Removed redirect: $DOMAIN/$slug"
                 CHANGED=true
-            else
+                FOUND=true
+            fi
+            # A slug can name a file, a redirect, or both; check each.
+            if command -v wrangler >/dev/null 2>&1 &&
+               wrangler r2 object get "$BUCKET/$slug" --remote --pipe >/dev/null 2>&1; then
+                if wrangler r2 object delete "$BUCKET/$slug" --remote >/dev/null 2>&1; then
+                    echo "Removed file: $FILES/$slug"
+                    FOUND=true
+                fi
+            fi
+            if ! $FOUND; then
                 echo "Not found: $slug"
+                MISSING=true
             fi
         done
-        $CHANGED && put_rules "$RULES"
+        # Guarded, not `$CHANGED && ...`: as the last command that would make
+        # a file-only removal exit 1 under set -e and report success as failure.
+        if $CHANGED; then
+            put_rules "$RULES"
+        fi
+        $MISSING && exit 1
+        exit 0
         ;;
     ls|list)
         # slug-style rules (the ones cw creates) print as $DOMAIN/<slug>;
@@ -137,6 +178,11 @@ case "${1:-}" in
             | if $slug then "  ->   \($d)/\($slug)  \($f.status_code) \($f.target_url.value // "?")"
               else "  ->   [\(.description // "no description")]  \($f.status_code // "?") \($f.target_url.value // "?")\n         expr: \(.expression)"
               end'
+        # Published files live in R2 and are NOT listed here. wrangler has no
+        # object-list subcommand (only get/put/delete), and the API token has
+        # no R2 scope, so neither path can enumerate the bucket. Rather than
+        # print an empty list that reads as "no files", say so.
+        echo "(files: $FILES/<slug>, stored in R2 bucket '$BUCKET', not listed here)"
         echo "(apex: $DOMAIN/ -> https://www.columbia.edu/~chw2, 301, via separate Cloudflare rule)"
         ;;
     open)
