@@ -1809,6 +1809,30 @@ _is_single_target_action() {
     esac
 }
 
+# Rewrite bare text=... trailing args to --text=... for compose actions.
+# Bare text=... (missing dashes) would land in the backend's unused output
+# positional and be silently dropped, so the reply body the user typed never
+# arrives (bit us 2026-07-27 in parse_action_args; and again 2026-08-24 in the
+# account-prefixed router path, e.g. `m u 5 reply text="hi"`, which never went
+# through parse_action_args). Shared here so the two callers can't drift.
+# Writes the rewritten args to the global RBT_OUT array; errors+exits on an
+# empty body (--text=/text=''), pointing the user at the 'draft' verb.
+_rewrite_bare_text_flags() {
+    RBT_OUT=()
+    local _t
+    for _t in "$@"; do
+        if [[ "$_t" == text=* ]]; then
+            log_warn "'text=' isn't a flag; assuming you meant --text="
+            _t="--text=${_t#text=}"
+        fi
+        if [[ "$_t" == "--text=" ]]; then
+            log_error "empty body; use 'draft' to compose a draft"
+            exit 1
+        fi
+        RBT_OUT+=("$_t")
+    done
+}
+
 parse_action_args() {
     local query_mode="$1"; shift
     local caller_action="$1"; shift
@@ -1944,24 +1968,15 @@ parse_action_args() {
                 PA_MESSAGE_NUMBERS+=("$arg")
             fi
         done
+        # Rewrite bare text=... to --text=... (and error on an empty body) for
+        # every trailing arg. Shared with the account-prefixed router path via
+        # _rewrite_bare_text_flags so the two can't drift (see 2026-07-27/08-24).
+        local -a _trailing_in=()
         for ((i=action_word_index+1; i<${#PA_REMAINING[@]}; i++)); do
-            local targ="${PA_REMAINING[i]}"
-            # Bare text=... (missing dashes) would land in the backend's unused
-            # output positional and be silently dropped, so the reply body the
-            # user typed never arrives (bit us 2026-07-27). Rewrite to --text=.
-            if [[ "$targ" == text=* ]]; then
-                log_warn "'text=' isn't a flag; assuming you meant --text="
-                targ="--text=${targ#text=}"
-            fi
-            # An empty body (text=''/--text=''/--text=) used to reach the backend
-            # and silently save an empty draft. Draft now has its own verb: error
-            # here and point the user at it, before any backend invocation.
-            if [[ "$targ" == "--text=" ]]; then
-                log_error "empty body; use 'draft' to compose a draft"
-                exit 1
-            fi
-            PA_TRAILING_ARGS+=("$targ")
+            _trailing_in+=("${PA_REMAINING[i]}")
         done
+        _rewrite_bare_text_flags "${_trailing_in[@]+"${_trailing_in[@]}"}"
+        PA_TRAILING_ARGS+=("${RBT_OUT[@]+"${RBT_OUT[@]}"}")
 
         # m is the user-forgiving layer: default missing index to 1 for actions that need one
         if [[ ${#PA_MESSAGE_NUMBERS[@]} -eq 0 ]]; then
@@ -3639,6 +3654,16 @@ case "$action" in
                 rest=("${rest[-1]}")
             fi
             unset _all_bare_single _mn
+        fi
+        # Rewrite bare text=... to --text=... for the compose actions that take a
+        # body. The account-prefixed path (`m u 5 reply text="hi"`) reaches here
+        # WITHOUT going through parse_action_args, so it needs the same rewrite,
+        # or the bare text=... lands in an unused backend positional and the body
+        # vanishes ("Empty body, aborting."; bit us 2026-08-24). Scoped to compose
+        # verbs so a literal text=... never gets mangled for open/trash/etc.
+        if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all|draft)$ ]]; then
+            _rewrite_bare_text_flags "${rest[@]+"${rest[@]}"}"
+            rest=("${RBT_OUT[@]+"${RBT_OUT[@]}"}")
         fi
         # Special handling for reply/fwd actions: default to message #1 if no index provided
         if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all)$ ]] && [[ ${#rest[@]} -eq 0 ]]; then
