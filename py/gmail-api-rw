@@ -4231,6 +4231,13 @@ def parse_team_file(path):
             line = line.strip()
             if line.startswith("## "):
                 current_name = line[3:].strip()
+            elif current_name and current_name.lower() == "inboxes":
+                # The "## Inboxes" section lists the ACCOUNTS to search, not
+                # team members. Treating those addresses as members turns the
+                # query into from:<own address> OR to:<own address>, which
+                # matches nearly everything in the mailbox (2026-08-25: 100
+                # unrelated personal messages landed in a project inbox).
+                continue
             elif line.lower().startswith("- email:"):
                 addr = line.split(":", 1)[1].strip()
                 context = f" (under '{current_name}')" if current_name else ""
