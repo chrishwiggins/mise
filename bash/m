@@ -44,7 +44,7 @@ fi
 #                    open trash archive thread read unread sfwd sreply
 #                    sreply-all peek
 #   Flags:           -w/--web -N/--no-cache -i/--important --quiet -h/--help --version
-#                    --dry-run --urls -p/--peek -v --meta -S -t -x
+#                    --dry-run --urls --urls-tag --urls-slug -p/--peek -v --meta -S -t -x
 #                    -A --save-attachments-only -a -c -b -s -d/--done
 #                    -H --outbox
 #   Pagination:      ppN tokens (e.g. pp2 = page 2)
@@ -2275,6 +2275,8 @@ ADVANCED WORKFLOWS
     m --dry-run send user@ex.com         Preview send without actually sending
     m -N q "from:alice"                  Force fresh search (bypass cache)
     m urls 3                             Extract URLs from message #3 (interactive menu)
+    m 3 --urls-tag                       Same menu, each URL labelled with its HTML anchor text
+    m 3 --urls-slug                      Same menu, each URL labelled with an LLM-learned short slug
     m q shapiro 7 urls 2                  Open the 2nd URL in message #7 directly (no menu)
     m h meets                            Scan cached list for Zoom/Meet links, pick one to open
 EOF
@@ -2332,6 +2334,16 @@ while (( i < ${#args[@]} )); do
         # flag here was dead: nothing downstream ever read it, so `m ... --urls`
         # silently dumped the body instead of extracting URLs.
         rest+=("urls")
+    elif [[ "$arg" == "--urls-tag" ]]; then
+        # Same routing as --urls, but ask the backend to label each menu row
+        # with the link's HTML anchor text (deterministic, no LLM). The
+        # --display=tag token rides along in `rest` through the urls) dispatch
+        # case and is parsed by the backend's urls mode.
+        rest+=("urls" "--display=tag")
+    elif [[ "$arg" == "--urls-slug" ]]; then
+        # Same routing as --urls, but ask the backend to label each menu row
+        # with a short LLM-learned slug (one claude call per menu open).
+        rest+=("urls" "--display=slug")
     elif [[ "$arg" == "--pdf" ]]; then
         # `--pdf` is an alias for the `pdf` action word (one PDF per selected
         # message into /tmp/spool/pdf/). Same routing rationale as `--urls`:
