@@ -3006,6 +3006,77 @@ def _extract_message_urls(raw_bytes):
     return unique_urls
 
 
+def _anchor_map_from_html(html_body):
+    """Map NORMALIZED url -> first non-empty anchor text found in an HTML part.
+
+    Sibling to extract_urls_from_html, but captures the visible anchor text of
+    each <a href="URL">TEXT</a> as well as the href. TEXT is tag-stripped,
+    HTML-unescaped, whitespace-collapsed and truncated so a monster menu row can
+    be labelled with the human-readable link ("Reset your password"). The href
+    is run through _normalize_display_url so the key matches the URL the menu
+    actually displays and opens (Proofpoint unwrapped, tracking stripped).
+
+    Only <a> anchors are captured here; src= (image/pixel) URLs never carry an
+    anchor and are handled by the caller. Any parse failure yields {} rather
+    than raising, so the menu still renders.
+    """
+    import re
+
+    anchors = {}
+    try:
+        a_re = re.compile(
+            r'<a\s[^>]*href\s*=\s*("([^"]*)"|\'([^\']*)\'|([^\s>]+))[^>]*>(.*?)</a>',
+            re.DOTALL | re.IGNORECASE,
+        )
+        for m in a_re.finditer(html_body):
+            href = (m.group(2) or m.group(3) or m.group(4) or "").strip()
+            if not href.lower().startswith(("http://", "https://")):
+                continue
+            inner = m.group(5) or ""
+            text = _strip_html(inner)
+            text = re.sub(r"\s+", " ", text).strip()
+            if len(text) > 60:
+                text = text[:57].rstrip() + "..."
+            if not text:
+                continue
+            key = _normalize_display_url(href)
+            if key not in anchors:
+                anchors[key] = text
+    except Exception:
+        return {}
+    return anchors
+
+
+def _extract_message_urls_with_anchors(raw_bytes):
+    """Return [(normalized_url, anchor_or_None), ...] in _extract_message_urls order.
+
+    The url list and its first-seen dedup order match _extract_message_urls
+    exactly (so menu numbering is identical); each url is paired with the visible
+    anchor text of the <a> that points to it, or None when the url came from a
+    text/plain body, from a src= attribute, or from an <a> with empty text.
+
+    Robust by construction: any HTML-parse failure yields all-None anchors, and
+    the url list itself always comes from the same helper the plain menu uses.
+    """
+    heavy = _import_heavy_modules()
+    html_mod = heavy['html_mod']
+
+    unique_norm_urls = [_normalize_display_url(u)
+                        for u in _extract_message_urls(raw_bytes)]
+
+    anchors = {}
+    try:
+        for html_body in extract_html_bodies(raw_bytes):
+            part_map = _anchor_map_from_html(html_mod.unescape(html_body))
+            for k, v in part_map.items():
+                if k not in anchors:
+                    anchors[k] = v
+    except Exception:
+        anchors = {}
+
+    return [(u, anchors.get(u)) for u in unique_norm_urls]
+
+
 # Query-string parameter keys to strip from displayed/opened URLs. Matched
 # case-insensitively. Everything not in this allowlist is preserved, because
 # params like id/token/s can be load-bearing for the target page.
@@ -3113,17 +3184,42 @@ def _common_url_prefix(urls):
     return prefix[:slash + 1]
 
 
-def _render_url_menu(unique_urls, out=None):
+def _truncate_url_tail(url, limit=120):
+    """Middle-truncate a long URL so its distinguishing tail stays visible."""
+    if len(url) <= limit:
+        return url
+    return url[:60] + "..." + url[-40:]
+
+
+def _render_url_menu(unique_urls, out=None, labels=None):
     """Print a numbered URL menu, using a shared-prefix legend when useful.
 
-    With >=3 urls sharing a >=30-char common prefix, prints the prefix once as
-    a legend line and renders each row as `  {i}. [prefix]{tail}`, middle-
-    truncating only tails longer than ~120 chars so the distinguishing end
-    stays visible. Otherwise prints full untruncated URLs, one per line.
+    Plain form (labels=None): with >=3 urls sharing a >=30-char common prefix,
+    prints the prefix once as a legend line and renders each row as
+    `  {i}. [prefix]{tail}`, middle-truncating only tails longer than ~120 chars
+    so the distinguishing end stays visible. Otherwise prints full untruncated
+    URLs, one per line.
+
+    Labelled form (labels is a list parallel to unique_urls): renders a
+    human-readable label on its own line, then the URL indented beneath it:
+
+        1. Reset your password
+           https://crimson...auth0.com/lo/reset?ticket=K7lJ...
+
+    Each URL line is middle-truncated the same way. The shared-prefix legend is
+    only used in the plain form; when labels are present the label IS the way to
+    tell rows apart, so there's no legend.
+
     Prints only; returns nothing.
     """
     if out is None:
         out = sys.stderr
+
+    if labels is not None:
+        for i, (url, label) in enumerate(zip(unique_urls, labels), 1):
+            print(f"  {i}. {label}", file=out)
+            print(f"     {_truncate_url_tail(url)}", file=out)
+        return
 
     prefix = _common_url_prefix(unique_urls)
     use_legend = len(unique_urls) >= 3 and len(prefix) >= 30
@@ -3258,12 +3354,228 @@ def do_pdf(service, indices, count, query, account=None):
     print(f"Wrote {len(written)} PDF(s) to {out_dir}/", file=sys.stderr)
 
 
-def do_urls(service, index, count, query, account=None, url_index=None):
+_SLUG_PROMPT_HEADER = (
+    "You are labelling the links found in one email so a human can decide which "
+    "to click. For EACH numbered link below, decide whether it is a real "
+    "clickable AFFORDANCE or NOISE, and label it.\n"
+    "\n"
+    "Two types:\n"
+    "  affordance = a real link a person would click. Label it with a SHORT "
+    "plain-language phrase completing \"click to ___\", e.g. \"reset your "
+    "password\", \"view invoice\", \"unsubscribe\", \"join the zoom call\". Use "
+    "plain words. Do NOT include any brand, vendor, host, product, technology, "
+    "or file-format words (no auth0, sendgrid, google, css, gif, png, cdn, "
+    "etc.) unless the vendor genuinely IS the thing being done (rare).\n"
+    "  noise = anything a person would NOT deliberately click: fonts, "
+    "stylesheets, images, banners, logos, icons, scripts, and tracking "
+    "beacons. For noise, the label is a SHORT descriptive CLUSTER TAG naming "
+    "WHAT the thing is, chosen by you. Prefer a single uppercase word "
+    "(FONT, STYLESHEET, IMAGE, BANNER, LOGO, ICON, SCRIPT, ...); a two-word tag "
+    "max. Do NOT lump everything under a generic \"ASSET\"; name the actual "
+    "cluster. A bare file extension alone (e.g. \"GIF\") is too weak -- use the "
+    "cluster (IMAGE/BANNER).\n"
+    "\n"
+    "SURVEILLANCE MATTERS: if a noise URL is an open-tracking beacon or 1x1 "
+    "pixel or click-tracker (wf/open, /open?, tracking with no real "
+    "destination), label it PIXEL (or TRACKER) so the reader KNOWS the email is "
+    "watching them. Never disguise a tracker as a neutral asset.\n"
+    "\n"
+    "Do not use any brand/vendor name or file extension as the whole label.\n"
+    "The anchor text (when shown) is a strong hint for the affordance phrase.\n"
+    "\n"
+    "Output EXACTLY one line per input link, in input order, tab-separated:\n"
+    "  N<TAB>TYPE<TAB>text\n"
+    "where N is the input number, TYPE is affordance or noise, and text is the "
+    "plain-language click-to phrase (for affordance) or the cluster tag (for "
+    "noise). No numbering prose, no blank lines, no commentary, nothing else.\n"
+    "\n"
+    "Links:\n"
+)
+
+_SLUG_TYPES = ("affordance", "noise")
+
+
+def _parse_slug_classification(stdout, count):
+    """Parse claude's `N<TAB>TYPE<TAB>text` lines into a per-index list.
+
+    Returns a list of length `count` of (type, label) tuples ordered by input
+    index (1..count), or None if the output is unparseable / incomplete. Pure:
+    no subprocess, no I/O.
+
+    For type "affordance", label is the cleaned plain-words click-to phrase.
+    For type "noise", label is the cleaned cluster tag (uppercased, brand/ext
+    words are the model's job to avoid; we only normalize whitespace/case).
+    """
+    import re
+
+    by_index = {}
+    for raw in (stdout or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            return None
+        num_s = parts[0].strip().rstrip(".").strip()
+        typ = parts[1].strip().lower()
+        text = parts[2].strip() if len(parts) >= 3 else ""
+        if not re.match(r"^\d+$", num_s):
+            return None
+        idx = int(num_s)
+        if typ not in _SLUG_TYPES:
+            return None
+        if typ == "affordance":
+            # Keep plain words + spaces; drop stray punctuation, collapse space.
+            text = re.sub(r"[^a-z0-9 ]+", " ", text.lower())
+            text = re.sub(r"\s+", " ", text).strip()
+            if not text:
+                text = "open link"
+        else:
+            # Cluster tag: letters/spaces only, collapsed, uppercased.
+            text = re.sub(r"[^A-Za-z ]+", " ", text)
+            text = re.sub(r"\s+", " ", text).strip().upper()
+            if not text:
+                text = "ASSET"
+        by_index[idx] = (typ, text)
+
+    if len(by_index) != count:
+        return None
+    if set(by_index) != set(range(1, count + 1)):
+        return None
+    return [by_index[i] for i in range(1, count + 1)]
+
+
+def _group_slug_rows(classes, unique_urls):
+    """Collapse per-URL (type, label) classifications into deduped menu rows.
+
+    classes is the length-len(unique_urls) list from _parse_slug_classification;
+    unique_urls is the parallel NORMALIZED url list (menu order). Returns an
+    ordered list of row dicts:
+
+        {"label": str, "kind": "affordance"|"noise", "url_indices": [ints]}
+
+    (url_indices index into unique_urls.)
+
+    Grouping rule (pure, testable without the model):
+      - affordance rows merge when they share the SAME normalized destination
+        url (a button and a banner pointing at the reset flow become one row; a
+        distinct affordance stays its own row). Label is the affordance phrase,
+        with a `  (appears Nx)` suffix when >1 source collapsed.
+      - noise rows merge by their CLUSTER TAG (all FONT rows into one FONT row,
+        all PIXEL rows into one PIXEL row), so the reader skips each noise class
+        as a unit while still seeing WHAT it is. A `(Nx)` suffix is added when
+        >1 collapsed.
+    Rows appear in first-seen order of their first url.
+    """
+    rows = []
+    aff_by_url = {}      # normalized dest url -> row index
+    noise_by_tag = {}    # cluster tag -> row index
+
+    for i, (typ, label) in enumerate(classes):
+        if typ == "affordance":
+            key = unique_urls[i]
+            if key in aff_by_url:
+                rows[aff_by_url[key]]["url_indices"].append(i)
+            else:
+                aff_by_url[key] = len(rows)
+                rows.append({"label": label, "kind": "affordance",
+                             "url_indices": [i]})
+        else:  # noise, keyed by cluster tag
+            if label in noise_by_tag:
+                rows[noise_by_tag[label]]["url_indices"].append(i)
+            else:
+                noise_by_tag[label] = len(rows)
+                rows.append({"label": label, "kind": "noise",
+                             "url_indices": [i]})
+
+    # Add count suffixes for collapsed rows.
+    for row in rows:
+        n = len(row["url_indices"])
+        if n > 1:
+            if row["kind"] == "affordance":
+                row["label"] = f"{row['label']}  (appears {n}x)"
+            else:
+                row["label"] = f"{row['label']} ({n}x)"
+    return rows
+
+
+def _slug_urls_via_claude(pairs, unique_urls):
+    """Classify + dedup the message's URLs into menu rows via one claude call.
+
+    pairs is [(normalized_url, anchor_or_None), ...] in menu order; unique_urls
+    is the parallel normalized-url list (same order). Asks claude to classify
+    each URL as affordance/asset/pixel and, for affordances, to phrase the
+    "click to ___" affordance in plain words (no vendor/tech/format terms). The
+    dedup/grouping is done in Python (_group_slug_rows), NOT the model, so it is
+    testable offline.
+
+    Returns an ordered list of row dicts
+    {"label", "kind", "url_indices"} (url_indices index into unique_urls), or
+    None on ANY failure (claude missing, nonzero exit, timeout, unparseable or
+    wrong-count output) so the caller falls back to the PLAIN menu. Never raises.
+
+    Exactly one claude call is made, only in slug mode, only when the menu is
+    shown (never on direct-open). No mail is touched.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("claude") is None:
+        print("log: claude not on PATH; falling back to plain URL menu",
+              file=sys.stderr)
+        return None
+
+    lines = []
+    for i, (url, anchor) in enumerate(pairs, 1):
+        if anchor:
+            lines.append(f"{i}\tanchor: {anchor}\turl: {url}")
+        else:
+            lines.append(f"{i}\turl: {url}")
+    prompt = _SLUG_PROMPT_HEADER + "\n".join(lines)
+
+    print(f"Naming {len(pairs)} URLs via claude...", file=sys.stderr)
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception as e:
+        print(f"log: claude slug call failed ({e}); falling back to plain menu",
+              file=sys.stderr)
+        return None
+
+    if result.returncode != 0:
+        print(f"log: claude exited {result.returncode}; falling back to plain menu",
+              file=sys.stderr)
+        return None
+
+    classes = _parse_slug_classification(result.stdout, len(pairs))
+    if classes is None:
+        print("log: claude slug output unparseable/incomplete; falling back to "
+              "plain menu", file=sys.stderr)
+        return None
+
+    return _group_slug_rows(classes, unique_urls)
+
+
+def do_urls(service, index, count, query, account=None, url_index=None,
+            display="plain"):
     """Extract URLs from a message and provide interactive menu to open them.
 
     If url_index is given (1-based), open that URL directly and skip the
     interactive menu. Used by `m ... urls N K` to open the Kth URL without
     the prompt, while `m ... urls N` keeps the interactive dialog.
+
+    display controls how the interactive menu labels each row:
+      "plain" - raw normalized URLs (default; unchanged, no LLM)
+      "tag"   - each row labelled with the link's HTML anchor text (no LLM)
+      "slug"  - claude classifies each URL as an affordance ("click to ___") or
+                noise (a descriptive cluster tag like FONT/IMAGE/PIXEL), and the
+                rows are DEDUPED (same affordance destination -> one row; each
+                noise cluster -> one row). Selection is over rows; one claude
+                call per menu. Falls back to the plain menu on any claude failure.
+    Direct-open (url_index given) is always plain: it opens immediately with no
+    menu, so there is nothing to label.
     """
     import webbrowser
 
@@ -3296,16 +3608,46 @@ def do_urls(service, index, count, query, account=None, url_index=None):
         webbrowser.open(url_to_open)
         return
 
+    # Compute optional labels. tag mode stays 1:1 with unique_urls (cosmetic
+    # only). slug mode CLASSIFIES + DEDUPS into rows, so the menu numbering and
+    # selection are over ROWS, not raw urls; each row's url_indices point back
+    # into unique_urls so selecting a collapsed row opens the right target(s).
+    # Any slug failure falls back to the plain 1:1 menu.
+    labels = None      # tag mode (and plain=None)
+    slug_rows = None   # slug mode, when claude succeeded
+    if display != "plain":
+        # anchors keyed by normalized url == unique_urls entries
+        pairs = _extract_message_urls_with_anchors(raw_bytes)
+        anchor_by_url = {u: a for (u, a) in pairs}
+        if display == "tag":
+            labels = [anchor_by_url.get(u) or "[link]" for u in unique_urls]
+        elif display == "slug":
+            slug_pairs = [(u, anchor_by_url.get(u)) for u in unique_urls]
+            slug_rows = _slug_urls_via_claude(slug_pairs, unique_urls)  # None on fail
+
     # Show interactive menu
     print(f"Found {len(unique_urls)} URL(s):", file=sys.stderr)
-    _render_url_menu(unique_urls)
+    if slug_rows is not None:
+        row_labels = [r["label"] for r in slug_rows]
+        # Render one line per row + the row's FIRST url beneath it.
+        row_first_urls = [unique_urls[r["url_indices"][0]] for r in slug_rows]
+        _render_url_menu(row_first_urls, labels=row_labels)
+    else:
+        _render_url_menu(unique_urls, labels=labels)
 
     # Check if we're in an interactive terminal
     if not sys.stdin.isatty() or not sys.stderr.isatty():
-        # Non-interactive mode: just print URLs for now
-        for i, url in enumerate(unique_urls, 1):
-            print(f"{i}. {url}")
+        # Non-interactive mode: just print URLs for now (rows in slug mode).
+        if slug_rows is not None:
+            for i, r in enumerate(slug_rows, 1):
+                print(f"{i}. {unique_urls[r['url_indices'][0]]}")
+        else:
+            for i, url in enumerate(unique_urls, 1):
+                print(f"{i}. {url}")
         return
+
+    # In slug mode selection is over rows; otherwise over raw urls.
+    n_choices = len(slug_rows) if slug_rows is not None else len(unique_urls)
 
     try:
         print("Select URL(s) to open (e.g. 1 or 4,5-6,8 or 'a' for all, q to quit): ", end="", file=sys.stderr)
@@ -3316,18 +3658,25 @@ def do_urls(service, index, count, query, account=None, url_index=None):
             return
 
         if choice.lower() in ('a', 'all'):
-            selected = list(range(1, len(unique_urls) + 1))
+            selected = list(range(1, n_choices + 1))
         else:
-            selected = _parse_index_ranges(choice, len(unique_urls))
+            selected = _parse_index_ranges(choice, n_choices)
 
         if selected is None:
-            print(f"Invalid choice. Use numbers/ranges in 1-{len(unique_urls)} (e.g. 4,5-6,8).", file=sys.stderr)
+            print(f"Invalid choice. Use numbers/ranges in 1-{n_choices} (e.g. 4,5-6,8).", file=sys.stderr)
             return
 
         for n in selected:
-            url_to_open = unique_urls[n - 1]
-            print(f"Opening: {url_to_open}", file=sys.stderr)
-            webbrowser.open(url_to_open)
+            if slug_rows is not None:
+                # Open every url collapsed into this row (harmless + correct).
+                for ui in slug_rows[n - 1]["url_indices"]:
+                    url_to_open = unique_urls[ui]
+                    print(f"Opening: {url_to_open}", file=sys.stderr)
+                    webbrowser.open(url_to_open)
+            else:
+                url_to_open = unique_urls[n - 1]
+                print(f"Opening: {url_to_open}", file=sys.stderr)
+                webbrowser.open(url_to_open)
 
     except (KeyboardInterrupt, EOFError):
         print("\nCanceled", file=sys.stderr)
@@ -4824,11 +5173,23 @@ def main():
         # order, so parse the bare single integers out of mode_rest by hand here.
         ordered_ints = []
         non_index_rest = []
+        display_mode = "plain"
         _skip_next = False
         for _a in mode_rest:
             if _skip_next:
                 non_index_rest.append(_a)
                 _skip_next = False
+                continue
+            # `--display=MODE` selects how the menu labels rows. Pull it out here
+            # so argparse (which doesn't know it) never sees it, and validate the
+            # value loudly.
+            _dm = re.match(r"^--display=(.*)$", _a)
+            if _dm:
+                display_mode = _dm.group(1)
+                if display_mode not in ("plain", "tag", "slug"):
+                    print(f"Unknown --display value {display_mode!r}; "
+                          "expected one of: plain, tag, slug", file=sys.stderr)
+                    sys.exit(1)
                 continue
             if _a in ("-n", "--count", "-q", "--query", "-F", "--config", "-e", "--email"):
                 non_index_rest.append(_a)
@@ -4861,7 +5222,7 @@ def main():
         elif not query:
             query = "in:inbox"
         do_urls(service, msg_index, args.count, query, account=login_hint,
-                url_index=url_index)
+                url_index=url_index, display=display_mode)
     elif mode == "meets":
         mode_rest = [a for a in rest if a != mode]
         args = parse_list_get_args(mode_rest)
