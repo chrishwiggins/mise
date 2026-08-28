@@ -11,8 +11,8 @@ Usage:
     gmail-api-rw                              # list 20 most recent messages
     gmail-api-rw -n 5                         # list 5 most recent
     gmail-api-rw -q "from:alice"              # list with Gmail search filter
-    gmail-api-rw sent                           # list sent messages (shows recipients)
-    gmail-api-rw sent -v                        # sent messages with snippet preview
+    gmail-api-rw out                            # list outgoing (sent) messages (shows recipients)
+    gmail-api-rw out -v                         # outgoing messages with snippet preview
     gmail-api-rw 3                            # download message #3
     gmail-api-rw 2,3,5                        # download messages #2, #3, #5
     gmail-api-rw 2-5                          # download messages #2 through #5
@@ -4342,7 +4342,7 @@ gmail-api-rw - Gmail CLI: list, read, send, and draft messages via Gmail API.
 
 Commands:
   gmail-api-rw [options] [INDEX [OUTPUT]]     List or download inbox messages
-  gmail-api-rw sent [options] [INDEX [OUTPUT]] List or download sent messages
+  gmail-api-rw out [options] [INDEX [OUTPUT]]  List or download outgoing messages
   gmail-api-rw send [options] [RECIPIENT]     Send a message
   gmail-api-rw send -H file.eml -t            Preview what would be sent (no API call)
   gmail-api-rw draft [options] [RECIPIENT]    Save a message to Gmail Drafts
@@ -4365,8 +4365,9 @@ Commands:
   gmail-api-rw inbox TEAM.md -o eml/inbox     Output to specific directory
   gmail-api-rw -E                             List configured accounts
 
-  "sent" is a modifier that composes with other commands:
-  gmail-api-rw sent reply 3, gmail-api-rw sent fwd 3 user@ex.com, gmail-api-rw sent trash 1-3
+  "out" is a modifier that composes with other commands (its old spelling
+  "sent" still works as a silent alias):
+  gmail-api-rw out reply 3, gmail-api-rw out fwd 3 user@ex.com, gmail-api-rw out trash 1-3
 
   INDEX can be: 3 (single), 2,5 (comma-separated), 2-5 (range), 1,3-5,8 (mixed).
   Shell brace expansion also works: {2,3,5} expands to separate args.
@@ -4380,12 +4381,12 @@ List messages:
   gmail-api-rw -q "newer_than:7d"             Messages from the last 7 days
   gmail-api-rw -e work -q "from:bob"           Search another account by email substring
 
-Sent mail:
-  gmail-api-rw sent                           List sent messages (shows recipients)
-  gmail-api-rw sent -n 10                     List 10 most recent sent
-  gmail-api-rw sent -v                        Sent messages with snippet preview
-  gmail-api-rw sent --summary                 Sent messages with AI keywords
-  gmail-api-rw sent -q "to:alice"             Sent messages to alice
+Outgoing (sent) mail:
+  gmail-api-rw out                            List outgoing messages (shows recipients)
+  gmail-api-rw out -n 10                      List 10 most recent outgoing
+  gmail-api-rw out -v                         Outgoing messages with snippet preview
+  gmail-api-rw out --summary                  Outgoing messages with AI keywords
+  gmail-api-rw out -q "to:alice"              Outgoing messages to alice
   gmail-api-rw -q 'from:alice subject:"the proposal"'  Faceted search with phrase
 
 Download message(s):
@@ -4418,11 +4419,11 @@ Forward a message:
   gmail-api-rw -q "from:alice" fwd 1 user@ex.com  Forward a search result
   echo "FYI" | gmail-api-rw fwd 3 user@ex.com Forward with note from stdin
 
-Forward a sent message:
-  gmail-api-rw sent                           List sent messages to find the index
-  gmail-api-rw sent fwd 3 user@example.com    Forward sent message #3
-  gmail-api-rw sent fwd 3 user@ex.com --draft Forward sent message as draft
-  gmail-api-rw sent -q "to:alice" fwd 1 user@ex.com  Search sent, then forward
+Forward an outgoing (sent) message:
+  gmail-api-rw out                            List outgoing messages to find the index
+  gmail-api-rw out fwd 3 user@example.com     Forward outgoing message #3
+  gmail-api-rw out fwd 3 user@ex.com --draft  Forward outgoing message as draft
+  gmail-api-rw out -q "to:alice" fwd 1 user@ex.com  Search outgoing, then forward
 
 Manage messages:
   gmail-api-rw trash 3                        Move message #3 to trash
@@ -4907,8 +4908,10 @@ def main():
     web_mode = bool(web_flags & set(sys.argv))
     sys.argv = [a for a in sys.argv if a not in web_flags]
 
-    # Detect "sent" modifier: strip from argv, set flag for query building.
-    # Skips flag values so -q "from:sent" doesn't false-match.
+    # Detect the outgoing-mail modifier: strip from argv, set flag for query
+    # building. `out` is the canonical verb; `sent` is a silent back-compat
+    # alias (both scope the query to in:sent). Skips flag values so
+    # -q "from:sent" / -q "from:out" don't false-match.
     sent_mode = False
     filtered = [sys.argv[0]]
     _skip = False
@@ -4921,7 +4924,7 @@ def main():
             filtered.append(_a)
             _skip = True
             continue
-        if _a == "sent":
+        if _a in ("out", "sent"):
             sent_mode = True
             continue
         filtered.append(_a)
