@@ -2,7 +2,7 @@
 # cw - manage chrishwiggins.com
 #
 # Usage:
-#   cw pub <file> <slug>      publish file to files.chrishwiggins.com/<slug>
+#   cw pub <file> <slug>      publish file to chrishwiggins.com/<slug>
 #   cw 301 <slug> <url>       permanent redirect chrishwiggins.com/<slug> -> <url>
 #   cw 302 <slug> <url>       temporary redirect
 #   cw rm <slug> [...]        remove published file(s) or redirect(s)
@@ -10,18 +10,19 @@
 #   cw open <slug>            open URL in browser
 #
 # Examples:
-#   cw pub slides.pdf a.pdf   -> https://files.chrishwiggins.com/a.pdf
+#   cw pub slides.pdf a.pdf   -> https://chrishwiggins.com/a.pdf
 #   cw 301 b http://ex.com   -> 301 chrishwiggins.com/b -> http://ex.com
 #   cw rm a.pdf b             remove file a.pdf and redirect b
 #   cw ls                     show what's live
 #
 # Two backends, because they answer different questions:
 #
-#   Files    -> Cloudflare R2 bucket `share`, served at
-#               https://files.chrishwiggins.com (custom domain on that
-#               bucket). Uploads go through wrangler, which authenticates
-#               with its own OAuth token, NOT the API token below; the API
-#               token has no R2 scope.
+#   Files    -> Cloudflare R2 bucket `share`, served at the apex by the
+#               `apex-files` Worker (src/apex-files/ in the seiton cw repo),
+#               and also directly at https://files.chrishwiggins.com (custom
+#               domain on the same bucket). Uploads go through wrangler,
+#               which authenticates with its own OAuth token, NOT the API
+#               token below; the API token has no R2 scope.
 #   Redirects-> Cloudflare Single Redirects (dynamic redirect ruleset) on
 #               the chrishwiggins.com zone, via the API token below.
 #
@@ -31,13 +32,19 @@
 # key, the answer is no. Files published under the old /var/www/html/files/
 # are gone; anything that mattered has to be re-published.
 #
-# Files land on files.chrishwiggins.com rather than chrishwiggins.com/<slug>
-# because the apex has no origin any more: its A record is a placeholder and
-# only redirect rules answer there.
+# The apex has no origin: its A record is 192.0.2.1 (TEST-NET-1), proxied,
+# so anything reaching the origin 522s. The `apex-files` Worker answers at
+# the edge instead, streaming from R2, which is why chrishwiggins.com/<slug>
+# works. Deployed 2026-08-27; before that, files were only on files.
 #
-# The apex 301s to https://www.columbia.edu/~chw2 via a separate Cloudflare
-# rule. Single Redirects run before Page Rules in Cloudflare's traffic
-# sequence, so per-slug rules created here win.
+# Order of the three things answering on this zone, verified 2026-08-27:
+#   Single Redirects (e.g. /bos) run BEFORE Workers, so they win outright.
+#   The Worker runs next and serves any path matching an R2 key.
+#   The apex root 301 to https://www.columbia.edu/~chw2 is a PAGE RULE
+#     (target "chrishwiggins.com/", exact root only -- it does not shadow
+#     /<slug>). Page Rules run AFTER Workers, so the Worker returns that
+#     redirect for "/" itself rather than deferring to the rule.
+# A slug with no matching R2 object 302s to the same Columbia page.
 
 set -euo pipefail
 
@@ -123,7 +130,7 @@ case "${1:-}" in
             echo "Error: upload failed. If this is an auth error, run: wrangler login" >&2
             exit 1
         }
-        echo "$FILES/$SLUG"
+        echo "$DOMAIN/$SLUG"
         ;;
     301|302)
         CODE="$1"; shift
@@ -150,7 +157,7 @@ case "${1:-}" in
             if command -v wrangler >/dev/null 2>&1 &&
                wrangler r2 object get "$BUCKET/$slug" --remote --pipe >/dev/null 2>&1; then
                 if wrangler r2 object delete "$BUCKET/$slug" --remote >/dev/null 2>&1; then
-                    echo "Removed file: $FILES/$slug"
+                    echo "Removed file: $DOMAIN/$slug"
                     FOUND=true
                 fi
             fi
@@ -182,8 +189,9 @@ case "${1:-}" in
         # object-list subcommand (only get/put/delete), and the API token has
         # no R2 scope, so neither path can enumerate the bucket. Rather than
         # print an empty list that reads as "no files", say so.
-        echo "(files: $FILES/<slug>, stored in R2 bucket '$BUCKET', not listed here)"
-        echo "(apex: $DOMAIN/ -> https://www.columbia.edu/~chw2, 301, via separate Cloudflare rule)"
+        echo "(files: $DOMAIN/<slug>, stored in R2 bucket '$BUCKET', not listed here)"
+        echo "(       also reachable at $FILES/<slug>)"
+        echo "(apex: $DOMAIN/ -> https://www.columbia.edu/~chw2, 301, via a Cloudflare Page Rule)"
         ;;
     open)
         [ $# -lt 2 ] && { open "$DOMAIN"; exit 0; }
