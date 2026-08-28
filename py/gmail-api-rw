@@ -4576,7 +4576,26 @@ def parse_team_file(path):
         return True
 
     with open(path) as f:
-        for line in f:
+        lines = f.read().splitlines()
+
+    # Pass 1: collect the account addresses under "## Inboxes". Those are
+    # the mailboxes to SEARCH, never members, and they must be excluded
+    # wherever else they appear in the file. Second bite, 2026-08-25
+    # evening: the owner's address sat in a member's "- Source: email to
+    # chris.wiggins@..." line, the bare-email fallback below picked it up,
+    # and 62 personal newsletters landed in a project inbox.
+    own_addresses = set()
+    section = None
+    for raw in lines:
+        s = raw.strip()
+        if s.startswith("## "):
+            section = s[3:].strip().lower()
+        elif section == "inboxes":
+            for m in email_re.finditer(s):
+                own_addresses.add(m.group().lower())
+
+    # Pass 2: members.
+    for line in lines:
             line_num += 1
             line = line.strip()
             if line.startswith("## "):
@@ -4591,6 +4610,8 @@ def parse_team_file(path):
             elif line.lower().startswith("- email:"):
                 addr = line.split(":", 1)[1].strip()
                 context = f" (under '{current_name}')" if current_name else ""
+                if addr.lower() in own_addresses:
+                    continue
                 if _validate_email(addr, line_num, context) and addr.lower() not in seen_emails:
                     seen_emails.add(addr.lower())
                     team.append((current_name or addr.split("@")[0], addr))
@@ -4598,6 +4619,8 @@ def parse_team_file(path):
                 # Fallback: bare email on any line
                 for m in email_re.finditer(line):
                     addr = m.group()
+                    if addr.lower() in own_addresses:
+                        continue
                     context = f" (under '{current_name}')" if current_name else ""
                     if _validate_email(addr, line_num, context) and addr.lower() not in seen_emails:
                         seen_emails.add(addr.lower())
