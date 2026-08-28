@@ -45,6 +45,12 @@ TEAM_MD = """# Team
 ## Notes
 
 Stray mention of carol@notes.example in prose is still a member (fallback).
+
+## Dave Sourced
+
+- Email: dave@sourced.example
+- Source: email 2026-07-09 to owner@example.com
+- Notes: letter arrived at owner.second@example.com
 """
 
 with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as f:
@@ -56,8 +62,9 @@ emails = {addr for _, addr in team}
 
 failures = []
 if "owner@example.com" in emails or "owner.second@example.com" in emails:
-    failures.append("Inboxes account addresses were parsed as team members")
-for expected in ("alice@example.org", "bob@sample.net", "bob.sample@work.net", "carol@notes.example"):
+    failures.append("Inboxes account addresses were parsed as team members "
+                    "(second bite 2026-08-25: they appeared in a member's Source/Notes lines)")
+for expected in ("alice@example.org", "bob@sample.net", "bob.sample@work.net", "carol@notes.example", "dave@sourced.example"):
     if expected not in emails:
         failures.append(f"expected member missing: {expected}")
 
