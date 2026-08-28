@@ -2879,6 +2879,24 @@ case "$action" in
                         if [[ "$arg" == "$action_word" ]] || [[ "$arg" =~ ^(-v|--verbose|-A|--save-attachments-only|-p|--peek|--meta|--open-attachments|open)$ ]]; then
                             continue
                         fi
+                        # A bare plain-word token (letters/digits/underscore, not
+                        # purely numeric) that reaches here was expected to be a
+                        # message index but is not one: bare ints and ranges were
+                        # already claimed by the numeric case arms above. It is
+                        # most likely a fat-fingered account alias (`m i xyz`),
+                        # which previously fell through to the backend and surfaced
+                        # the opaque "Invalid index: 'xyz'". Disambiguate here,
+                        # where the ACCTS table lives: if it is NOT a known account
+                        # alias, name both plausible intents and stop. Flags (`-x`,
+                        # `-S`, `-t`, `--foo`) and body/query tokens carrying `=`
+                        # are excluded by the plain-word shape, so they still pass
+                        # through untouched.
+                        if [[ "$arg" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] && [[ -z "${ACCTS[$arg]:-}" ]]; then
+                            _acct_list="$(printf '%s ' "${!ACCTS[@]}" | tr ' ' '\n' | sort | tr '\n' ' ')"
+                            _acct_list="${_acct_list% }"
+                            log_error "'$arg' is not a valid index or known account (accounts: ${_acct_list})"
+                            exit 1
+                        fi
                         # Pass through other flags to gmail-api-rw (-x, -S, -t, etc.)
                         filtered_args+=("$arg")
                         ;;
