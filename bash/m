@@ -40,7 +40,9 @@ fi
 #   Account aliases: g j u cu l h hNY n z (resolved via accounts.json)
 #                    Comma-list for multi-account, e.g. h,g,cu (read-only
 #                    actions only; see § MULTI-ACCOUNT)
-#   Actions:         i sent q d x urls meets send c draft reply reply-all fwd
+#   Actions:         i out q d x urls meets send c draft reply reply-all fwd
+#                    (out = read outgoing mail; the old name `sent` is RETIRED
+#                    and hard-blocks with a stop sign pointing at `out`)
 #                    open trash archive thread read unread sfwd sreply
 #                    sreply-all peek
 #   Flags:           -w/--web -N/--no-cache -i/--important --quiet -h/--help --version
@@ -2013,7 +2015,7 @@ parse_action_args() {
 # smart_send() function removed - logic consolidated into direct_send()
 # This eliminates the need for the external send script
 
-ACTIONS_SHORT="i sent q d x urls meets scheduled"
+ACTIONS_SHORT="i out sent q d x urls meets scheduled"
 ACTIONS_SEND="send c"
 ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive thread read unread sfwd sreply sreply-all pdf"
 
@@ -2032,7 +2034,7 @@ USAGE
 BASIC ACTIONS
     m                 Default inbox (first 20 messages)
     m pp2             Page 2 inbox (messages 21-40)
-    m sent            Sent messages
+    m out             Your outgoing messages (the old name `m sent` is blocked)
 EOF
             local example_acct="${M_DEFAULT_ACCOUNT:-g}"
             if [[ -n "${EMAILS[$example_acct]:-}" ]]; then
@@ -2047,7 +2049,7 @@ EOF
 
 FLAGS
     -w, --web         Open in the browser instead of the CLI. With a bare
-                      index (m 1 -w, m sent 1 -w) opens THAT message; with a
+                      index (m 1 -w, m out 1 -w) opens THAT message; with a
                       query (m q from:alice -w) opens the Gmail search
     -N, --no-cache    Bypass listing cache; force fresh fetch
     -i, --important   Filter noisy senders from the listing (view-only; edit
@@ -2075,7 +2077,9 @@ ACTIONS - Complete Reference
 
 READING
     i         inbox (default)        List recent messages
-    sent                             List sent messages
+    out                              List your outgoing (sent) messages
+                                     (the old verb `sent` is retired: it now
+                                     hard-blocks and tells you to type `out`)
     q         search                 Search with Gmail query syntax
     d         drafts                 View drafts (web only)
     x         spam                   Check spam folder
@@ -2089,7 +2093,7 @@ SAVING TO A FILE
     INDEX -S FILE        Save message to FILE, decoded/human-readable (ASCII)
     INDEX -S             Save decoded text to /tmp/spool (auto-named)
     INDEX -S FILE --raw  Save original MIME bytes (base64 intact, + attachments)
-    sent INDEX -S FILE   Same, for a sent message
+    out INDEX -S FILE    Same, for an outgoing (sent) message
     Default save is the -t render: headers, '---', then the decoded body.
     Use --raw only when you need the wire format or attachments saved.
 
@@ -2202,8 +2206,8 @@ BASIC READING
     m                                     Default inbox
     m g                                   Gmail inbox
     m u                                   Columbia inbox
-    m sent                                Your sent messages
-    m sent pp2                            Page 2 of sent messages
+    m out                                 Your outgoing (sent) messages
+    m out pp2                             Page 2 of outgoing messages
 
 SEARCHING
     m q "from:alice"                      Find emails from Alice
@@ -2220,7 +2224,7 @@ READING MESSAGES
 
 SAVING MESSAGES TO A FILE
     m 3 -S /tmp/msg.txt                   Save msg #3, decoded/human-readable
-    m sent 3 -S /tmp/sent.txt             Save sent msg #3, decoded
+    m out 3 -S /tmp/out.txt               Save outgoing msg #3, decoded
     m 3 -S                                Save decoded text to /tmp/spool
     m 3 -S /tmp/msg.eml --raw             Save original MIME (base64) + attachments
 
@@ -2261,17 +2265,17 @@ MANAGING MESSAGES
 MULTI-ACCOUNT EXAMPLES
     m g q "from:boss"                     Search Gmail account
     m u send prof@columbia.edu            Columbia account interactive send
-    m j sent                              Joint account sent messages
+    m j out                               Joint account outgoing (sent) messages
     m l reply 1                           Lake account reply to message #1
 
     m h,g i                               Inbox for hackNY AND personal, one after another
     m h,g,cu meets                        Zoom/Meet links across 3 accounts in one command
     (Comma-list runs the same command once per account, in order. Read-only
-    actions only, e.g. i/sent/q/urls/meets; send/reply/trash refuse to fan out.)
+    actions only, e.g. i/out/q/urls/meets; send/reply/trash refuse to fan out.)
 
 ADVANCED WORKFLOWS
     m q "is:unread" 1-3 -p               Peek at first 3 unread emails
-    m sent 1 fwd user@ex.com             Forward your sent message #1
+    m out 1 fwd user@ex.com              Forward your outgoing (sent) message #1
     m --dry-run send user@ex.com         Preview send without actually sending
     m -N q "from:alice"                  Force fresh search (bypass cache)
     m urls 3                             Extract URLs from message #3 (interactive menu)
@@ -2305,6 +2309,11 @@ EOF
 # After the loop, the action router (case "$action") consumes `rest`.
 web=0; dry_run=0; no_cache=0; important_filter=0; spam_mail_flag=0; all_mail_flag=0
 action=""; account=""; rest=()
+# raw_action_token remembers the LITERAL verb the user typed for the action,
+# captured before any normalization. We need it to tell `m out` apart from
+# `m sent`: both resolve to the internal action `sent`, but the literal `sent`
+# spelling is retired and must hard-block (retraining), while `out` proceeds.
+raw_action_token=""
 multi_accounts=(); multi_account_index=-1
 i=0; args=("$@")
 
@@ -2437,6 +2446,7 @@ while (( i < ${#args[@]} )); do
         rest+=("$arg")
     elif [[ -z "$action" ]] && [[ " $ACTIONS_SHORT $ACTIONS_SEND $ACTIONS_PASSTHRU " == *" $arg "* ]]; then
         action="$arg"
+        raw_action_token="$arg"
     elif [[ "$arg" == "m" ]] && [[ -z "$action" ]]; then
         action="archive"
     elif [[ -z "$account" ]] && [[ "$arg" == *,* ]] && [[ -n "${ACCTS[${arg%%,*}]:-}" ]]; then
@@ -2461,39 +2471,20 @@ while (( i < ${#args[@]} )); do
     i=$((i + 1))
 done
 
-# Check for "sent" typo: if action is "sent" but rest contains email recipients
-# or .eml files, likely meant "send". Prompt for confirmation before proceeding.
-# Exception: a .eml right after -S/--save is a SAVE TARGET (m sent 3 -S out.eml),
-# not a send payload — don't nag about it.
-if [[ "$action" == "sent" ]] && (( ${#rest[@]} > 0 )); then
-    _prev=""
-    for _r in "${rest[@]}"; do
-        if [[ "$_r" =~ \.eml$ ]] && [[ "$_prev" == "-S" || "$_prev" == "--save" ]]; then
-            _prev="$_r"
-            continue
-        fi
-        _prev="$_r"
-        if [[ "$_r" =~ ^[^[:space:]]+@[^[:space:]]+\.[^[:space:]]+$ ]] || [[ "$_r" =~ \.eml$ ]]; then
-            echo "🛑 did you mean send? y/N"
-            read -r typo_response
-            case "$typo_response" in
-                [yY]|[yY][eE][sS])
-                    action="send"
-                    if [[ "$_r" =~ \.eml$ ]]; then
-                        log_warn "'sent' corrected to 'send' for file '$_r'"
-                    else
-                        log_warn "'sent' corrected to 'send' for recipient '$_r'"
-                    fi
-                    break 2
-                    ;;
-                *)
-                    # User said no, continue with 'sent' action
-                    break
-                    ;;
-            esac
-        fi
-    done
-fi
+# NOTE (2026-08-27): the old "did you mean send?" confirm gate that fired when
+# action was `sent` and rest held an email-shaped token has been REMOVED. `out`
+# is the READ verb for outgoing mail, and reading against a recipient query is
+# legitimate and common (`m out q chris@x.com`, `m u out q addr 1 -p`). The
+# interstitial prompt on every such read was pure friction; it never protected
+# a real send (the read verb cannot put mail on the wire).
+#
+# The literal `sent` verb itself is now RETIRED and hard-blocks (stop sign,
+# non-zero exit) at the `raw_action_token == "sent"` check below, near the
+# `out` -> internal-`sent` normalization. That block is intentional retraining
+# toward `m out`; it is NOT the send-typo gate and carries a different message.
+# The real send guards (backend confirm gate, send hook, fan-out refusal) are
+# untouched.
+:  # (out/sent send-typo confirm gate removed 2026-08-27; see note above)
 
 # Infer 'send' if no action was given but rest contains an email recipient.
 # This is the m-is-forgiving layer doing its job: `m foo@bar.com -c baz@qux.com`
@@ -2559,6 +2550,27 @@ fi
 
 # defaults
 action="${action:-i}"
+
+# `out` is the canonical verb for reading OUTGOING mail (was `sent`, which was
+# one keystroke from `send` and read-only-vs-on-the-wire ambiguous).
+#
+# The literal `sent` verb is RETIRED: if the user typed it, hard-block with a
+# stop sign and exit non-zero WITHOUT reading any mail. This is deliberate
+# finger-retraining toward `m out`, not a typo nudge (do not resurrect the old
+# "did you mean send?" text; `sent` is a READ verb, not a send verb).
+#
+# Detection keys off raw_action_token (the LITERAL token the user typed),
+# captured before this point, so it fires ONLY for the user-typed spelling.
+# Internally everything downstream is still keyed on the token `sent` (the
+# `sent)` router arm, open_web's folder scope, the backend `sent` modifier), so
+# `m out` must normalize INTO `action="sent"` here to keep working. Blocking on
+# the post-normalization value would break `out` too; that is why we test the
+# raw token, not $action.
+if [[ "$raw_action_token" == "sent" ]]; then
+    printf '\033[0;31m🛑 use `m out`\033[0m (sent is the old name)\n' >&2
+    exit 2
+fi
+[[ "$action" == "out" ]] && action="sent"
 
 # ========================================================================
 # § MULTI-ACCOUNT: `m h,g,cu i` fans out one command across N accounts
@@ -3486,10 +3498,10 @@ case "$action" in
            && [[ " reply reply-all fwd forward draft open trash archive thread read unread urls " == *" ${rest[_sg+1]} "* ]]; then
             _idx="${rest[_sg]}"; _act="${rest[_sg+1]}"; _tail=("${rest[@]:_sg+2}")
             case "$_act" in
-                fwd|forward) _suggest="m sent ${_idx} fwd ${_tail[*]}  (or: m sfwd ${_idx} ${_tail[*]})" ;;
-                reply)       _suggest="m sent ${_idx} reply  (or: m sreply ${_idx})" ;;
-                reply-all)   _suggest="m sent ${_idx} reply-all  (or: m sreply-all ${_idx})" ;;
-                *)           _suggest="m sent ${_idx} ${_act} ${_tail[*]}" ;;
+                fwd|forward) _suggest="m out ${_idx} fwd ${_tail[*]}  (or: m sfwd ${_idx} ${_tail[*]})" ;;
+                reply)       _suggest="m out ${_idx} reply  (or: m sreply ${_idx})" ;;
+                reply-all)   _suggest="m out ${_idx} reply-all  (or: m sreply-all ${_idx})" ;;
+                *)           _suggest="m out ${_idx} ${_act} ${_tail[*]}" ;;
             esac
             log_error "'send' composes a new message; '${_idx} ${_act}' is a message action, not a recipient."
             echo "   You typed:  m send ${rest[*]}" >&2
