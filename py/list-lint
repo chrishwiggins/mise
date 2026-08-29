@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Flag comma-lists that should be itemized, in a draft or a markdown file.
+
+Usage: list-lint FILE [FILE ...]
+Exit: 0 clean, 1 findings, 2 usage error.
+
+Why this exists. Chris's rule: a list of three or more items (his own stated
+threshold is two) goes one item per line as bullets or numbers, never as a
+comma-list inside a sentence. It is in the global CLAUDE.md under "EMAIL LISTS
+ARE ITEMIZED" and has been corrected by hand at least five times: 2026-06-22,
+2026-07-21, twice on 2026-08-24, and again on 2026-08-28 when he rewrote
+
+    "$0 for April and June, then $25,000 due September 15 and $25,000 due
+     January 15"
+
+into three bullets. His words that day: "lookit how you continue not to use
+itemization despite my repeated request."
+
+Five hand-corrections mean the prose rule does not work. This is the mechanism.
+
+The failure mode it targets: a sentence with a list's CONTENT and a sentence's
+GRAMMAR gets classified by grammar and escapes the rule. So the checks below
+look for enumerable content (dates, dollar amounts, named items in series)
+rather than for the word "list".
+"""
+
+import re
+import sys
+
+HEADER_RE = re.compile(
+    r"^(?:To|From|Cc|Bcc|Subject|Date|In-Reply-To|References|"
+    r"Message-ID|Reply-To|MIME-Version|Content-\S+):", re.I)
+
+MONEY = r"\$[\d,]+(?:\.\d\d)?"
+DATE = (r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}"
+        r"|\d{1,2}/\d{1,2}(?:/\d{2,4})?"
+        r"|\d{4}-\d\d-\d\d")
+
+
+def units(path):
+    """Yield (lineno, text) for body paragraphs, joining wrapped lines.
+
+    Skips .eml headers, quoted reply text, and lines that are ALREADY
+    itemized (leading -, *, or a number), since those are the fixed form.
+    """
+    with open(path, "r", errors="replace") as fh:
+        raw = fh.read().splitlines()
+
+    start = 0
+    if path.endswith(".eml"):
+        # A delivered message carries Received:/DKIM/ARC headers and folded
+        # continuation lines, so "first line that is not a known header" is
+        # not a reliable end-of-headers test. RFC 5322 says the body begins
+        # after the first COMPLETELY EMPTY line; use that, and only treat the
+        # file as having headers at all if line 1 looks like one.
+        if raw and re.match(r"^[A-Za-z-]+:", raw[0]):
+            for i, line in enumerate(raw):
+                if not line.strip():
+                    start = i + 1
+                    break
+
+    buf, buf_lineno = [], None
+    for i, line in enumerate(raw[start:], start=start + 1):
+        stripped = line.strip()
+        is_item = bool(re.match(r"^(?:[-*+•]|\d+[.)])\s", stripped))
+        if stripped.startswith(">") or not stripped or is_item:
+            if buf:
+                yield buf_lineno, " ".join(buf)
+                buf, buf_lineno = [], None
+            continue
+        if buf_lineno is None:
+            buf_lineno = i
+        buf.append(stripped)
+    if buf:
+        yield buf_lineno, " ".join(buf)
+
+
+def findings_for(text):
+    """Return a list of (rule, matched_span) for one paragraph."""
+    out = []
+
+    # Rule 1: three or more dollar amounts in one sentence-unit.
+    monies = re.findall(MONEY, text)
+    if len(monies) >= 3:
+        out.append(("money-series",
+                    "%d dollar amounts in one sentence: %s"
+                    % (len(monies), ", ".join(monies[:5]))))
+
+    # Rule 2: three or more dates in one sentence-unit.
+    dates = re.findall(DATE, text)
+    if len(dates) >= 3:
+        out.append(("date-series",
+                    "%d dates in one sentence: %s"
+                    % (len(dates), ", ".join(dates[:5]))))
+
+    # Rule 3: the classic "X, Y, and Z" series of noun phrases. Require the
+    # Oxford-or-not "and"/"or" join plus at least two preceding commas, so
+    # ordinary two-item sentences and appositives do not trip it.
+    m = re.search(
+        r"(\b[\w$][\w\s$,./-]{2,40},\s+[\w$][\w\s$./-]{2,40},"
+        r"\s+(?:and|or)\s+[\w$][\w\s$./-]{2,40})", text)
+    if m:
+        span = m.group(1).strip()
+        if span.count(",") >= 2:
+            out.append(("comma-series", '"%s"' % span[:90]))
+
+    return out
+
+
+def check(path):
+    found = []
+    for lineno, text in units(path):
+        for rule, detail in findings_for(text):
+            found.append((lineno, rule, detail, text[:100]))
+    return found
+
+
+def main(argv):
+    if len(argv) < 2:
+        sys.stderr.write("usage: list-lint FILE [FILE ...]\n")
+        return 2
+
+    total = 0
+    for path in argv[1:]:
+        try:
+            found = check(path)
+        except OSError as exc:
+            sys.stderr.write("list-lint: %s\n" % exc)
+            return 2
+        if found:
+            print("%s:" % path)
+            for lineno, rule, detail, ctx in found:
+                print("  line %d: %s -- %s" % (lineno, rule, detail))
+                print("    %s..." % ctx)
+            total += len(found)
+
+    if total:
+        plural = "" if total == 1 else "s"
+        print("\n%d un-itemized list%s. Chris's rule: three or more items go "
+              "one per line as bullets or numbers, never as a comma-list "
+              "inside a sentence." % (total, plural))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
