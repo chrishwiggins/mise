@@ -1,0 +1,159 @@
+#!/bin/bash
+# md2pdf INPUT.md [OUTPUT.pdf] [TITLE]
+# Render markdown to a polished PDF via pandoc -> styled HTML -> Chrome headless.
+# Self-contained: the print stylesheet is embedded below.
+#
+# Examples:
+#   md2pdf notes.md
+#   md2pdf notes.md notes.pdf "My Title"
+set -e
+
+IN="$1"
+if [ -z "$IN" ]; then
+  echo "usage: md2pdf INPUT.md [OUTPUT.pdf] [TITLE]" >&2
+  exit 1
+fi
+OUT="${2:-${IN%.*}.pdf}"
+TITLE="${3:-$(basename "${IN%.*}")}"
+
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+command -v pandoc >/dev/null || { echo "md2pdf: pandoc not found" >&2; exit 1; }
+[ -x "$CHROME" ] || { echo "md2pdf: Google Chrome not found" >&2; exit 1; }
+
+TMPDIR_M="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_M"' EXIT
+CSS="$TMPDIR_M/style.css"
+HTML="$TMPDIR_M/doc.html"
+
+cat > "$CSS" <<'CSSEOF'
+:root {
+  --ink: #1a1a1a;
+  --muted: #555;
+  --rule: #d4d4d4;
+  --accent: #7a1f1f;
+  --band: #f4f1ec;
+}
+
+@page { size: letter; margin: 0.9in 0.85in; }
+
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+body {
+  font-family: "Charter", "Georgia", "Times New Roman", serif;
+  font-size: 11pt;
+  line-height: 1.5;
+  color: var(--ink);
+  max-width: 100%;
+  margin: 0;
+}
+
+header#title-block-header h1.title {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: 22pt;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--ink);
+  border-bottom: 3px solid var(--accent);
+  padding-bottom: 0.3em;
+  margin-bottom: 0.8em;
+}
+
+h1, h2, h3, h4 {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  color: var(--ink);
+  line-height: 1.25;
+  page-break-after: avoid;
+}
+
+h1 { font-size: 16pt; margin-top: 1.4em; }
+h2 { font-size: 13pt; margin-top: 1.5em; border-bottom: 1px solid var(--rule); padding-bottom: 0.2em; }
+h3 { font-size: 11.5pt; color: var(--muted); margin-top: 1.1em; }
+
+p { margin: 0.5em 0; }
+
+a { color: var(--accent); text-decoration: none; word-break: break-all; }
+
+nav#TOC {
+  background: var(--band);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 0.6em 1.2em 0.8em;
+  margin: 0 0 1.5em;
+  page-break-inside: avoid;
+}
+nav#TOC::before {
+  content: "Contents";
+  display: block;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  font-size: 10pt;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.4em;
+}
+nav#TOC ul {
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: 10pt;
+}
+nav#TOC > ul > li { margin: 0.18em 0; }
+nav#TOC ul ul { padding-left: 1.2em; font-size: 9.5pt; color: var(--muted); }
+nav#TOC a { color: var(--ink); }
+nav#TOC li::marker { content: none; }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+  font-size: 10pt;
+  page-break-inside: avoid;
+}
+thead th {
+  background: var(--accent);
+  color: #fff;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.5em 0.7em;
+}
+tbody td { padding: 0.45em 0.7em; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tbody tr:nth-child(even) { background: #faf8f5; }
+
+code {
+  font-family: "SF Mono", "Menlo", monospace;
+  font-size: 9.5pt;
+  background: #f0eee9;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+hr { border: none; border-top: 1px solid var(--rule); margin: 1.6em 0; }
+strong { color: var(--ink); }
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 1em 0;
+  padding: 0.2em 0 0.2em 1em;
+  color: var(--muted);
+}
+CSSEOF
+
+pandoc "$IN" \
+  --from gfm \
+  --to html5 \
+  --standalone \
+  --toc \
+  --toc-depth=2 \
+  --metadata title="$TITLE" \
+  --css "$CSS" \
+  --embed-resources \
+  -o "$HTML"
+
+"$CHROME" --headless --disable-gpu \
+  --print-to-pdf="$OUT" \
+  --print-to-pdf-no-header \
+  --no-pdf-header-footer \
+  "$HTML" 2>/dev/null
+
+echo "wrote $OUT"

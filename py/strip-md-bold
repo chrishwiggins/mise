@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""Strip **bold** markdown from .md/.txt/.eml files, leaving code untouched.
+
+Chris bans bold markdown in prose files, and a PostToolUse hook
+(~/.claude/hooks/block-markdown-bold.sh) blocks writes that contain it. That hook
+fires AFTER the write, so a file with pre-existing bold wedges every later edit
+until someone cleans it by hand. This is the one-shot cleaner for that.
+
+Bold inside code is left alone, because there ** is content and not formatting:
+  - fenced blocks (``` or ~~~), including their fence lines
+  - indented code blocks (4+ spaces) inside fenced-free regions
+  - inline code spans (`...`, ``...``)
+A memory file discussing the literal string is therefore safe.
+
+`**text**` becomes `text`. Bare or unmatched `**` is reported, never guessed at.
+
+Default is a dry run. Pass --fix to rewrite. Always writes LF line endings.
+
+Usage:
+  strip-md-bold PATH...              # dry run, show what would change
+  strip-md-bold --fix PATH...        # rewrite in place
+  strip-md-bold -r DIR               # recurse into a directory
+  strip-md-bold --fix -r ~/.claude/projects/<proj>/memory
+  strip-md-bold --check PATH...      # exit 1 if any bold found, print nothing else
+"""
+
+import argparse
+import os
+import re
+import sys
+
+EXTENSIONS = (".md", ".txt", ".eml")
+
+BOLD = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", re.DOTALL)
+FENCE = re.compile(r"^\s*(```|~~~)")
+# Inline code span: one or more backticks, minimal run to a matching run.
+CODE_SPAN = re.compile(r"(`+)(.+?)\1", re.DOTALL)
+
+
+def split_protected(line):
+    """Split a line into (text, is_code) segments, protecting inline code spans."""
+    out = []
+    pos = 0
+    for m in CODE_SPAN.finditer(line):
+        if m.start() > pos:
+            out.append((line[pos:m.start()], False))
+        out.append((m.group(0), True))
+        pos = m.end()
+    if pos < len(line):
+        out.append((line[pos:], False))
+    return out or [(line, False)]
+
+
+def strip_line(line):
+    """Return (new_line, n_stripped) with bold removed outside code spans."""
+    pieces = []
+    count = 0
+    for seg, is_code in split_protected(line):
+        if is_code:
+            pieces.append(seg)
+            continue
+        new_seg, n = BOLD.subn(r"\1", seg)
+        count += n
+        pieces.append(new_seg)
+    return "".join(pieces), count
+
+
+def process(text):
+    """Return (new_text, n_stripped, leftover_lines).
+
+    leftover_lines are 1-indexed line numbers where ** survives outside code,
+    meaning it is unmatched or spans lines; those need a human, not a regex.
+    """
+    lines = text.split("\n")
+    out = []
+    total = 0
+    leftover = []
+    in_fence = False
+    for i, line in enumerate(lines, 1):
+        if FENCE.match(line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence or re.match(r"^(\t| {4,})\S", line):
+            out.append(line)
+            continue
+        new_line, n = strip_line(line)
+        total += n
+        # Any ** left outside a code span is unmatched; flag, do not guess.
+        if any("**" in seg for seg, is_code in split_protected(new_line) if not is_code):
+            leftover.append(i)
+        out.append(new_line)
+    return "\n".join(out), total, leftover
+
+
+def gather(paths, recurse):
+    files = []
+    for p in paths:
+        if os.path.isdir(p):
+            if not recurse:
+                print(f"skip (directory, use -r): {p}", file=sys.stderr)
+                continue
+            for root, dirs, names in os.walk(p):
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                files.extend(
+                    os.path.join(root, n) for n in sorted(names)
+                    if n.endswith(EXTENSIONS)
+                )
+        elif os.path.isfile(p):
+            files.append(p)
+        else:
+            print(f"skip (not found): {p}", file=sys.stderr)
+    return files
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Strip **bold** from markdown prose, leaving code untouched."
+    )
+    ap.add_argument("paths", nargs="+", help="files or directories")
+    ap.add_argument("--fix", action="store_true", help="rewrite in place (default: dry run)")
+    ap.add_argument("-r", "--recurse", action="store_true", help="recurse into directories")
+    ap.add_argument("--check", action="store_true",
+                    help="exit 1 if any bold found; suppress normal output")
+    args = ap.parse_args()
+
+    files = gather(args.paths, args.recurse)
+    changed = 0
+    flagged = 0
+    total_hits = 0
+
+    for path in files:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"skip ({exc.__class__.__name__}): {path}", file=sys.stderr)
+            continue
+
+        new_text, n, leftover = process(text)
+        if n == 0 and not leftover:
+            continue
+
+        total_hits += n
+        if n:
+            changed += 1
+        if leftover:
+            flagged += 1
+
+        if args.check:
+            continue
+
+        if args.fix:
+            if n:
+                with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(new_text)
+            print(f"{'stripped' if n else 'unchanged'} {n:3d}  {path}")
+        else:
+            print(f"would strip {n:3d}  {path}")
+
+        if leftover:
+            print(f"  UNMATCHED ** on line(s) {', '.join(map(str, leftover))}; "
+                  f"fix by hand", file=sys.stderr)
+
+    if args.check:
+        if changed or flagged:
+            if changed:
+                print(f"{total_hits} bold marker(s) in {changed} file(s)", file=sys.stderr)
+            if flagged:
+                print(f"{flagged} file(s) with unmatched or multi-line ** "
+                      f"needing a human", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(0)
+
+    if not changed and not flagged:
+        print(f"clean: no bold in {len(files)} file(s)")
+    elif not args.fix and changed:
+        print(f"\n{total_hits} marker(s) in {changed} file(s). Rerun with --fix to apply.")
+    if flagged:
+        print(f"{flagged} file(s) need a human for unmatched or multi-line **")
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

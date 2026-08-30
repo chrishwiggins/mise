@@ -4,6 +4,24 @@
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 AUX_DIR="$(dirname "$SCRIPT_DIR")/aux/m"
 
+# Terminal width for the backend. The backend pipes its own stdout on some
+# paths (paging cache), so os.get_terminal_size() fails there and it would
+# truncate subjects at 80 cols. Read the real width from the controlling tty
+# and export COLUMNS so the backend can honor it even when piped. tcsh does
+# not export COLUMNS to children, so we derive it here.
+if [[ -z "${COLUMNS:-}" || ! "${COLUMNS:-}" =~ ^[0-9]+$ ]]; then
+    _m_cols=""
+    if [[ -r /dev/tty ]]; then
+        # 2>/dev/null must precede </dev/tty: redirections apply left to right,
+        # and with no controlling terminal the tty open itself fails and bash
+        # prints "Device not configured" unless stderr is already silenced.
+        _m_cols="$(tput cols 2>/dev/null </dev/tty)"
+        [[ "$_m_cols" =~ ^[0-9]+$ ]] || _m_cols="$(stty size 2>/dev/null </dev/tty | cut -d' ' -f2)"
+    fi
+    [[ "$_m_cols" =~ ^[0-9]+$ ]] && export COLUMNS="$_m_cols"
+    unset _m_cols
+fi
+
 # ============================================================================
 # m — multi-account email dispatcher (bash frontend)
 # ============================================================================
@@ -20,11 +38,15 @@ AUX_DIR="$(dirname "$SCRIPT_DIR")/aux/m"
 #
 # § PUBLIC API (do NOT break — colleagues' aliases call this)
 #   Account aliases: g j u cu l h hNY n z (resolved via accounts.json)
-#   Actions:         i sent q d x urls send c draft reply reply-all fwd
+#                    Comma-list for multi-account, e.g. h,g,cu (read-only
+#                    actions only; see § MULTI-ACCOUNT)
+#   Actions:         i out q d x urls meets send c draft reply reply-all fwd
+#                    (out = read outgoing mail; the old name `sent` is RETIRED
+#                    and hard-blocks with a stop sign pointing at `out`)
 #                    open trash archive thread read unread sfwd sreply
 #                    sreply-all peek
 #   Flags:           -w/--web -N/--no-cache -i/--important --quiet -h/--help --version
-#                    --dry-run --urls -p/--peek -v --meta -S -t -x
+#                    --dry-run --urls --urls-tag --urls-slug -p/--peek -v --meta -S -t -x
 #                    -A --save-attachments-only -a -c -b -s -d/--done
 #                    -H --outbox
 #   Pagination:      ppN tokens (e.g. pp2 = page 2)
@@ -283,8 +305,13 @@ load_mail_config
 _lookup_muttrc() {
     local needle="$1"
 
-    # Check if we have this account in our loaded config
-    if [[ -n "${EMAILS[$needle]}" ]]; then
+    # Check if we have this account in our loaded config.
+    # The :- default is load-bearing under `set -u`: callers pass a gmail_flag
+    # (e.g. "lake"), not necessarily an EMAILS key (the keys are the short
+    # aliases from accounts.json: g j u l h z ...). An unguarded EMAILS[$needle]
+    # aborts the whole script on any non-alias needle instead of falling through
+    # to the partial match below. Keep the :-.
+    if [[ -n "${EMAILS[$needle]:-}" ]]; then
         # Direct alias match - extract muttrc from JSON config
         jq -r ".accounts.\"$needle\".muttrc // empty" "$MAIL_TOOLS_CONFIG" 2>/dev/null
         return
@@ -1181,6 +1208,14 @@ _attachment_prompt() {
 # compose mode, it auto-builds a .eml from stdin and ships via API.
 # Handles file sending, attachment processing, and backend routing
 
+# With edit_headers set, neomutt's compose buffer is a 9-line header block
+# (From/To/Cc/Bcc/Reply-To/Subject/...) followed by a blank line, so the body
+# starts on line 10. Land the cursor there in insert mode so composing takes
+# zero keystrokes. cursor() clamps to the last line on short buffers, and
+# startinsert is a no-op if the buffer is empty. gmail-smtp-w does the same;
+# direct_send calls neomutt directly (no wrapper), so it needs its own copy.
+M_NEOMUTT_EDITOR="set editor=\"vim -c 'call cursor(10,1)' -c startinsert\""
+
 direct_send() {
     local -a send_args=("$@")
 
@@ -1199,19 +1234,41 @@ direct_send() {
     while [[ $i -lt ${#send_args[@]} ]]; do
         case "${send_args[i]}" in
             -e)
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "-e needs an account right after it (e.g. -e u); it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 account="${send_args[i+1]}"
                 ((i+=2))
                 ;;
             -H)
-                # Mutt compatibility: treat -H file as just the file
+                # Mutt compatibility: treat -H file as just the file.
+                # Guard: if -H is followed by another flag (e.g. -H -H file) or
+                # nothing, the user doubled the flag or dropped the filename.
+                # Blindly taking the next token would feed "-H" downstream as the
+                # .eml path and produce a cryptic "argument -H: expected one
+                # argument" from the backend. Stop with a clear hint instead.
+                if [[ -z "${send_args[i+1]+x}" || "${send_args[i+1]}" == -* ]]; then
+                    log_error "I think you put in -H -H. The -H flag needs a single .eml file right after it (e.g. -H draft.eml). Please fix and re-run."
+                    return 2
+                fi
                 args+=("${send_args[i+1]}")
                 ((i+=2))
                 ;;
             -a)
+                # Guard: -a with no path (or a flag where the path should be).
+                if [[ -z "${send_args[i+1]+x}" || "${send_args[i+1]}" == -* ]]; then
+                    log_error "-a needs an attachment path right after it (e.g. -a file.pdf). It looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 attachments+=("${send_args[i+1]}")
                 ((i+=2))
                 ;;
             -s|--subject)
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "-s needs a subject right after it (e.g. -s \"hello\"); it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 subject="${send_args[i+1]}"
                 ((i+=2))
                 ;;
@@ -1220,10 +1277,18 @@ direct_send() {
                 # name may be a real contact (nfile.asc), which only the Python
                 # backend knows about. gmail-api-rw's _assert_valid_header_addrs
                 # is the single source of truth for rejecting unresolvable Cc/Bcc.
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "-c needs an address right after it; it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 cc_addrs+=("$(_resolve_alias "${send_args[i+1]}")")
                 ((i+=2))
                 ;;
             -b|--bcc)
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "-b needs an address right after it; it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 bcc_addrs+=("$(_resolve_alias "${send_args[i+1]}")")
                 ((i+=2))
                 ;;
@@ -1236,6 +1301,10 @@ direct_send() {
                 i=$((i+1))
                 ;;
             --after)
+                if [[ -z "${send_args[i+1]+x}" ]]; then
+                    log_error "--after needs a time right after it (e.g. --after '5m'); it looks like one is missing. Please fix and re-run."
+                    return 2
+                fi
                 after_time="${send_args[i+1]}"
                 ((i+=2))
                 ;;
@@ -1308,7 +1377,7 @@ direct_send() {
                     if _is_api_only "$muttrc"; then
                         echo "DRY-RUN: gmail-api-rw ${account:+-e $account} send --via-send -H $abspath ${attach_args[*]+${attach_args[*]}}"
                     else
-                        echo "DRY-RUN: echo | neomutt -e 'unset record' -F $muttrc -H $abspath ${attach_args[*]+${attach_args[*]}}"
+                        echo "DRY-RUN: echo | neomutt -e 'unset record' -e '$M_NEOMUTT_EDITOR' -F $muttrc -H $abspath ${attach_args[*]+${attach_args[*]}}"
                     fi
                 elif _is_api_only "$muttrc"; then
                     echo "m: ${account:-default} via gmail API" >&2
@@ -1317,7 +1386,7 @@ direct_send() {
                     _assert_smtp_capable "$muttrc" "${account:-default}" || return 1
                     echo "m: ${account:-default} via SMTP" >&2
                     # Direct neomutt call - optimize by removing process hop
-                    echo | neomutt -e 'unset record' -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
+                    echo | neomutt -e 'unset record' -e "$M_NEOMUTT_EDITOR" -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
                 fi
 
                 if (( send_rc != 0 )); then
@@ -1487,6 +1556,26 @@ direct_send() {
             _assert_smtp_capable "$muttrc" "${account:-default}" || return 1
         fi
 
+        # ------------------------------------------------------------------
+        # Subject prompt for bare compose sends (e.g. the `momo`/`mail`
+        # aliases: `m g send <addr>` with no -s). Without this you land
+        # straight in neomutt's editor with an empty Subject header. Ask for
+        # the subject at the shell first, then pass it through as -s so it is
+        # pre-filled. Guards:
+        #   - only when no -s was given ($subject empty)
+        #   - only interactively (stdin is a tty); piped/scripted sends skip
+        #   - not on dry-run
+        # Empty input just falls through (neomutt's abort_nosubject still
+        # applies), so hitting Return changes nothing about the old flow.
+        local -a subject_args=()
+        if [[ -n "$subject" ]]; then
+            subject_args=(-s "$subject")
+        elif (( ! dry_run )) && [[ -t 0 && -t 2 ]]; then
+            local _prompt_subject=""
+            read -r -e -p "Subject: " _prompt_subject </dev/tty
+            [[ -n "$_prompt_subject" ]] && subject_args=(-s "$_prompt_subject")
+        fi
+
         # Check if we have any recipients (arguments containing @)
         local has_recipients=0
         for arg in "${args[@]}"; do
@@ -1498,20 +1587,20 @@ direct_send() {
 
         if (( ! has_recipients )); then
             if (( dry_run )); then
-                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${args[*]} ${attach_args[*]+${attach_args[*]}}"
+                echo "DRY-RUN: neomutt -e 'unset record' -e '$M_NEOMUTT_EDITOR' -F $muttrc ${subject_args[*]+${subject_args[*]}} ${args[*]} ${attach_args[*]+${attach_args[*]}}"
                 return 0
             fi
             # No recipients found, use neomutt in compose mode (user will enter recipient)
             echo "m: ${account:-default} via SMTP" >&2
-            neomutt -e 'unset record' -F "$muttrc" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
+            neomutt -e 'unset record' -e "$M_NEOMUTT_EDITOR" -F "$muttrc" "${subject_args[@]+"${subject_args[@]}"}" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
         else
             # Send single email with all arguments (neomutt handles comma-separated recipients)
             if (( dry_run )); then
-                echo "DRY-RUN: neomutt -e 'unset record' -F $muttrc ${args[*]} ${attach_args[*]+${attach_args[*]}}"
+                echo "DRY-RUN: neomutt -e 'unset record' -e '$M_NEOMUTT_EDITOR' -F $muttrc ${subject_args[*]+${subject_args[*]}} ${args[*]} ${attach_args[*]+${attach_args[*]}}"
                 return 0
             fi
             echo "m: ${account:-default} via SMTP" >&2
-            neomutt -e 'unset record' -F "$muttrc" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
+            neomutt -e 'unset record' -e "$M_NEOMUTT_EDITOR" -F "$muttrc" "${subject_args[@]+"${subject_args[@]}"}" "${args[@]}" "${attach_args[@]+"${attach_args[@]}"}"
         fi
     fi
 }
@@ -1523,10 +1612,6 @@ if [[ -n "${M_DEFAULT_ACCOUNT:-}" ]]; then
         log_error "invalid M_DEFAULT_ACCOUNT='${M_DEFAULT_ACCOUNT}'. Valid: $valid_accts"
         exit 1
     fi
-fi
-
-if [[ "${M_RANGE_WARNING_LIMIT:-50}" -lt 1 ]]; then
-    M_RANGE_WARNING_LIMIT=50
 fi
 
 # ========================================================================
@@ -1551,9 +1636,138 @@ log_command() {
 open_web() {
     local folder="$1"; shift
     local profile="$chrome_profile"
+
+    # `m 1 -w` means "show me message #1 in Gmail", not "search the inbox for
+    # the literal string 1". gmail_web only knows folders and search queries,
+    # so a bare index used to become `#search/in:inbox+1`, which finds nothing
+    # useful. When a trailing arg is a message index, hand off to the backend's
+    # `open` action instead: it resolves index -> Gmail message id against the
+    # same listing the CLI just showed and opens `#all/<msg_id>`. Anything else
+    # (from:alice, before:2026/03/01, ...) is a real Gmail query and still goes
+    # to gmail_web unchanged.
+    #
+    # `m q fedex 2 -w` means "open message #2 of the fedex listing", the same
+    # thing it means without -w. Concatenating the index into the search string
+    # instead produced `#search/in:inbox+fedex+2`, searching for the literal
+    # "2". Only TRAILING integers count as indices.
+    #
+    # ------------------------------------------------------------------
+    # SUBJECTIVE DESIGN CHOICE: what does a digits-only token mean?
+    # ------------------------------------------------------------------
+    # Read this before "simplifying" the _floor logic below. It looks
+    # over-complicated. It is not; each branch is load-bearing, and the
+    # rule it encodes is a JUDGMENT CALL, not a derivable truth.
+    #
+    # The tension: `m` overloads bare integers with two incompatible
+    # meanings, and both are entrenched in muscle memory and in 500+
+    # aliases that cannot be broken.
+    #
+    #   (a) INDEX  -- `m 1 -w`      = "open message #1 of the listing"
+    #   (b) QUERY  -- `m q 2026 -w` = "search Gmail for the string 2026"
+    #
+    # An arg that is all digits is genuinely ambiguous between these. No
+    # amount of cleverness resolves it from the token alone; the parser
+    # must pick a side, and whichever it picks is wrong for somebody.
+    #
+    # THE RULE WE CHOSE: an explicit `q` action means the user announced
+    # a query, so the first positional is a SEARCH TERM even when it is
+    # all digits. Absent `q` (action defaults to `i`), a lone integer is
+    # an INDEX. Trailing integers after a query term are always indices.
+    #
+    # WHY THIS SIDE: it makes -w agree with the non-web path, which has
+    # applied exactly this rule for years via the `action == q && i == 0`
+    # guard in the bare-integer case of the i|q handler (see below, near
+    # the `[0-9]|[0-9][0-9]|[0-9][0-9][0-9])` branch). Before this fix,
+    # `m q 2026` searched but `m q 2026 -w` opened message #2026 -- the
+    # SAME command with a display flag meant two different things. Two
+    # parsers disagreeing about the same argv is the actual bug; the
+    # specific side chosen matters less than that they now agree.
+    #
+    # WHAT THIS COSTS: you can no longer open a message by index with an
+    # explicit q and no query, i.e. `m q 5 -w` searches for "5" rather
+    # than opening message #5. That spelling never worked reliably
+    # anyway, and `m 5 -w` (no q) still does the index thing. If you
+    # ever DO need "search for a number", `m q 2026 -w` now works; if
+    # you need "open #2026", drop the q.
+    #
+    # WHY $action AND NOT ARG COUNT: an earlier attempt floored the scan
+    # at position 1 whenever 2+ args remained, allowing position 0 to be
+    # an index only when it stood alone. That fails on `m q 2026 -w`:
+    # the literal-q marker is stripped first, leaving `2026` alone, so
+    # the single-arg exception fired and it became an index again. Arg
+    # count cannot distinguish "lone index" from "lone numeric query".
+    # $action can, because the user typed the q. Do not regress this to
+    # a count-based heuristic; it has already been tried and it fails
+    # this exact case.
+    #
+    # Index-splitting applies ONLY to folders that have a numbered listing.
+    # `compose` does not: there every positional is a recipient or subject word,
+    # so `m c 620 -w` must stay a compose window and never become "open inbox
+    # message #620".
+    local -a _wq=("$@") _widx=()
+    if [[ "$folder" == "inbox" || "$folder" == "sent" ]]; then
+        if (( $# > 0 )); then
+            local -a _wargs=("$@")
+            local _i
+            # Strip the literal-q marker BEFORE scanning for indices, so the
+            # floor below lands on the real first query token. `m sent q abigail
+            # 1 -w` and `m i q fedex -w` use this form, where a leading "q"
+            # introduces the query rather than being a search term; the non-web
+            # paths strip it via parse_action_args "literal-q".
+            local _explicit_q=0
+            if [[ "${_wargs[0]:-}" == "q" ]]; then
+                _explicit_q=1
+                _wargs=("${_wargs[@]:1}")
+            fi
+            # $action is q when the user typed `m q ...` (the marker was
+            # consumed as the action word rather than reaching us in "$@").
+            # Either spelling counts as "the user announced a query".
+            [[ "$action" == "q" ]] && _explicit_q=1
+            # The floor is where the index scan STOPS. With an explicit query,
+            # position 0 is a search term and is off-limits (_floor=1). Without
+            # one, a lone integer is an index (_floor=0).
+            local _floor=0
+            (( _explicit_q )) && _floor=1
+            for (( _i=${#_wargs[@]}-1; _i>=_floor; _i-- )); do
+                [[ "${_wargs[_i]}" =~ ^[0-9]+$ ]] || break
+                _widx=("${_wargs[_i]}" "${_widx[@]+"${_widx[@]}"}")
+            done
+            _wq=()
+            local _n=$(( ${#_wargs[@]} - ${#_widx[@]} ))
+            for (( _i=0; _i<_n; _i++ )); do _wq+=("${_wargs[_i]}"); done
+        fi
+    fi
+
+    if (( ${#_widx[@]} > 0 )); then
+        # Pass the folder through as the backend's "sent" modifier so
+        # `m sent 1 -w` opens sent message #1, not inbox #1. The backend
+        # scopes the lookup to in:sent, which also keeps the cache key
+        # aligned with the listing the index came from.
+        local -a scope=()
+        [[ "$folder" == "sent" ]] && scope=(sent)
+        # Any leading non-index args are the Gmail query the index was listed
+        # against; hand them to the backend as -q so index to message-id
+        # resolution runs against the SAME listing the CLI just showed.
+        local -a qflag=()
+        if (( ${#_wq[@]} > 0 )); then
+            qflag=(-q "${_wq[*]}")
+            log_info "Opening $folder message(s) ${_widx[*]} from query '${_wq[*]}' in Gmail (profile $profile)..."
+        else
+            log_info "Opening $folder message(s) ${_widx[*]} in Gmail (profile $profile)..."
+        fi
+        log_command "$@"
+        GMAILS_CHROME_PROFILE="$profile" \
+            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" \
+                "${scope[@]+"${scope[@]}"}" "${qflag[@]+"${qflag[@]}"}" \
+                "${_widx[@]}" open
+    fi
+
+    # No index: this is a real Gmail search. Use _wq rather than "$@" so the
+    # literal-q marker word stripped above does not land in the search string
+    # (`m sent q abigail -w` must search 'abigail', not 'q abigail').
     log_info "Opening Gmail ($folder) in browser (profile $profile)..."
     log_command "$@"
-    exec gmail_web "$profile" "$folder" "$@"
+    exec gmail_web "$profile" "$folder" "${_wq[@]+"${_wq[@]}"}"
 }
 
 # ========================================================================
@@ -1571,7 +1785,7 @@ open_web() {
 # actually type the commands; don't try to unify them.
 #
 # Inputs:
-#   $1: query mode -- "positional-q" (rest[0] is query if action=q),
+#   $1: query mode -- "positional-q" (first non-flag token is query if action=q),
 #       "literal-q" (rest contains "q <query>" pair to extract), or "none"
 #   $2: caller's $action (used by positional-q mode)
 #   $3: space-separated list of action words to recognize (e.g.
@@ -1581,9 +1795,46 @@ open_web() {
 # Outputs (via global vars; arrays must be declared by caller):
 #   PA_ACTION_WORD   - action word found, or ""
 #   PA_QUERY         - parsed query string, or ""
+#   PA_QUERY_INDEX   - index of the query token in PA_REMAINING (positional-q
+#                      mode only), or -1 when no query token exists / other modes
 #   PA_MESSAGE_NUMBERS - array of indices found before action word
 #   PA_TRAILING_ARGS   - array of args after the action word
 #   PA_REMAINING       - array equal to input rest minus consumed query tokens
+
+# Compose actions target exactly ONE message; bulk verbs (trash/archive/
+# read/unread/thread/open/urls) legitimately take many. Callers use this to
+# decide whether last-index-wins collapse applies to an action word.
+_is_single_target_action() {
+    case "$1" in
+        reply|reply-all|fwd|forward|sfwd|sreply|sreply-all|draft) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Rewrite bare text=... trailing args to --text=... for compose actions.
+# Bare text=... (missing dashes) would land in the backend's unused output
+# positional and be silently dropped, so the reply body the user typed never
+# arrives (bit us 2026-07-27 in parse_action_args; and again 2026-08-24 in the
+# account-prefixed router path, e.g. `m u 5 reply text="hi"`, which never went
+# through parse_action_args). Shared here so the two callers can't drift.
+# Writes the rewritten args to the global RBT_OUT array; errors+exits on an
+# empty body (--text=/text=''), pointing the user at the 'draft' verb.
+_rewrite_bare_text_flags() {
+    RBT_OUT=()
+    local _t
+    for _t in "$@"; do
+        if [[ "$_t" == text=* ]]; then
+            log_warn "'text=' isn't a flag; assuming you meant --text="
+            _t="--text=${_t#text=}"
+        fi
+        if [[ "$_t" == "--text=" ]]; then
+            log_error "empty body; use 'draft' to compose a draft"
+            exit 1
+        fi
+        RBT_OUT+=("$_t")
+    done
+}
+
 parse_action_args() {
     local query_mode="$1"; shift
     local caller_action="$1"; shift
@@ -1592,6 +1843,7 @@ parse_action_args() {
 
     PA_ACTION_WORD=""
     PA_QUERY=""
+    PA_QUERY_INDEX=-1
     PA_MESSAGE_NUMBERS=()
     PA_TRAILING_ARGS=()
     PA_REMAINING=()
@@ -1613,7 +1865,38 @@ parse_action_args() {
         # positional-q or none: rest is unchanged
         PA_REMAINING=("${input[@]+"${input[@]}"}")
         if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" ]]; then
-            PA_QUERY="${PA_REMAINING[0]:-}"
+            # The query is the first token that is not a recognized flag (or a
+            # flag's value). Blindly taking rest[0] broke `m h --all q 'to:x'`:
+            # --all is not an m flag, so it lands at rest[0] ahead of the real
+            # query, became the -q value, and the backend died with
+            # "argument -q/--query: expected one argument". Gmail negation
+            # terms (-from:x, -label:foo, -word) are not in these lists, so
+            # they still read as queries.
+            local _pa_skip_novalue=" -v --verbose -p --peek --meta -x --headers -j --summary -c -Q --draft --all -N --verify-account -A --save-attachments-only --open-attachments --raw -t --text -h --help "
+            local _pa_skip_value=" -n --count -a --attach -e -F --outbox "
+            local _qj=0
+            while (( _qj < ${#PA_REMAINING[@]} )); do
+                if [[ "$_pa_skip_novalue" == *" ${PA_REMAINING[_qj]} "* ]]; then
+                    _qj=$((_qj + 1))
+                elif [[ "$_pa_skip_value" == *" ${PA_REMAINING[_qj]} "* ]]; then
+                    _qj=$((_qj + 2))
+                elif [[ "${PA_REMAINING[_qj]}" == "-S" || "${PA_REMAINING[_qj]}" == "--save" ]]; then
+                    # -S FILE consumes a following non-flag token as the save
+                    # path (mirroring the downstream flag scan); bare -S is
+                    # raw-to-stdout and consumes nothing. Treating -S as
+                    # valueless here made `m -S out.txt q '<terms>'` take the
+                    # FILENAME as the query.
+                    if [[ -n "${PA_REMAINING[_qj+1]:-}" && "${PA_REMAINING[_qj+1]}" != -* ]]; then
+                        _qj=$((_qj + 2))
+                    else
+                        _qj=$((_qj + 1))
+                    fi
+                else
+                    PA_QUERY="${PA_REMAINING[_qj]}"
+                    PA_QUERY_INDEX=$_qj
+                    break
+                fi
+            done
         fi
     fi
 
@@ -1623,6 +1906,14 @@ parse_action_args() {
     local action_word_index=-1
     local i
     for i in "${!PA_REMAINING[@]}"; do
+        # In positional-q mode, PA_REMAINING[PA_QUERY_INDEX] is the search
+        # query, not an action. Skip it so a query term that happens to equal
+        # an action word (`m u q archive`) isn't consumed as the action AND
+        # left in PA_QUERY, which produced a malformed `-q archive archive`
+        # backend call.
+        if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
+            continue
+        fi
         if [[ " $allowed_actions " == *" ${PA_REMAINING[i]} "* ]]; then
             PA_ACTION_WORD="${PA_REMAINING[i]}"
             action_word_index=$i
@@ -1630,29 +1921,64 @@ parse_action_args() {
         fi
     done
 
+    # Step 2b: no action word, but a body-bearing text token is present, so
+    # imply 'reply'. Users type `m 3 text='foo'` expecting a reply with that
+    # body, but with no action word the token would be dropped (the action-word
+    # rewrite loop below never runs). Trigger STRICTLY on the `=`-with-value
+    # forms `text=...` / `--text=...`; a bare `-t`/`--text` is a read-only
+    # preview and must NOT imply reply. Only imply if the caller allows 'reply'.
+    if [[ -z "$PA_ACTION_WORD" && " $allowed_actions " == *" reply "* ]]; then
+        local _ti=-1
+        for i in "${!PA_REMAINING[@]}"; do
+            case "${PA_REMAINING[i]}" in
+                text=*|--text=*) _ti=$i; break ;;
+            esac
+        done
+        if (( _ti >= 0 )); then
+            log_warn "body given with no action; assuming 'reply'"
+            PA_ACTION_WORD="reply"
+            # Splice a synthetic 'reply' immediately before the text token so the
+            # shared parse below sees a normal action word: tokens before it
+            # become message numbers, the text token becomes a trailing arg.
+            local -a _rebuilt=()
+            local j
+            for ((j=0; j<${#PA_REMAINING[@]}; j++)); do
+                if (( j == _ti )); then
+                    action_word_index=${#_rebuilt[@]}
+                    _rebuilt+=("reply")
+                fi
+                _rebuilt+=("${PA_REMAINING[j]}")
+            done
+            PA_REMAINING=("${_rebuilt[@]}")
+        fi
+    fi
+
     # Step 3: parse message numbers before action word, collect trailing args after
     if [[ -n "$PA_ACTION_WORD" ]]; then
         for ((i=0; i<action_word_index; i++)); do
             local arg="${PA_REMAINING[i]}"
-            case "$arg" in
-                [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                    # Skip query string for positional-q mode (rest[0] is query)
-                    if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
-                        continue
-                    fi
-                    PA_MESSAGE_NUMBERS+=("$arg")
-                    ;;
-                [0-9]-[0-9]|[0-9]-[0-9][0-9]|[0-9][0-9]-[0-9][0-9])
-                    if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "0" ]]; then
-                        continue
-                    fi
-                    PA_MESSAGE_NUMBERS+=("$arg")
-                    ;;
-            esac
+            # An index token is a bare integer, a range, or a comma-list of both
+            # (1, 1-5, 1,3-5). The old case arms only matched single 1-3 digit
+            # ints and simple N-M ranges, so a comma-list index before an action
+            # word (e.g. `m 1,3-5 --pdf`, which routes through here) was silently
+            # dropped. Match the full shape the top-level loop uses instead.
+            if [[ "$arg" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
+                # Skip the query token for positional-q mode
+                if [[ "$query_mode" == "positional-q" && "$caller_action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
+                    continue
+                fi
+                PA_MESSAGE_NUMBERS+=("$arg")
+            fi
         done
+        # Rewrite bare text=... to --text=... (and error on an empty body) for
+        # every trailing arg. Shared with the account-prefixed router path via
+        # _rewrite_bare_text_flags so the two can't drift (see 2026-07-27/08-24).
+        local -a _trailing_in=()
         for ((i=action_word_index+1; i<${#PA_REMAINING[@]}; i++)); do
-            PA_TRAILING_ARGS+=("${PA_REMAINING[i]}")
+            _trailing_in+=("${PA_REMAINING[i]}")
         done
+        _rewrite_bare_text_flags "${_trailing_in[@]+"${_trailing_in[@]}"}"
+        PA_TRAILING_ARGS+=("${RBT_OUT[@]+"${RBT_OUT[@]}"}")
 
         # m is the user-forgiving layer: default missing index to 1 for actions that need one
         if [[ ${#PA_MESSAGE_NUMBERS[@]} -eq 0 ]]; then
@@ -1663,15 +1989,35 @@ parse_action_args() {
                     ;;
             esac
         fi
+
+        # Last-index-wins for !!-augmented compose actions, mirroring the
+        # single-message READ collapse in the i|q and sent handlers:
+        # `m 1 4 reply-all` is `m 1 4` recalled with !! plus an action
+        # appended, so the target is 4, not 1 (bit us 2026-08-06). Collapse
+        # only when EVERY token is a bare single integer; ranges/comma-lists
+        # stay multi. Bulk verbs (trash/archive/...) keep their full list.
+        if _is_single_target_action "$PA_ACTION_WORD" && (( ${#PA_MESSAGE_NUMBERS[@]} > 1 )); then
+            local _all_bare_single=1 _mn
+            for _mn in "${PA_MESSAGE_NUMBERS[@]}"; do
+                if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                    _all_bare_single=0
+                    break
+                fi
+            done
+            if (( _all_bare_single )); then
+                log_warn "'$PA_ACTION_WORD' takes one message; using last index #${PA_MESSAGE_NUMBERS[-1]}"
+                PA_MESSAGE_NUMBERS=("${PA_MESSAGE_NUMBERS[-1]}")
+            fi
+        fi
     fi
 }
 
 # smart_send() function removed - logic consolidated into direct_send()
 # This eliminates the need for the external send script
 
-ACTIONS_SHORT="i sent q d x urls scheduled"
+ACTIONS_SHORT="i out sent q d x urls meets scheduled"
 ACTIONS_SEND="send c"
-ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive thread read unread sfwd sreply sreply-all"
+ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive thread read unread sfwd sreply sreply-all pdf"
 
 usage() {
     local topic="${1:-basic}"
@@ -1688,7 +2034,7 @@ USAGE
 BASIC ACTIONS
     m                 Default inbox (first 20 messages)
     m pp2             Page 2 inbox (messages 21-40)
-    m sent            Sent messages
+    m out             Your outgoing messages (the old name `m sent` is blocked)
 EOF
             local example_acct="${M_DEFAULT_ACCOUNT:-g}"
             if [[ -n "${EMAILS[$example_acct]:-}" ]]; then
@@ -1702,10 +2048,14 @@ EOF
     m m 3             Archive message #3 (removes from inbox)
 
 FLAGS
-    -w, --web         Force browser instead of CLI
+    -w, --web         Open in the browser instead of the CLI. With a bare
+                      index (m 1 -w, m out 1 -w) opens THAT message; with a
+                      query (m q from:alice -w) opens the Gmail search
     -N, --no-cache    Bypass listing cache; force fresh fetch
     -i, --important   Filter noisy senders from the listing (view-only; edit
                       ~/.config/m/view-filter.txt). E.g. m -i, m q 'j2' -i
+    --all             Search ALL mail (adds in:anywhere: Spam and Trash too).
+                      E.g. m --all q 'to:someone', m q 'invoice' --all
     -S [FILE]         Save message: -S FILE writes decoded text; bare -S to spool
     --raw             With -S, save original MIME bytes (base64) + attachments
     -p, --peek        Save message(s) and put a /peek command on the clipboard
@@ -1727,10 +2077,13 @@ ACTIONS - Complete Reference
 
 READING
     i         inbox (default)        List recent messages
-    sent                             List sent messages
+    out                              List your outgoing (sent) messages
+                                     (the old verb `sent` is retired: it now
+                                     hard-blocks and tells you to type `out`)
     q         search                 Search with Gmail query syntax
     d         drafts                 View drafts (web only)
     x         spam                   Check spam folder
+    meets                            Scan cached list for Zoom/Meet links; pick one to open
 
     INDEX        Read one message (e.g. m 3)
     START-END    List those index rows (e.g. m 45-67) — listing, not bodies
@@ -1740,7 +2093,7 @@ SAVING TO A FILE
     INDEX -S FILE        Save message to FILE, decoded/human-readable (ASCII)
     INDEX -S             Save decoded text to /tmp/spool (auto-named)
     INDEX -S FILE --raw  Save original MIME bytes (base64 intact, + attachments)
-    sent INDEX -S FILE   Same, for a sent message
+    out INDEX -S FILE    Same, for an outgoing (sent) message
     Default save is the -t render: headers, '---', then the decoded body.
     Use --raw only when you need the wire format or attachments saved.
 
@@ -1748,12 +2101,19 @@ COMPOSING
     send      Send .eml file or compose (routes to send script)
               --after TIME  Schedule send (e.g. --after "5m" or --after "tomorrow 9am")
     c         Same as send (compose shorthand)
-    draft     Save message to drafts
+    draft INDEX                     Reply to a message but save as a draft
+                                    instead of sending (opens the editor)
 
 MESSAGE ACTIONS
     reply INDEX                      Reply to message
     reply-all INDEX                  Reply-all (includes To and Cc)
     fwd INDEX RECIPIENT             Forward message
+    reply INDEX --text="body"        Reply with this body, skip the editor.
+                                     Shorthand: "m INDEX text=body" implies
+                                     reply (bare text= without dashes is fine).
+                                     Bare -t just previews. An empty body
+                                     (text="") is an error; use "draft" to
+                                     compose a draft. fwd/sreply/sfwd too.
     open INDEX                      Open in Gmail web UI
     trash INDEX                     Move to trash
     archive INDEX                   Archive message (removes from inbox)
@@ -1800,6 +2160,8 @@ SEARCH SYNTAX
 BASIC SEARCH
     m q "from:alice"                  Search by sender
     m -q "subject:urgent"             Alternative syntax
+    m --all q "from:alice"            Search ALL mail, Spam and Trash
+                                      included (adds in:anywhere)
 
 ADVANCED SEARCH
     m -q "QUERY" INDEX                Read message INDEX from results
@@ -1830,7 +2192,6 @@ CONFIG FILES
 
 ENVIRONMENT VARIABLES
     M_DEFAULT_ACCOUNT=g               Default account
-    M_RANGE_WARNING_LIMIT=50          Warn on ranges larger than this
     M_QUIET_MODE=0                    Suppress progress messages (0/1)
 
 TAB COMPLETION
@@ -1845,8 +2206,8 @@ BASIC READING
     m                                     Default inbox
     m g                                   Gmail inbox
     m u                                   Columbia inbox
-    m sent                                Your sent messages
-    m sent pp2                            Page 2 of sent messages
+    m out                                 Your outgoing (sent) messages
+    m out pp2                             Page 2 of outgoing messages
 
 SEARCHING
     m q "from:alice"                      Find emails from Alice
@@ -1863,7 +2224,7 @@ READING MESSAGES
 
 SAVING MESSAGES TO A FILE
     m 3 -S /tmp/msg.txt                   Save msg #3, decoded/human-readable
-    m sent 3 -S /tmp/sent.txt             Save sent msg #3, decoded
+    m out 3 -S /tmp/out.txt               Save outgoing msg #3, decoded
     m 3 -S                                Save decoded text to /tmp/spool
     m 3 -S /tmp/msg.eml --raw             Save original MIME (base64) + attachments
 
@@ -1890,6 +2251,8 @@ REPLYING & FORWARDING
     m reply 3                             Reply to message #3
     m reply-all 3                         Reply-all to message #3
     m fwd 3 user@example.com              Forward message #3
+    m 3 text="on my way"                  Reply to #3 with this body, no editor
+    m 3 draft                             Compose a reply to #3, save as draft
     m q "from:alice" 1 reply              Find Alice email, reply to first
 
 MANAGING MESSAGES
@@ -1902,15 +2265,24 @@ MANAGING MESSAGES
 MULTI-ACCOUNT EXAMPLES
     m g q "from:boss"                     Search Gmail account
     m u send prof@columbia.edu            Columbia account interactive send
-    m j sent                              Joint account sent messages
+    m j out                               Joint account outgoing (sent) messages
     m l reply 1                           Lake account reply to message #1
+
+    m h,g i                               Inbox for hackNY AND personal, one after another
+    m h,g,cu meets                        Zoom/Meet links across 3 accounts in one command
+    (Comma-list runs the same command once per account, in order. Read-only
+    actions only, e.g. i/out/q/urls/meets; send/reply/trash refuse to fan out.)
 
 ADVANCED WORKFLOWS
     m q "is:unread" 1-3 -p               Peek at first 3 unread emails
-    m sent 1 fwd user@ex.com             Forward your sent message #1
+    m out 1 fwd user@ex.com              Forward your outgoing (sent) message #1
     m --dry-run send user@ex.com         Preview send without actually sending
     m -N q "from:alice"                  Force fresh search (bypass cache)
-    m urls 3                             Extract URLs from message #3
+    m urls 3                             Extract URLs from message #3 (interactive menu)
+    m 3 --urls-tag                       Same menu, each URL labelled with its HTML anchor text
+    m 3 --urls-slug                      Same menu, each URL labelled with an LLM-learned short slug
+    m q shapiro 7 urls 2                  Open the 2nd URL in message #7 directly (no menu)
+    m h meets                            Scan cached list for Zoom/Meet links, pick one to open
 EOF
             ;;
         *)
@@ -1935,8 +2307,14 @@ EOF
 #      sets $account
 #   5. Anything else accumulates in `rest`
 # After the loop, the action router (case "$action") consumes `rest`.
-web=0; dry_run=0; no_cache=0; important_filter=0
+web=0; dry_run=0; no_cache=0; important_filter=0; spam_mail_flag=0; all_mail_flag=0
 action=""; account=""; rest=()
+# raw_action_token remembers the LITERAL verb the user typed for the action,
+# captured before any normalization. We need it to tell `m out` apart from
+# `m sent`: both resolve to the internal action `sent`, but the literal `sent`
+# spelling is retired and must hard-block (retraining), while `out` proceeds.
+raw_action_token=""
+multi_accounts=(); multi_account_index=-1
 i=0; args=("$@")
 
 # `open` is both a top-level action (open msg in web UI) and a trailing
@@ -1965,6 +2343,21 @@ while (( i < ${#args[@]} )); do
         # flag here was dead: nothing downstream ever read it, so `m ... --urls`
         # silently dumped the body instead of extracting URLs.
         rest+=("urls")
+    elif [[ "$arg" == "--urls-tag" ]]; then
+        # Same routing as --urls, but ask the backend to label each menu row
+        # with the link's HTML anchor text (deterministic, no LLM). The
+        # --display=tag token rides along in `rest` through the urls) dispatch
+        # case and is parsed by the backend's urls mode.
+        rest+=("urls" "--display=tag")
+    elif [[ "$arg" == "--urls-slug" ]]; then
+        # Same routing as --urls, but ask the backend to label each menu row
+        # with a short LLM-learned slug (one claude call per menu open).
+        rest+=("urls" "--display=slug")
+    elif [[ "$arg" == "--pdf" ]]; then
+        # `--pdf` is an alias for the `pdf` action word (one PDF per selected
+        # message into /tmp/spool/pdf/). Same routing rationale as `--urls`:
+        # push it into rest so `m 1-4,5 --pdf` behaves like `m 1-4,5 pdf`.
+        rest+=("pdf")
     elif [[ "$arg" == "--cal" ]]; then
         # `--cal` is advertised in the usage banner but was never implemented:
         # there is no `cal` mode in gmail-api-rw and no handler here, so the old
@@ -1980,6 +2373,14 @@ while (( i < ${#args[@]} )); do
         # senders) to the listing/query. Non-destructive; nothing is muted,
         # marked read, or trashed. Applied below where query_string is finalized.
         important_filter=1
+    elif [[ "$arg" == "--all" ]]; then
+        # --all means ALL MAIL: search everywhere (Inbox, Sent, Archive, Spam, Trash).
+        # Will be applied in the action handler after query parsing.
+        all_mail_flag=1
+    elif [[ "$arg" == "--spam" ]]; then
+        # --spam means SPAM FOLDER ONLY: search only in the spam folder.
+        # Will be applied in the action handler after query parsing.
+        spam_mail_flag=1
     elif [[ "$arg" == "--quiet" ]]; then
         M_QUIET_MODE=1
     elif [[ "$arg" == "-h" || "$arg" == "--help" || "$arg" == "?" ]]; then
@@ -2025,14 +2426,43 @@ while (( i < ${#args[@]} )); do
             echo "Examples: --after '5m', --after 'tomorrow 9am', --after '2024-05-24 14:30'" >&2
             exit 1
         fi
+    elif [[ "$arg" == "-e" ]]; then
+        # -e <alias>: explicit account selection (mutt-style; mlook emits
+        # `m send addr -e u`). Must be consumed HERE, before the
+        # account-resolution branch: without this branch the alias was
+        # stolen as the account (so routing looked right) while the bare
+        # `-e` leaked into rest and blew up direct_send's parser under
+        # set -u ("send_args[i+1]: unbound variable").
+        if (( i + 1 < ${#args[@]} )) && [[ -n "${ACCTS[${args[i+1]}]:-}" ]]; then
+            i=$((i + 1))
+            account="${args[i]}"
+        else
+            log_error "-e requires a known account alias (e.g. -e u); got '${args[i+1]:-nothing}'"
+            exit 1
+        fi
     elif [[ -z "$action" ]] && [[ "$arg" == "open" ]] && (( attach_save_in_args )); then
         # `-A open`: 'open' is a trailing modifier, not the top-level action.
         # Let it fall through to rest so the inbox handler's -A open path fires.
         rest+=("$arg")
     elif [[ -z "$action" ]] && [[ " $ACTIONS_SHORT $ACTIONS_SEND $ACTIONS_PASSTHRU " == *" $arg "* ]]; then
         action="$arg"
+        raw_action_token="$arg"
     elif [[ "$arg" == "m" ]] && [[ -z "$action" ]]; then
         action="archive"
+    elif [[ -z "$account" ]] && [[ "$arg" == *,* ]] && [[ -n "${ACCTS[${arg%%,*}]:-}" ]]; then
+        # Multi-account syntax: `m h,g,cu i` runs the same command once per
+        # alias. Validate every comma-separated piece up front (all-or-
+        # nothing) so a typo fails loudly here instead of producing a
+        # confusing downstream error from just the first bad alias reached.
+        IFS=',' read -r -a multi_accounts <<< "$arg"
+        for _ma in "${multi_accounts[@]}"; do
+            if [[ -z "${ACCTS[$_ma]:-}" ]]; then
+                log_error "unknown account alias '$_ma' in '$arg'"
+                exit 1
+            fi
+        done
+        unset _ma
+        multi_account_index=$i
     elif [[ -z "$account" ]] && [[ -n "${ACCTS[$arg]:-}" ]]; then
         account="$arg"
     else
@@ -2041,39 +2471,20 @@ while (( i < ${#args[@]} )); do
     i=$((i + 1))
 done
 
-# Check for "sent" typo: if action is "sent" but rest contains email recipients
-# or .eml files, likely meant "send". Prompt for confirmation before proceeding.
-# Exception: a .eml right after -S/--save is a SAVE TARGET (m sent 3 -S out.eml),
-# not a send payload — don't nag about it.
-if [[ "$action" == "sent" ]] && (( ${#rest[@]} > 0 )); then
-    _prev=""
-    for _r in "${rest[@]}"; do
-        if [[ "$_r" =~ \.eml$ ]] && [[ "$_prev" == "-S" || "$_prev" == "--save" ]]; then
-            _prev="$_r"
-            continue
-        fi
-        _prev="$_r"
-        if [[ "$_r" =~ ^[^[:space:]]+@[^[:space:]]+\.[^[:space:]]+$ ]] || [[ "$_r" =~ \.eml$ ]]; then
-            echo "🛑 did you mean send? y/N"
-            read -r typo_response
-            case "$typo_response" in
-                [yY]|[yY][eE][sS])
-                    action="send"
-                    if [[ "$_r" =~ \.eml$ ]]; then
-                        log_warn "'sent' corrected to 'send' for file '$_r'"
-                    else
-                        log_warn "'sent' corrected to 'send' for recipient '$_r'"
-                    fi
-                    break 2
-                    ;;
-                *)
-                    # User said no, continue with 'sent' action
-                    break
-                    ;;
-            esac
-        fi
-    done
-fi
+# NOTE (2026-08-27): the old "did you mean send?" confirm gate that fired when
+# action was `sent` and rest held an email-shaped token has been REMOVED. `out`
+# is the READ verb for outgoing mail, and reading against a recipient query is
+# legitimate and common (`m out q chris@x.com`, `m u out q addr 1 -p`). The
+# interstitial prompt on every such read was pure friction; it never protected
+# a real send (the read verb cannot put mail on the wire).
+#
+# The literal `sent` verb itself is now RETIRED and hard-blocks (stop sign,
+# non-zero exit) at the `raw_action_token == "sent"` check below, near the
+# `out` -> internal-`sent` normalization. That block is intentional retraining
+# toward `m out`; it is NOT the send-typo gate and carries a different message.
+# The real send guards (backend confirm gate, send hook, fan-out refusal) are
+# untouched.
+:  # (out/sent send-typo confirm gate removed 2026-08-27; see note above)
 
 # Infer 'send' if no action was given but rest contains an email recipient.
 # This is the m-is-forgiving layer doing its job: `m foo@bar.com -c baz@qux.com`
@@ -2089,8 +2500,125 @@ if [[ -z "$action" ]] && (( ${#rest[@]} > 0 )); then
     done
 fi
 
+# A bare first token that is neither a known action, an account alias, nor an
+# index-shaped value never had a meaning: it fell through to rest, action
+# defaulted to i, and the token was forwarded to the backend as an index,
+# surfacing a confusing "Invalid index: 'foo'". Catch the mistyped-verb case
+# here and say so plainly. Guarded tightly so real rest tokens still pass:
+# only fires when no action word was recognized, no account was chosen, and
+# the first rest token is a plain word (no leading '-', no '=', not numeric,
+# not a range, not a ppN page token). Queries go through `q` (which sets
+# action), and body shorthands carry '=' , so neither is caught here.
+if [[ -z "$action" && ${#rest[@]} -gt 0 ]]; then
+    _first="${rest[0]}"
+    case "$_first" in
+        -*|*=*) : ;;                                   # a flag or a body token
+        [0-9]|[0-9][0-9]|[0-9][0-9][0-9]) : ;;         # bare index
+        [0-9]*-[0-9]*|[0-9]*,[0-9]*) : ;;              # range / multi-select
+        pp[0-9]*) : ;;                                 # page token
+        *[!a-zA-Z0-9_]*) : ;;                          # not a plain word; leave it
+        *)
+            echo "m: unknown action '$_first'" >&2
+            echo "Run 'm --help=actions' for the list of actions." >&2
+            exit 1
+            ;;
+    esac
+    unset _first
+fi
+
+# A bare `-N` token (e.g. `m q abigail -2`) has no meaning in either layer.
+# It looks like a flag, so the unknown-action guard above passes it through
+# via its `-*` case, and it reaches the backend's parse_index_token, which
+# splits on '-', gets an empty first piece, and dies with the opaque
+# "Invalid index range: '-2'". Reject it here instead, naming both plausible
+# intents. Deliberately NOT auto-rewritten to `-n N`: the index/query
+# extraction downstream would pull the N out as a message index and leave
+# `-n` stranded with no value, yielding `-q abigail 2 -n` and a different
+# backend error. Two readings this ambiguous are the user's to resolve.
+if (( ${#rest[@]} > 0 )); then
+    for _t in "${rest[@]}"; do
+        if [[ "$_t" =~ ^-([0-9]+)$ ]]; then
+            _n="${BASH_REMATCH[1]}"
+            log_error "'-$_n' is not a flag or an index."
+            echo "  To show $_n messages:   m ${account:+$account }${action:-i} ... -n $_n" >&2
+            echo "  To read message #$_n:   m ${account:+$account }${action:-i} ... $_n" >&2
+            exit 1
+        fi
+    done
+    unset _t _n
+fi
+
 # defaults
 action="${action:-i}"
+
+# `out` is the canonical verb for reading OUTGOING mail (was `sent`, which was
+# one keystroke from `send` and read-only-vs-on-the-wire ambiguous).
+#
+# The literal `sent` verb is RETIRED: if the user typed it, hard-block with a
+# stop sign and exit non-zero WITHOUT reading any mail. This is deliberate
+# finger-retraining toward `m out`, not a typo nudge (do not resurrect the old
+# "did you mean send?" text; `sent` is a READ verb, not a send verb).
+#
+# Detection keys off raw_action_token (the LITERAL token the user typed),
+# captured before this point, so it fires ONLY for the user-typed spelling.
+# Internally everything downstream is still keyed on the token `sent` (the
+# `sent)` router arm, open_web's folder scope, the backend `sent` modifier), so
+# `m out` must normalize INTO `action="sent"` here to keep working. Blocking on
+# the post-normalization value would break `out` too; that is why we test the
+# raw token, not $action.
+if [[ "$raw_action_token" == "sent" ]]; then
+    printf '\033[0;31m🛑 use `m out`\033[0m (sent is the old name)\n' >&2
+    exit 2
+fi
+[[ "$action" == "out" ]] && action="sent"
+
+# ========================================================================
+# § MULTI-ACCOUNT: `m h,g,cu i` fans out one command across N accounts
+# ========================================================================
+# Self-invocation, not a loop inside every dispatch branch: every existing
+# single-account code path below (account defaulting, gmail_acct, the
+# entire `case "$action" in` router) is untouched and unaware this exists.
+# Each recursive call is a normal, single-account `m` invocation exactly
+# like today; this block only fires when multi_accounts was populated by
+# the comma-list branch in the parsing loop above, and it always exits
+# before reaching the single-account code.
+if (( ${#multi_accounts[@]} > 0 )); then
+    # Mutating/destructive actions must not silently fan out to N mailboxes
+    # from one typed command, since that is a plausible real mistake (send,
+    # reply, or trash fired at every account because the user habitually
+    # types a multi-account alias), not a feature. Read-only actions are fine.
+    case "$action" in
+        send|c|draft|reply|reply-all|fwd|sfwd|sreply|sreply-all|trash|archive|read|unread)
+            log_error "multi-account (${multi_accounts[*]}) is for read-only actions."
+            echo "  '$action' mutates/sends mail; run it once per account instead." >&2
+            exit 1
+            ;;
+    esac
+
+    worst_exit=0
+    for _acct in "${multi_accounts[@]}"; do
+        log_info "=== ${LABELS[$_acct]:-$_acct} ($_acct) ==="
+        # Rebuild argv from the ORIGINAL args, substituting just the
+        # comma-list token with this one alias. Do not rebuild from $rest:
+        # it has already been mutated by flag-stripping earlier in the
+        # parse loop and no longer reflects the user's original argv.
+        _child_args=()
+        for _j in "${!args[@]}"; do
+            if [[ "$_j" == "$multi_account_index" ]]; then
+                _child_args+=("$_acct")
+            else
+                _child_args+=("${args[_j]}")
+            fi
+        done
+        # `|| _rc=$?` so one failing account doesn't kill the whole loop
+        # under `set -e`, giving every account a chance to run; the worst
+        # exit code seen is what `m` finally reports.
+        _rc=0
+        "$0" "${_child_args[@]}" || _rc=$?
+        (( _rc > worst_exit )) && worst_exit=$_rc
+    done
+    exit "$worst_exit"
+fi
 
 # Set default account from config file, fallback to environment variable, then 'g'
 if [[ -z "$account" ]]; then
@@ -2099,17 +2627,27 @@ if [[ -z "$account" ]]; then
 fi
 
 # pagination
-page_offset=""; page_size=10; filtered_rest=()
+# index_after_page records whether a bare index token appeared AFTER the ppN
+# token in the original argv. Ordering carries intent under !!-recall:
+# `... 1 pp2` (page appended last) means "list page 2", while
+# `... 1 pp2 18` (index appended last) means "read message 18". The
+# page-vs-index arbitration in the i|q handler keys off this flag.
+page_offset=""; page_size=10; filtered_rest=(); index_after_page=0; _seen_pp=0
 for r in "${rest[@]+"${rest[@]}"}"; do
     if [[ "$r" =~ ^pp([0-9]+)$ ]]; then
+        _seen_pp=1
         page_num="${BASH_REMATCH[1]}"
         if (( page_num > 1 )); then
             page_offset="$((( page_num - 1 ) * page_size))"
         fi
     else
+        if (( _seen_pp )) && [[ "$r" == [0-9] || "$r" == [0-9][0-9] || "$r" == [0-9][0-9][0-9] ]]; then
+            index_after_page=1
+        fi
         filtered_rest+=("$r")
     fi
 done
+unset _seen_pp
 rest=("${filtered_rest[@]+"${filtered_rest[@]}"}")
 
 # look up account
@@ -2163,9 +2701,9 @@ case "$action" in
             done
 
             # If we have -A open, remove 'open' from the action words list
-            action_words="reply reply-all fwd draft open trash archive thread read unread sfwd sreply sreply-all urls grep"
+            action_words="reply reply-all fwd draft open trash archive thread read unread sfwd sreply sreply-all urls pdf grep"
             if [[ "$has_trailing_open" == "1" ]]; then
-                action_words="reply reply-all fwd draft trash archive thread read unread sfwd sreply sreply-all urls grep"
+                action_words="reply reply-all fwd draft trash archive thread read unread sfwd sreply sreply-all urls pdf grep"
             fi
 
             # Delegate arg parsing to the shared helper; q-action treats rest[0] as query.
@@ -2215,11 +2753,18 @@ case "$action" in
             fi
 
             # Parse remaining arguments to find peek flags, verbose flags, meta flag, and message numbers
+            # Note: all_mail_flag and spam_mail_flag may have been set by the main parsing loop (--all/--spam),
+            # but we also check rest[] for them again to support mixed usage (e.g., `m i --all` with --all in rest).
             verbose_flag=0
             meta_flag=0
             open_attachments_flag=0
             save_attachments_only_flag=0
             open_after_save_flag=0
+            # Preserve global flags set by main parser, but allow them to be overridden by rest[] scan
+            all_mail_flag_from_global=$all_mail_flag
+            spam_mail_flag_from_global=$spam_mail_flag
+            all_mail_flag=$all_mail_flag_from_global
+            spam_mail_flag=$spam_mail_flag_from_global
             save_file=""
             raw_save_flag=0
             for i in "${!rest[@]}"; do
@@ -2227,6 +2772,19 @@ case "$action" in
                 case "$arg" in
                     --raw)
                         raw_save_flag=1
+                        ;;
+                    -n|--count)
+                        # -n N is the backend's --count. Keep the flag AND its
+                        # value together in filtered_args, and mark the value
+                        # consumed so the bare-integer case below cannot claim
+                        # it as a message index. Without this, `m q abigail -n 2`
+                        # became `-q abigail 2 -n`, stranding -n with no value.
+                        filtered_args+=("$arg")
+                        next_idx=$(( i + 1 ))
+                        if [[ -n "${rest[next_idx]:-}" && "${rest[next_idx]}" =~ ^[0-9]+$ ]]; then
+                            filtered_args+=("${rest[next_idx]}")
+                            rest[next_idx]="__M_CONSUMED__"
+                        fi
                         ;;
                     -S|--save)
                         # -S FILE saves the raw .eml to FILE (backend OUTPUT
@@ -2259,47 +2817,114 @@ case "$action" in
                     -A|--save-attachments-only)
                         save_attachments_only_flag=1
                         ;;
+                    --all)
+                        # --all means ALL MAIL: fold Gmail's in:anywhere into
+                        # the query, which widens scope to Spam and Trash on
+                        # top of the default search scope (inbox, sent,
+                        # archive, and every category tab). The backend's
+                        # --all is reply-all, a silent no-op here, so consuming
+                        # it (rather than passing it through) loses nothing;
+                        # reply flows never reach this loop (the action-word
+                        # exec above fires first), so reply-all is unaffected.
+                        # Hit 2026-08-14: `m h --all q '<terms>'` was typed
+                        # expecting everything-including-spam-and-trash scope.
+                        all_mail_flag=1
+                        ;;
+                    --spam)
+                        # --spam means SPAM FOLDER ONLY: fold Gmail's in:spam into
+                        # the query, which narrows scope to just the spam folder.
+                        # Useful when searching for a message that may have been
+                        # misflagged as spam. Can be combined with other searches:
+                        # `m --spam q 'grieco'` searches spam for grieco-related messages.
+                        spam_mail_flag=1
+                        ;;
                     open)
                         if (( save_attachments_only_flag )); then
                             open_after_save_flag=1
                         fi
                         ;;
                     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                        # Single message number — but if action is 'q' and this
-                        # is rest[0], it's the query string (e.g. 'm q 31'), not an index.
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                        # Single message number; but if action is 'q' and this
+                        # is the query token, it's the query string (e.g. 'm q 31'), not an index.
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
                             continue
                         fi
                         message_numbers+=("$arg")
                         ;;
                     [0-9]*-[0-9]* | [0-9]*,[0-9]*)
                         # Message range (e.g. 1-5, 45-120) or comma-list (1,3,8).
+                        # q-action exception FIRST: the query token is not an
+                        # index, and must not reach filtered_args either. A query
+                        # like '2,098.71' matches this glob but fails the shape
+                        # regex below; validating shape first duplicated the query
+                        # into filtered_args, which the backend read as a
+                        # positional index ("Invalid index: '098.71'").
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
+                            continue
+                        fi
                         # Validate the full shape so we don't swallow stray tokens
                         # that merely contain a digit and a dash.
                         if [[ ! "$arg" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
                             filtered_args+=("$arg")
                             continue
                         fi
-                        # Same q-action exception: rest[0] is the query, not an index.
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
-                            continue
-                        fi
                         message_numbers+=("$arg")
                         ;;
                     *)
                         # Skip the query string argument for 'q' action (it's already in query_string)
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
                             continue
                         fi
                         # Skip action words and flags that are handled separately
                         if [[ "$arg" == "$action_word" ]] || [[ "$arg" =~ ^(-v|--verbose|-A|--save-attachments-only|-p|--peek|--meta|--open-attachments|open)$ ]]; then
                             continue
                         fi
+                        # A bare plain-word token (letters/digits/underscore, not
+                        # purely numeric) that reaches here was expected to be a
+                        # message index but is not one: bare ints and ranges were
+                        # already claimed by the numeric case arms above. It is
+                        # most likely a fat-fingered account alias (`m i xyz`),
+                        # which previously fell through to the backend and surfaced
+                        # the opaque "Invalid index: 'xyz'". Disambiguate here,
+                        # where the ACCTS table lives: if it is NOT a known account
+                        # alias, name both plausible intents and stop. Flags (`-x`,
+                        # `-S`, `-t`, `--foo`) and body/query tokens carrying `=`
+                        # are excluded by the plain-word shape, so they still pass
+                        # through untouched.
+                        if [[ "$arg" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] && [[ -z "${ACCTS[$arg]:-}" ]]; then
+                            _acct_list="$(printf '%s ' "${!ACCTS[@]}" | tr ' ' '\n' | sort | tr '\n' ' ')"
+                            _acct_list="${_acct_list% }"
+                            log_error "'$arg' is not a valid index or known account (accounts: ${_acct_list})"
+                            exit 1
+                        fi
                         # Pass through other flags to gmail-api-rw (-x, -S, -t, etc.)
                         filtered_args+=("$arg")
                         ;;
                 esac
             done
+
+            # --all: widen scope to everything, Spam and Trash included. Done
+            # here, after the flag scan and before any backend call, so every
+            # downstream path (peek, list, read-one, normal) inherits it.
+            if (( all_mail_flag )); then
+                if [[ -n "$query_string" ]]; then
+                    query_string="in:anywhere ${query_string}"
+                else
+                    query_string="in:anywhere"
+                fi
+            fi
+
+            # --spam: narrow scope to spam folder only. Takes precedence over
+            # --all if both are given (spam is more specific). Done here, after
+            # the flag scan and before any backend call, so every downstream path
+            # (peek, list, read-one, normal) inherits it.
+            if (( spam_mail_flag )); then
+                if [[ -n "$query_string" ]]; then
+                    query_string="in:spam ${query_string}"
+                else
+                    query_string="in:spam"
+                fi
+            fi
 
             # Default the index to 1 (most recent) when the user clearly meant
             # to act on a single message but left the number off. A read-intent
@@ -2316,6 +2941,31 @@ case "$action" in
                    || [[ " ${filtered_args[*]} " =~ " -t " ]] \
                    || [[ " ${filtered_args[*]} " =~ " -S " ]]; then
                     message_numbers=(1)
+                fi
+            fi
+
+            # Page-vs-index arbitration: the LAST-typed token wins (matches the
+            # !!-recall habit). A trailing ppN means "give me a LISTING page",
+            # so bare indices typed before it are dropped (with a warning). But
+            # a bare index typed AFTER ppN (e.g. `... 1 pp2 18`) means "read
+            # message 18 from that page": keep the indices and fall through to
+            # READ MODE, which already fetches enough rows for the page and
+            # treats indices as global. Ranges (e.g. "45-67 pp2") still list on
+            # the range path below, and read-intent flags (-x/-p/-S/-A/...) are
+            # honored above, so leave those alone: only strip when EVERY token
+            # is a bare single integer and none followed the page token.
+            if [[ -n "$page_offset" && ${#message_numbers[@]} -gt 0 && "$index_after_page" == "0" ]]; then
+                _pg_all_bare_single=1
+                for _mn in "${message_numbers[@]}"; do
+                    if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                        _pg_all_bare_single=0
+                        break
+                    fi
+                done
+                if (( _pg_all_bare_single )); then
+                    page_num=$(( page_offset / page_size + 1 ))
+                    log_warn "page 'pp$page_num' requested; ignoring index '${message_numbers[*]}' and listing the page"
+                    message_numbers=()
                 fi
             fi
 
@@ -2337,8 +2987,13 @@ case "$action" in
                 fi
 
                 # Execute command - it will save files and copy "/peek {path}" to clipboard
-                # Redirect output to suppress message display during peek
-                if "${peek_cmd[@]}" >/dev/null 2>&1; then
+                # Capture stderr so warnings (range past last match) and real
+                # errors surface instead of a bare red X, while still
+                # suppressing the per-message chatter during peek
+                peek_err=$(mktemp)
+                if "${peek_cmd[@]}" >/dev/null 2>"$peek_err"; then
+                    grep '⚠' "$peek_err" >&2 || true
+                    rm -f "$peek_err"
                     # Get the "/peek {path}" command from clipboard
                     peek_command=$(pbpaste)
 
@@ -2350,6 +3005,8 @@ case "$action" in
                     fi
                 else
                     echo "❌ Failed to save messages for peek" >&2
+                    tail -3 "$peek_err" >&2 || true
+                    rm -f "$peek_err"
                     exit 1
                 fi
                 else
@@ -2588,6 +3245,20 @@ case "$action" in
                             open_after_save_flag=1
                         fi
                         ;;
+                    -n|--count)
+                        # The sent listing path builds its own `-n "$page_size"`
+                        # (see the gmail_cmd construction below) and ignores
+                        # filtered_args, so forwarding the flag here would be
+                        # dropped. Set page_size instead, and mark the value
+                        # consumed so it is not read as a message index.
+                        next_idx=$(( i + 1 ))
+                        if [[ -n "${rest[next_idx]:-}" && "${rest[next_idx]}" =~ ^[0-9]+$ ]]; then
+                            page_size="${rest[next_idx]}"
+                            rest[next_idx]="__M_CONSUMED__"
+                        else
+                            filtered_args+=("$arg")
+                        fi
+                        ;;
                     -S|--save|-save)
                         # Save .eml to a file. A following non-flag token is the
                         # destination path. Default saves decoded/ASCII text;
@@ -2603,23 +3274,29 @@ case "$action" in
                         # filename already eaten by a preceding -S/--save
                         ;;
                     [0-9]|[0-9][0-9]|[0-9][0-9][0-9])
-                        # Single message number — but if action is 'q' and this
-                        # is rest[0], it's the query string (e.g. 'm q 31'), not an index.
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
+                        # Single message number; but if action is 'q' and this
+                        # is the query token, it's the query string (e.g. 'm q 31'), not an index.
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
                             continue
                         fi
                         message_numbers+=("$arg")
                         ;;
                     [0-9]*-[0-9]* | [0-9]*,[0-9]*)
                         # Message range (e.g. 1-5, 45-120) or comma-list (1,3,8).
+                        # q-exception FIRST, mirroring the i|q arm: a query-ish
+                        # token must never fall through to filtered_args. Here
+                        # $action is always "sent" (query arrives via literal-q
+                        # extraction) and filtered_args is currently write-only,
+                        # so this ordering is latent; keep it correct anyway so
+                        # wiring filtered_args into a backend call later cannot
+                        # resurrect the "Invalid index" leak.
+                        if [[ "$action" == "q" && "$i" == "$PA_QUERY_INDEX" ]]; then
+                            continue
+                        fi
                         # Validate the full shape so we don't swallow stray tokens
                         # that merely contain a digit and a dash.
                         if [[ ! "$arg" =~ ^[0-9]+([,-][0-9]+)*$ ]]; then
                             filtered_args+=("$arg")
-                            continue
-                        fi
-                        # Same q-action exception: rest[0] is the query, not an index.
-                        if [[ "$action" == "q" && "$i" == "0" ]]; then
                             continue
                         fi
                         message_numbers+=("$arg")
@@ -2682,8 +3359,13 @@ case "$action" in
                     peek_cmd=(gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]}" -peek)
 
                     # Execute command - it will save files and copy "/peek {path}" to clipboard
-                    # Redirect output to suppress message display during peek
-                    if "${peek_cmd[@]}" >/dev/null 2>&1; then
+                    # Capture stderr so warnings (range past last match) and
+                    # real errors surface instead of a bare failure line, while
+                    # still suppressing the per-message chatter during peek
+                    peek_err=$(mktemp)
+                    if "${peek_cmd[@]}" >/dev/null 2>"$peek_err"; then
+                        grep '⚠' "$peek_err" >&2 || true
+                        rm -f "$peek_err"
                         # Get the "/peek {path}" command from clipboard
                         peek_command=$(pbpaste)
 
@@ -2693,7 +3375,9 @@ case "$action" in
                             echo "⚠️ Expected /peek command in clipboard, got: $peek_command" >&2
                         fi
                     else
-                        echo "⚠️ Failed to save messages for peek" >&2
+                        echo "❌ Failed to save messages for peek" >&2
+                        tail -3 "$peek_err" >&2 || true
+                        rm -f "$peek_err"
                         exit 1
                     fi
                 elif (( save_flag )); then
@@ -2812,18 +3496,30 @@ case "$action" in
         # The compose verb treats every positional as a recipient, so an index
         # plus a message-action word would be coined into junk recipients
         # (1@gmail.com, fwd@gmail.com) and nearly emailed to strangers. If the
-        # args begin with <integer> <message-action>, the user meant the SENT
-        # action (sfwd/sreply) or the per-message action, not compose. Refuse
-        # loudly with the correct command instead of fabricating recipients.
-        if (( ${#rest[@]} >= 2 )) \
-           && [[ "${rest[0]}" =~ ^[0-9]+$ ]] \
-           && [[ " reply reply-all fwd forward draft open trash archive thread read unread urls " == *" ${rest[1]} "* ]]; then
-            _idx="${rest[0]}"; _act="${rest[1]}"; _tail=("${rest[@]:2}")
+        # first POSITIONALS are <integer> <message-action>, the user meant the
+        # SENT action (sfwd/sreply) or the per-message action, not compose.
+        # Refuse loudly with the correct command instead of fabricating
+        # recipients. Anchoring at rest[0] literally was fail-open: a leading
+        # flag (`m send -v 1 fwd`) shifted the integer off index 0 and the
+        # junk recipients went through (same class as the q-query rest[0] bug,
+        # 2026-08-15), so skip leading flags and their values first.
+        _sg=0
+        while (( _sg < ${#rest[@]} )); do
+            case "${rest[_sg]}" in
+                -s|--subject|-a|--attach|-c|--cc|-b|--bcc) _sg=$((_sg + 2)) ;;
+                -*) _sg=$((_sg + 1)) ;;
+                *) break ;;
+            esac
+        done
+        if (( ${#rest[@]} >= _sg + 2 )) \
+           && [[ "${rest[_sg]}" =~ ^[0-9]+$ ]] \
+           && [[ " reply reply-all fwd forward draft open trash archive thread read unread urls " == *" ${rest[_sg+1]} "* ]]; then
+            _idx="${rest[_sg]}"; _act="${rest[_sg+1]}"; _tail=("${rest[@]:_sg+2}")
             case "$_act" in
-                fwd|forward) _suggest="m sent ${_idx} fwd ${_tail[*]}  (or: m sfwd ${_idx} ${_tail[*]})" ;;
-                reply)       _suggest="m sent ${_idx} reply  (or: m sreply ${_idx})" ;;
-                reply-all)   _suggest="m sent ${_idx} reply-all  (or: m sreply-all ${_idx})" ;;
-                *)           _suggest="m sent ${_idx} ${_act} ${_tail[*]}" ;;
+                fwd|forward) _suggest="m out ${_idx} fwd ${_tail[*]}  (or: m sfwd ${_idx} ${_tail[*]})" ;;
+                reply)       _suggest="m out ${_idx} reply  (or: m sreply ${_idx})" ;;
+                reply-all)   _suggest="m out ${_idx} reply-all  (or: m sreply-all ${_idx})" ;;
+                *)           _suggest="m out ${_idx} ${_act} ${_tail[*]}" ;;
             esac
             log_error "'send' composes a new message; '${_idx} ${_act}' is a message action, not a recipient."
             echo "   You typed:  m send ${rest[*]}" >&2
@@ -2909,13 +3605,47 @@ case "$action" in
                 # instead of the more verbose "m u send -H file.eml -a att.pdf"
                 #
                 fixed_args=()
-                for arg in "${rest[@]+"${rest[@]}"}"; do
-                    if [[ "$arg" =~ \.eml$ ]] && [[ ! "$arg" =~ ^-H$ ]]; then
-                        # Found bare .eml file, add -H flag before it
+                fa_i=0
+                while (( fa_i < ${#rest[@]} )); do
+                    arg="${rest[fa_i]}"
+                    if [[ "$arg" == -H ]]; then
+                        # Explicit -H: its value must be a single .eml path, not
+                        # another flag or a missing arg. -H -H file (doubled flag)
+                        # or a trailing -H would otherwise feed "-H" to the backend
+                        # as the .eml path and produce a cryptic
+                        # "argument -H: expected one argument".
+                        next="${rest[fa_i+1]-}"
+                        if [[ -z "${rest[fa_i+1]+x}" || "$next" == -* ]]; then
+                            if [[ "$next" == -H ]]; then
+                                log_error "I think you put in -H -H. The -H flag needs a single .eml file right after it (e.g. -H draft.eml). Please fix and re-run."
+                            else
+                                log_error "-H needs a single .eml file right after it (e.g. -H draft.eml); it looks like the filename is missing. Please fix and re-run."
+                            fi
+                            exit 2
+                        fi
+                        # Pass -H and its file through together so the bare-.eml
+                        # branch below does NOT prepend a second -H.
+                        fixed_args+=(-H "$next")
+                        ((fa_i+=2))
+                    elif [[ "$arg" == -a || "$arg" == --attach ]]; then
+                        # -a/--attach needs an attachment path, not another flag
+                        # or a missing arg.
+                        next="${rest[fa_i+1]-}"
+                        if [[ -z "${rest[fa_i+1]+x}" || "$next" == -* ]]; then
+                            log_error "-a needs an attachment path right after it (e.g. -a file.pdf); it looks like one is missing. Please fix and re-run."
+                            exit 2
+                        fi
+                        fixed_args+=("$arg" "$next")
+                        ((fa_i+=2))
+                    elif [[ "$arg" =~ \.eml$ ]]; then
+                        # Bare .eml file (no preceding -H): add the -H flag for the
+                        # backend, which expects "-H file.eml" not bare "file.eml".
                         fixed_args+=(-H "$arg")
+                        ((fa_i+=1))
                     else
                         # Regular argument, pass through unchanged
                         fixed_args+=("$arg")
+                        ((fa_i+=1))
                     fi
                 done
 
@@ -2947,6 +3677,36 @@ case "$action" in
         ;;
     draft|reply|reply-all|fwd|open|trash|archive|thread|read|unread|sfwd|sreply|sreply-all)
         # Pass-through to gmail-api-rw
+        # Last-index-wins for !!-augmented compose actions: `m 1 4 reply-all`
+        # is `m 1 4` recalled with !! plus the action appended, so the target
+        # is 4, not 1 (the backend otherwise acts on the FIRST index; bit us
+        # 2026-08-06). Collapse only when rest is ENTIRELY bare single
+        # integers, so flag-carrying invocations and ranges/comma-lists are
+        # left untouched. Bulk verbs (trash/archive/...) keep their full list.
+        if _is_single_target_action "$action" && (( ${#rest[@]} > 1 )); then
+            _all_bare_single=1
+            for _mn in "${rest[@]}"; do
+                if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                    _all_bare_single=0
+                    break
+                fi
+            done
+            if (( _all_bare_single )); then
+                log_warn "'$action' takes one message; using last index #${rest[-1]}"
+                rest=("${rest[-1]}")
+            fi
+            unset _all_bare_single _mn
+        fi
+        # Rewrite bare text=... to --text=... for the compose actions that take a
+        # body. The account-prefixed path (`m u 5 reply text="hi"`) reaches here
+        # WITHOUT going through parse_action_args, so it needs the same rewrite,
+        # or the bare text=... lands in an unused backend positional and the body
+        # vanishes ("Empty body, aborting."; bit us 2026-08-24). Scoped to compose
+        # verbs so a literal text=... never gets mangled for open/trash/etc.
+        if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all|draft)$ ]]; then
+            _rewrite_bare_text_flags "${rest[@]+"${rest[@]}"}"
+            rest=("${RBT_OUT[@]+"${RBT_OUT[@]}"}")
+        fi
         # Special handling for reply/fwd actions: default to message #1 if no index provided
         if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all)$ ]] && [[ ${#rest[@]} -eq 0 ]]; then
             log_warn "No message index provided, assuming message #1"
@@ -2957,6 +3717,16 @@ case "$action" in
         ;;
     urls)
         # Extract URLs from message
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        ;;
+    pdf)
+        # Render one PDF per selected message into /tmp/spool/pdf/. The backend
+        # does all index/range parsing and fan-out (e.g. `m 1-4,5 pdf`).
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        ;;
+    meets)
+        # Scan the most recently cached message list for Zoom/Meet links
+        # and offer a menu to open one. e.g. `m h meets`.
         exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     scheduled)

@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Report items in doc/NEXT.md whose deadline is inside a window, and how many
+sessions they have already survived.
+
+Built 2026-08-07. The Recurse capacity message was the top-ranked item in four
+consecutive sessions of retro.md and was never drafted, because infrastructure
+work always succeeds and has no deadline while a message to a human can fail.
+No hook can decide that a draft beats a refactor. This does the part a machine
+can do: say plainly that a dated item is close and has been carried before, so
+the choice is made in the open instead of by drift.
+
+Usage:
+  deadline-check                    # doc/NEXT.md in cwd, 48h window
+  deadline-check --hours 24
+  deadline-check --file path/to/NEXT.md --retro path/to/retro.md
+  deadline-check --quiet            # print only if something is due (for rituals)
+
+Exit status: 2 if anything is inside the window (so a caller can branch), else 0.
+
+KNOWN BLIND SPOT (found 2026-08-08, the day it mattered). Relative words ("tonight",
+"tomorrow") resolve against the file's own `Updated YYYY-MM-DD` stamp, not against today,
+so that a stale line does not stay perpetually due. That is right in general and wrong on
+the day the deadline lands: an item reading "ask them tonight" under an Updated stamp of
+yesterday goes SILENT today. The Recurse capacity message, the item this whole script was
+built around, was missed for exactly this reason. A staleness guard and a deadline alarm
+want opposite defaults and these two are in tension by construction.
+
+The fix is upstream, not here: when carrying a relative-dated item forward in doc/NEXT.md,
+rewrite it with an absolute date. Do not "fix" this by resolving relative words against
+today; that reintroduces the perpetually-due bug this behavior was added to kill.
+"""
+import argparse
+import datetime as dt
+import os
+import re
+import sys
+
+MONTHS = (
+    "jan feb mar apr may jun jul aug sep oct nov dec".split()
+)
+FULL = (
+    "january february march april may june july august september "
+    "october november december".split()
+)
+
+DATE_PATTERNS = [
+    # 2026-08-08
+    (re.compile(r"\b(20\d\d)-(\d{2})-(\d{2})\b"), lambda m: (int(m[1]), int(m[2]), int(m[3]))),
+    # Aug 8 / August 8 / Aug 8, 2026
+    (
+        re.compile(
+            r"\b(" + "|".join(MONTHS + FULL) + r")[a-z]*\.?\s+(\d{1,2})(?:,\s*(20\d\d))?\b",
+            re.IGNORECASE,
+        ),
+        None,  # handled specially below
+    ),
+]
+
+TODAY_WORDS = re.compile(r"\b(today|tonight|tomorrow|this evening)\b", re.IGNORECASE)
+
+
+def month_num(word):
+    w = word.lower()
+    for i, m in enumerate(MONTHS, 1):
+        if w.startswith(m):
+            return i
+    return None
+
+
+def dates_in(line, today):
+    """Every date this line refers to, resolved against `today`."""
+    out = []
+    m = DATE_PATTERNS[0][0].search(line)
+    if m:
+        try:
+            out.append(dt.date(int(m[1]), int(m[2]), int(m[3])))
+        except ValueError:
+            pass
+    for m in DATE_PATTERNS[1][0].finditer(line):
+        mn = month_num(m.group(1))
+        if not mn:
+            continue
+        year = int(m.group(3)) if m.group(3) else today.year
+        try:
+            d = dt.date(year, mn, int(m.group(2)))
+        except ValueError:
+            continue
+        # A bare "Aug 8" already ~6 months past probably means next year.
+        if not m.group(3) and (today - d).days > 180:
+            try:
+                d = dt.date(year + 1, mn, int(m.group(2)))
+            except ValueError:
+                pass
+        out.append(d)
+    # Relative words ("tonight", "tomorrow") are only trustworthy when the file
+    # also carries an explicit date to anchor them; otherwise a stale line stays
+    # perpetually "due today" no matter how long it has sat there. Anchoring is
+    # handled by the caller passing anchor=, below.
+    return out
+
+
+def relative_dates(line, anchor):
+    """Dates implied by relative words, resolved against the file's own anchor date."""
+    if anchor is None:
+        return []
+    w = TODAY_WORDS.search(line)
+    if not w:
+        return []
+    word = w.group(1).lower()
+    return [anchor + dt.timedelta(days=1 if word == "tomorrow" else 0)]
+
+
+def anchor_date(text):
+    """The 'Updated YYYY-MM-DD' stamp at the top of the file, if any."""
+    m = re.search(r"^Updated\s+(20\d\d-\d{2}-\d{2})", text, re.M)
+    if m:
+        try:
+            return dt.date.fromisoformat(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def item_lines(text):
+    """(number-or-bullet label, full line) for each top-level task line."""
+    out = []
+    for line in text.split("\n"):
+        if re.match(r"^\s*(?:\d{1,2}[.)]|[-*+])\s+\S", line):
+            out.append(line)
+    return out
+
+
+def survived(retro_text, line):
+    """How many retro sections mention this item's distinctive words."""
+    if not retro_text:
+        return 0
+    # Distinctive tokens: capitalized words and long lowercase words.
+    toks = [t for t in re.findall(r"\b[A-Z][a-z]{3,}\b", line)][:3]
+    if not toks:
+        return 0
+    sections = re.split(r"^# Session Retro", retro_text, flags=re.M)
+    n = 0
+    for s in sections:
+        if all(t in s for t in toks[:2]):
+            n += 1
+    return n
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--file", default="doc/NEXT.md")
+    ap.add_argument("--retro", default="retro.md")
+    ap.add_argument("--hours", type=int, default=48)
+    ap.add_argument("--quiet", action="store_true", help="print nothing when nothing is due")
+    ap.add_argument("--today", help="override today's date as YYYY-MM-DD (for testing)")
+    a = ap.parse_args()
+
+    if not os.path.exists(a.file):
+        if not a.quiet:
+            print(f"no such file: {a.file}")
+        return 0
+
+    today = (
+        dt.date.fromisoformat(a.today)
+        if a.today
+        else dt.date.today()
+    )
+    horizon = today + dt.timedelta(days=max(1, a.hours // 24))
+
+    retro_text = ""
+    if os.path.exists(a.retro):
+        retro_text = open(a.retro, errors="replace").read()
+
+    text = open(a.file, errors="replace").read()
+    anchor = anchor_date(text)
+    stale = anchor is not None and (today - anchor).days > 1
+
+    due = []
+    for line in item_lines(text):
+        cands = dates_in(line, today) + relative_dates(line, anchor)
+        ds = [d for d in cands if today <= d <= horizon]
+        if not ds:
+            continue
+        due.append((min(ds), line.strip(), survived(retro_text, line)))
+
+    if not due:
+        if not a.quiet:
+            print(f"Nothing in {a.file} is dated within {a.hours}h of {today}.")
+        return 0
+
+    due.sort()
+    print(f"DUE WITHIN {a.hours}H (today is {today}):")
+    if stale:
+        print(
+            f"  WARNING: {a.file} was last stamped 'Updated {anchor}', "
+            f"{(today - anchor).days} days ago."
+        )
+        print("  Relative words in it (tonight, tomorrow) are resolved against that")
+        print("  stamp, not against today. Re-verify before acting on any row.")
+    print()
+    for d, line, n in due:
+        days = (d - today).days
+        when = "TODAY" if days == 0 else ("TOMORROW" if days == 1 else f"in {days} days")
+        print(f"  [{when}] {line[:150]}")
+        if n >= 2:
+            print(
+                f"      carried across {n} retro sections already; "
+                "it has lost to other work before."
+            )
+        print()
+    print("Do this before starting new infrastructure work, or say out loud that")
+    print("you are choosing not to. Drift is not a decision.")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
