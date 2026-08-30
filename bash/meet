@@ -1,0 +1,6 @@
+#!/opt/homebrew/bin/bash
+
+# meet: Generate a new Google Meet URL (reusable)
+# Usage: meet [ACCOUNT]
+
+exec /Users/wiggins/mise/py/meet-create "$@"

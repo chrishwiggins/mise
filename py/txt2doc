@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""txt2doc - turn a text/markdown file into a native Google Doc and share it.
+
+Uses the gws CLI (Google Workspace CLI) for auth + API, so it rides on the
+keyring-stored credentials of whatever account `gws auth login` set up. No
+standalone token files to expire.
+
+Usage:
+  txt2doc notes.md                          # create doc, print URL
+  txt2doc notes.md alice@example.com        # share alice as editor
+  txt2doc notes.md alice@x.com bob@y.com    # share both as editors
+  txt2doc notes.md -c carol@x.com           # carol as commenter
+  txt2doc notes.md -v dave@x.com            # dave as viewer
+  txt2doc notes.md -t "My Title"            # override the doc title
+
+Default sharing role for positional emails is editor (writer).
+
+Requires: /opt/homebrew/bin/gws authenticated with Drive + Docs scopes:
+  gws auth login -s drive,docs
+(the default account is whatever gws is logged in as)
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+GWS = "/opt/homebrew/bin/gws"
+
+# Map a source file extension to the upload MIME type Drive needs in order to
+# convert it to a native Google Doc.
+TEXT_MIMES = {
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".txt": "text/plain",
+    ".text": "text/plain",
+    ".html": "text/html",
+    ".htm": "text/html",
+}
+
+
+def gws_json(args):
+    """Run gws and parse its JSON stdout. Raise on error."""
+    proc = subprocess.run(
+        [GWS] + args, capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        # gws prints a human error to stderr; surface it.
+        msg = proc.stderr.strip() or proc.stdout.strip()
+        raise RuntimeError(msg)
+    out = proc.stdout.strip()
+    # gws may emit a "Using keyring backend: ..." preamble before the JSON.
+    brace = out.find("{")
+    if brace > 0:
+        out = out[brace:]
+    return json.loads(out)
+
+
+def upload_as_doc(src_path, title, mime):
+    """Upload src_path, converting to a native Google Doc. Returns (id, url).
+
+    gws confines --upload to the current directory, so copy into a temp file in
+    cwd, upload, then remove it.
+    """
+    tmp = tempfile.NamedTemporaryFile(
+        prefix=".txt2doc-", dir=os.getcwd(), delete=False
+    )
+    tmp_name = tmp.name
+    tmp.close()
+    try:
+        shutil.copyfile(src_path, tmp_name)
+        meta = {
+            "name": title,
+            "mimeType": "application/vnd.google-apps.document",
+        }
+        result = gws_json([
+            "drive", "files", "create",
+            "--json", json.dumps(meta),
+            "--upload", os.path.basename(tmp_name),
+            "--upload-content-type", mime,
+            "--params", json.dumps({"fields": "id,webViewLink"}),
+        ])
+        return result["id"], result.get(
+            "webViewLink",
+            f"https://docs.google.com/document/d/{result['id']}/edit",
+        )
+    finally:
+        try:
+            os.remove(tmp_name)
+        except OSError:
+            pass
+
+
+def share(file_id, email, role, notify=False):
+    """Grant `email` the given role on the file. Errors are non-fatal.
+
+    notify=True makes Drive email the recipient the share notification.
+    """
+    body = {"type": "user", "role": role, "emailAddress": email}
+    try:
+        gws_json([
+            "drive", "permissions", "create",
+            "--params", json.dumps({
+                "fileId": file_id,
+                "sendNotificationEmail": notify,
+                "fields": "id",
+            }),
+            "--json", json.dumps(body),
+        ])
+        return True
+    except RuntimeError as e:
+        print(f"warning: could not share with {email} ({role}): {e}",
+              file=sys.stderr)
+        return False
+
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="txt2doc",
+        description="Turn a text/markdown file into a Google Doc and share it.",
+    )
+    p.add_argument("file", help="source file (.md/.txt/.html)")
+    p.add_argument("editors", nargs="*",
+                   help="emails to share as editors (default role)")
+    p.add_argument("-c", "--commenter", action="append", default=[],
+                   metavar="EMAIL", help="share as commenter (repeatable)")
+    p.add_argument("-v", "--viewer", action="append", default=[],
+                   metavar="EMAIL", help="share as viewer (repeatable)")
+    p.add_argument("-e", "--editor", action="append", default=[],
+                   metavar="EMAIL", help="share as editor (repeatable)")
+    p.add_argument("-t", "--title", default=None,
+                   help="document title (default: derived from filename)")
+    p.add_argument("-n", "--notify", action="store_true",
+                   help="email each recipient the share notification")
+    args = p.parse_args()
+
+    src = Path(args.file)
+    if not src.is_file():
+        print(f"error: no such file: {src}", file=sys.stderr)
+        sys.exit(1)
+
+    mime = TEXT_MIMES.get(src.suffix.lower(), "text/plain")
+    title = args.title or src.stem.replace("_", " ").replace("-", " ")
+
+    try:
+        file_id, url = upload_as_doc(str(src), title, mime)
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    shares = (
+        [(em, "writer") for em in args.editors]
+        + [(em, "writer") for em in args.editor]
+        + [(em, "commenter") for em in args.commenter]
+        + [(em, "reader") for em in args.viewer]
+    )
+    for email, role in shares:
+        share(file_id, email, role, notify=args.notify)
+
+    print(url)
+
+
+if __name__ == "__main__":
+    main()

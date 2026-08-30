@@ -1,0 +1,3 @@
+#!/bin/bash
+# Switch macOS system appearance to light mode.
+osascript -e 'tell app "System Events" to tell appearance preferences to set dark mode to false'

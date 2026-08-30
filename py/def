@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+import sys
+import os
+import re
+import subprocess
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: def <word>", file=sys.stderr)
+        sys.exit(1)
+
+    # Run dict command
+    dict_bin = "/opt/homebrew/bin/dict"
+    if not os.path.exists(dict_bin):
+        dict_bin = "dict"
+
+    try:
+        res = subprocess.run([dict_bin] + sys.argv[1:], capture_output=True, text=True)
+    except Exception as e:
+        print(f"Error running dict: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if res.returncode != 0:
+        if res.stderr:
+            print(res.stderr.strip(), file=sys.stderr)
+        elif res.stdout:
+            print(res.stdout.strip())
+        sys.exit(res.returncode)
+
+    raw_output = res.stdout
+    if not raw_output.strip():
+        return
+
+    # Check if glow is available and stdout is a tty
+    glow_bin = "/opt/homebrew/bin/glow"
+    has_glow = os.path.exists(glow_bin)
+    is_tty = sys.stdout.isatty()
+
+    if has_glow and is_tty:
+        md_lines = []
+        for line in raw_output.splitlines():
+            if line.startswith("From "):
+                parts = line.split("[")
+                db_name = parts[0].replace("From ", "").strip()
+                db_code = "[" + parts[1] if len(parts) > 1 else ""
+                md_lines.append(f"\n### 📖 **{db_name}** `{db_code}`\n")
+            elif re.match(r"^\d+ definitions? found", line):
+                md_lines.append(f"# 🔍 **{line.strip()}**\n")
+            elif re.match(r"^\s+[A-Za-z]", line):
+                md_lines.append(f"> {line.strip()}")
+            elif line.strip().startswith("[") and line.strip().endswith("]"):
+                md_lines.append(f"*_{line.strip()}_*")
+            else:
+                md_lines.append(line)
+
+        formatted_md = "\n".join(md_lines)
+        try:
+            p = subprocess.Popen([glow_bin, "-"], stdin=subprocess.PIPE)
+            p.communicate(input=formatted_md.encode("utf-8"))
+            return
+        except Exception:
+            pass
+
+    # Fallback color output
+    for line in raw_output.splitlines():
+        if line.startswith("From "):
+            print(f"\033[1;36m{line}\033[0m")
+        elif re.match(r"^\d+ definitions? found", line):
+            print(f"\033[1;33m{line}\033[0m")
+        elif re.match(r"^\s+[A-Za-z]", line):
+            print(f"\033[0;32m{line}\033[0m")
+        elif line.strip().startswith("[") and line.strip().endswith("]"):
+            print(f"\033[2;37m{line}\033[0m")
+        else:
+            print(line)
+
+if __name__ == "__main__":
+    main()

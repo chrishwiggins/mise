@@ -52,8 +52,8 @@ alias pbdate 'datestr| pbcopy'
 alias dstr 'setenv dstr `datestr`'
 
 
-alias dump "learn;pbpaste > `datestr`"
-alias mdump "learn;pbpaste > `datestr`.eml;pbmunpack;mv mail-dump `datestr`-files"
+alias dump 'pbpaste > `datestr`'
+alias mdump 'set _ds=`datestr`; pbpaste > $_ds.eml; pbmunpack; mv mail-dump $_ds-files'
 alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Resources/jsc
 alias dusort "learn;date;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`;date"
 alias rstudio open /Applications/RStudio.app/
@@ -79,8 +79,8 @@ alias mma "open 'https://mail.google.com/mail/u/0/x/?&s=a'"
 #alias gcal fox https://www.google.com/calendar/
 #alias gcal chrome http://www.google.com/calendar/render
 # alias gcal fox https://www.google.com/calendar/b/0/render
-alias gcal pers-gmail-browser https://www.google.com/calendar/b/0/render
-alias gcals "pers-gmail-browser 'https://calendar.google.com/calendar/u/0/r/search?q=\!:*'"
+alias gcal chrome-profile-open 0 https://www.google.com/calendar/b/0/render
+alias gcals "chrome-profile-open 0 'https://calendar.google.com/calendar/u/0/r/search?q=\!:*'"
 alias ccal chrome https://www.google.com/calendar/b/0/render
 # NB: 'gc' intended for use with google <- /usr/local/bin/google
 alias gc google calendar add
@@ -405,7 +405,7 @@ alias doccs docs
 
 # things using gm which i changed to gg 20180708
 alias att gg has:attachment
-#alias frm "gg from:\!*" # 20260319 moved to seiton, uses m now
+#alias frm "gg from:\!*" # 20260319 moved to private aliases, uses m now
 alias to "gg to:\!*"
 
 # cu library
@@ -529,22 +529,18 @@ alias pbmpl "pbpaste >! /tmp/$$.mpl ; wc -w /tmp/$$.mpl ; maple  /tmp/$$.mpl"
 alias mute 'osascript -e "set volume output muted true"'
 alias hamlet open https://www.litcharts.com/shakescleare/shakespeare-translations/hamlet/act-1-scene-1
 alias newer 'find . -type f -newermt "\!:1"'
-alias yt-xcript yt-dlp --write-auto-sub --skip-download
-alias yt-mp3 'yt-dlp -x --audio-format mp3 -o "youtube_audio.%(ext)s"'
-alias yt-mp4 "yt-dlp -f 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' "
-alias yt-video 'yt-dlp -o "%(title)s.%(ext)s"'
 #alias sniff "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s"
 alias plan "echo 'dream in years; plan in months; evaluate in weeks; ship daily'"
 #alias nato "echo 'Alfa|Bravo|Charlie|Delta|Echo|Foxtrot|Golf|Hotel|India|Juliett|Kilo|Lima|Mike|November|Oscar|Papa|Quebec|Romeo|Sierra|Tango|Uniform|Victor|Whiskey|Xray|Yankee|Zulu'|tr '|' '\n'"
 alias embiggen "osascript  $mise/osa/embiggen.osa"
 alias cd-f cd-parent
 alias md5 "echo i think you mean shasum -a 512"
-# flare: moved to aliases-private.sh (uses seiton setbrightness binary)
+# flare: moved to aliases-private.sh (uses private setbrightness binary)
 #alias flare 'osascript -e "tell application \"System Events\"" -e "repeat 16 times" -e "key code 144" -e "end repeat" -e "end tell"'
 alias code 'open -a "Visual Studio Code" \!*'    # macOS
 alias vs 'code $PWD \!*'    # macOS/Linux
 alias stats "c-cu https://www-statista-com.ezproxy.cul.columbia.edu/;open https://ourworldindata.org/"
-# lit, dim, blaze: moved to aliases-private.sh (uses seiton setbrightness binary)
+# lit, dim, blaze: moved to aliases-private.sh (uses private setbrightness binary)
 #alias lit 'osascript -e '\''tell application "System Events" to key code 144'\'''
 #alias dim 'osascript -e '\''tell application "System Events" to key code 145'\'''
 #alias blaze 'osascript -e '\''tell application "System Events"'\'' -e '\''repeat 16 times'\'' -e '\''key code 144'\'' -e '\''end repeat'\'' -e '\''end tell'\'''
@@ -557,14 +553,16 @@ alias dsi-dir "echo 'in 428 mudd (in the DSI (in Mudd (to the right of Blue Java
 alias ununi sed -f /Users/wiggins/mise/sed/ununicode.sed
 alias gitlog "echo 'write a human-readable commit message of sufficient detail that future developers will understand what was changed and updated and the current state of the repo' | pbcopy"
 alias gitpush "echo 'push to github with a human-readable commit message of sufficient detail that future developers will understand what was changed and updated and the current state of the repo' | pbcopy"
-#alias claudepaste 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile && rm -f $tmpfile'¶
-alias pbclaude 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile'¶
+#alias claudepaste 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile && rm -f $tmpfile'
+alias pbclaude 'set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile'
 alias liar 'date >> ~/youreabsolutelyright.txt; pbpaste >> ~/youreabsolutelyright.txt; echo "====" >> ~/youreabsolutelyright.txt'
 alias nolie "echo 'no fraud, no placeholder code, no mock code, no random simulated code, only real code that works perfectly for the specified task' | pbcopy"
-alias hideme-start 'scutil --nc start "hide.me VPN (Wireguard)"'
-alias hideme-stop 'scutil --nc stop "hide.me VPN (Wireguard)"'
-alias hideme-status 'scutil --nc status "hide.me VPN (Wireguard)"'
-alias hideme-check 'scutil --nc status "hide.me VPN (Wireguard)" | head -1'
+alias hideme echo i think you mean vpn
+alias hideme-start echo i think you mean vpn start
+alias hideme-stop echo i think you mean vpn stop
+alias hideme-status echo i think you mean vpn status
+alias hideme-check echo i think you mean vpn check
 alias claw 'ssh -i ~/.ssh/google_compute_engine root@23.95.164.201'
+alias lostdmv "open 'https://eservices.dmv.ny.gov/TAP/eServices/?Link=MiscLinks.ReplaceCrd'"
 
-# End of aliases - quiet startup skip point
+skip_verbose_startup:

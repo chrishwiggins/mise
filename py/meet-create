@@ -1,0 +1,130 @@
+#!/Users/wiggins/mise/py/.venv/bin/python3
+"""
+meet-create: Generate a new Google Meet URL via Calendar API.
+Creates a calendar event with a Meet link, returns the URL, then deletes the event.
+"""
+
+import sys
+import json
+from pathlib import Path
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+from google_auth import get_credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+MAIL_TOOLS_CONFIG = Path.home() / ".config" / "mail-tools" / "accounts.json"
+
+def load_accounts():
+    """Load accounts from mail-tools config."""
+    if not MAIL_TOOLS_CONFIG.exists():
+        print(f"meet-create: Configuration not found at {MAIL_TOOLS_CONFIG}", file=sys.stderr)
+        sys.exit(1)
+
+    with open(MAIL_TOOLS_CONFIG) as f:
+        config = json.load(f)
+
+    return config.get("accounts", {})
+
+def resolve_account(spec, accounts):
+    """Resolve account spec (alias or email) to full email."""
+    if spec in accounts:
+        return accounts[spec]["email"]
+
+    for alias, info in accounts.items():
+        email = info["email"]
+        if spec.lower() in alias.lower() or spec.lower() in email.lower():
+            return email
+
+    print(f"meet-create: unknown account '{spec}'", file=sys.stderr)
+    sys.exit(1)
+
+def get_calendar_service(email):
+    """Build calendar service with proper auth."""
+    creds = get_credentials(
+        service="calendar",
+        scopes="calendar",
+        login_hint=email
+    )
+    return build("calendar", "v3", credentials=creds)
+
+def create_meet(service, email):
+    """Create a temporary calendar event to extract the Meet URL."""
+    # Create event 1 year in future with Meet conference
+    now = datetime.now(timezone.utc)
+    start_time = now + timedelta(days=365)
+    end_time = start_time + timedelta(minutes=1)
+
+    event = {
+        "summary": "Meet Link",
+        "start": {"dateTime": start_time.isoformat()},
+        "end": {"dateTime": end_time.isoformat()},
+        "conferenceData": {
+            "createRequest": {
+                "requestId": f"meet-{int(now.timestamp())}",
+                "conferenceSolutionKey": {"type": "hangoutsMeet"}
+            }
+        }
+    }
+
+    try:
+        # Create the event
+        result = service.events().insert(
+            calendarId="primary",
+            body=event,
+            conferenceDataVersion=1
+        ).execute()
+
+        event_id = result.get("id")
+        conference_data = result.get("conferenceData", {})
+        entry_points = conference_data.get("entryPoints", [])
+
+        meet_url = None
+        for entry in entry_points:
+            if entry.get("entryPointType") == "video":
+                meet_url = entry.get("uri")
+                break
+
+        if not meet_url:
+            print(f"meet-create: No video entry point in event", file=sys.stderr)
+            sys.exit(1)
+
+        # Delete the temporary event now that we have the URL
+        try:
+            service.events().delete(
+                calendarId="primary",
+                eventId=event_id
+            ).execute()
+        except:
+            pass  # Ignore errors on delete
+
+        return meet_url
+
+    except HttpError as e:
+        print(f"meet-create: Calendar API error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def main():
+    accounts = load_accounts()
+
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        print("meet-create: Generate a new Google Meet URL")
+        print()
+        print("Usage:")
+        print("  meet-create [ACCOUNT]  Create a new Meet for ACCOUNT")
+        print()
+        print("Accounts:")
+        for alias in sorted(accounts.keys()):
+            print(f"  {alias}")
+        sys.exit(0)
+
+    account = sys.argv[1] if len(sys.argv) > 1 else "g"
+    email = resolve_account(account, accounts)
+
+    service = get_calendar_service(email)
+    meet_url = create_meet(service, email)
+    print(meet_url)
+
+if __name__ == "__main__":
+    main()

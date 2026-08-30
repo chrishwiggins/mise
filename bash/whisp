@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+#
+# safe-whisper - Run whisper (large model) without crashing your machine.
+#
+# Splits audio into chunks, processes each with memory limits,
+# combines the output. Supports both whisper.cpp and Python whisper.
+#
+# Usage:
+#   safe-whisper [-l LANG] [-m MODEL] [-b BACKEND] [-c SECS] [-M GB] <audio_file>
+#
+# Examples:
+#   safe-whisper -l ja recording.mp3
+#   safe-whisper -b cpp -l en recording.mp3       # force whisper.cpp
+#   safe-whisper -b python -l ja recording.mp3     # force Python whisper
+#   safe-whisper -m medium -c 300 long_podcast.mp3
+
+set -euo pipefail
+
+# Defaults
+LANG_FLAG=""
+MODEL="large"
+BACKEND=""            # auto, cpp, python
+CHUNK_SECS=600        # 10 minutes per chunk
+MAX_MEM_GB=10         # kill whisper if it exceeds this
+VERBOSE=0
+
+# Paths
+CPP_MODELS_DIR="$HOME/.local/share/whisper-cpp/models"
+PYTHON_WHISPER="$HOME/.local/venvs/whisper/bin/whisper"
+
+usage() {
+    cat <<'EOF'
+Usage: safe-whisper [-l LANG] [-m MODEL] [-b BACKEND] [-c SECS] [-M GB] [-v] <audio_file>
+
+Options:
+  -l LANG      Language code (ja, en, fr, etc.). Omit for auto-detect.
+  -m MODEL     Whisper model (default: large). Options: tiny, base, small, medium, large
+  -b BACKEND   Force backend: cpp or python. Omit for auto-detect (prefers cpp).
+  -c SECS      Chunk duration in seconds (default: 600 = 10 min)
+  -M GB        Max memory in GB before killing whisper (default: 10)
+  -v           Verbose output
+  -h           Show this help
+EOF
+    exit 1
+}
+
+while getopts "l:m:b:c:M:vh" opt; do
+    case $opt in
+        l) LANG_FLAG="$OPTARG" ;;
+        m) MODEL="$OPTARG" ;;
+        b) BACKEND="$OPTARG" ;;
+        c) CHUNK_SECS="$OPTARG" ;;
+        M) MAX_MEM_GB="$OPTARG" ;;
+        v) VERBOSE=1 ;;
+        h) usage ;;
+        *) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ $# -lt 1 ]; then
+    usage
+fi
+
+AUDIO_FILE="$1"
+if [ ! -f "$AUDIO_FILE" ]; then
+    echo "Error: file not found: $AUDIO_FILE"
+    exit 1
+fi
+
+# Resolve model file for whisper.cpp
+resolve_cpp_model() {
+    local model_name="$1"
+    # Map model names to ggml filenames
+    local model_file
+    case "$model_name" in
+        large)  model_file="ggml-large-v3.bin" ;;
+        medium) model_file="ggml-medium.bin" ;;
+        small)  model_file="ggml-small.bin" ;;
+        base)   model_file="ggml-base.bin" ;;
+        tiny)   model_file="ggml-tiny.bin" ;;
+        *)      model_file="ggml-${model_name}.bin" ;;
+    esac
+    echo "$CPP_MODELS_DIR/$model_file"
+}
+
+# Check backend availability
+has_cpp() {
+    command -v whisper-cli &>/dev/null && [ -f "$(resolve_cpp_model "$MODEL")" ]
+}
+
+has_python() {
+    [ -x "$PYTHON_WHISPER" ] || command -v whisper &>/dev/null
+}
+
+get_python_cmd() {
+    if [ -x "$PYTHON_WHISPER" ]; then
+        echo "$PYTHON_WHISPER"
+    else
+        echo "whisper"
+    fi
+}
+
+# Select backend
+if [ -n "$BACKEND" ]; then
+    case "$BACKEND" in
+        cpp)
+            if ! command -v whisper-cli &>/dev/null; then
+                echo "Error: whisper-cli not found. Install with: brew install whisper-cpp"
+                exit 1
+            fi
+            MODEL_PATH=$(resolve_cpp_model "$MODEL")
+            if [ ! -f "$MODEL_PATH" ]; then
+                echo "Error: model not found: $MODEL_PATH"
+                echo "Download it:"
+                echo "  mkdir -p $CPP_MODELS_DIR"
+                echo "  curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$(basename "$MODEL_PATH") -o $MODEL_PATH"
+                exit 1
+            fi
+            echo "[safe-whisper] Backend: whisper.cpp (forced)"
+            ;;
+        python|py)
+            BACKEND="python"
+            if ! has_python; then
+                echo "Error: Python whisper not found"
+                exit 1
+            fi
+            echo "[safe-whisper] Backend: Python whisper (forced)"
+            ;;
+        *)
+            echo "Error: unknown backend '$BACKEND'. Use 'cpp' or 'python'."
+            exit 1
+            ;;
+    esac
+else
+    # Auto-detect: prefer cpp
+    if has_cpp; then
+        BACKEND="cpp"
+        echo "[safe-whisper] Backend: whisper.cpp (auto-detected)"
+    elif has_python; then
+        BACKEND="python"
+        echo "[safe-whisper] Backend: Python whisper (auto-detected)"
+    else
+        echo "Error: no whisper backend found."
+        echo "Install one of:"
+        echo "  brew install whisper-cpp  (recommended)"
+        echo "  pip install openai-whisper"
+        exit 1
+    fi
+fi
+
+if ! command -v ffmpeg &>/dev/null; then
+    echo "Error: ffmpeg not found. Install with: brew install ffmpeg"
+    exit 1
+fi
+
+# Create temp dir for chunks
+WORK=$(mktemp -d /tmp/safe-whisper.XXXXXX)
+trap 'rm -rf "$WORK"' EXIT
+
+OUTPUT_FILE="${AUDIO_FILE%.*}.txt"
+
+# Get audio duration
+DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$AUDIO_FILE" | cut -d. -f1)
+echo "[safe-whisper] Audio: ${DURATION}s (~$((DURATION / 60)) min) | Model: $MODEL | Chunks: ${CHUNK_SECS}s | Mem limit: ${MAX_MEM_GB}GB"
+
+# Split or use whole file
+if [ "$DURATION" -le "$CHUNK_SECS" ]; then
+    echo "[safe-whisper] Audio fits in one chunk, no splitting needed"
+    CHUNKS=("$AUDIO_FILE")
+else
+    NUM_CHUNKS=$(( (DURATION + CHUNK_SECS - 1) / CHUNK_SECS ))
+    echo "[safe-whisper] Splitting into $NUM_CHUNKS chunks..."
+    # Try stream copy first (fast), fall back to re-encode (always works)
+    ffmpeg -v quiet -i "$AUDIO_FILE" \
+        -f segment -segment_time "$CHUNK_SECS" \
+        -c copy \
+        "$WORK/chunk_%03d.${AUDIO_FILE##*.}" 2>/dev/null || \
+    ffmpeg -v quiet -i "$AUDIO_FILE" \
+        -f segment -segment_time "$CHUNK_SECS" \
+        -ar 16000 -ac 1 \
+        "$WORK/chunk_%03d.wav"
+    CHUNKS=("$WORK"/chunk_*)
+fi
+
+echo "[safe-whisper] Processing ${#CHUNKS[@]} chunk(s)..."
+
+# Memory guard: kills whisper PID if RSS exceeds limit
+MAX_MEM_KB=$((MAX_MEM_GB * 1024 * 1024))
+
+memory_guard() {
+    local pid=$1
+    while kill -0 "$pid" 2>/dev/null; do
+        local rss
+        rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ') || break
+        if [ -n "$rss" ] && [ "$rss" -gt "$MAX_MEM_KB" ]; then
+            echo ""
+            echo "[safe-whisper] MEMORY GUARD: PID $pid using $((rss / 1024))MB (limit: ${MAX_MEM_GB}GB)"
+            echo "[safe-whisper] Killing to protect your machine"
+            kill -9 "$pid" 2>/dev/null
+            return 1
+        fi
+        sleep 5
+    done
+}
+
+# Process each chunk
+> "$OUTPUT_FILE"
+FAILED=0
+
+for i in "${!CHUNKS[@]}"; do
+    CHUNK="${CHUNKS[$i]}"
+    CHUNK_NUM=$((i + 1))
+    echo -n "[safe-whisper] Chunk $CHUNK_NUM/${#CHUNKS[@]}... "
+
+    CHUNK_OUT="$WORK/out_$(printf '%03d' "$i")"
+
+    if [ "$BACKEND" = "cpp" ]; then
+        MODEL_PATH=$(resolve_cpp_model "$MODEL")
+        ARGS=(-m "$MODEL_PATH" --output-txt -of "$CHUNK_OUT")
+        [ -n "$LANG_FLAG" ] && ARGS+=(-l "$LANG_FLAG")
+        ARGS+=("$CHUNK")
+
+        nice -n 15 whisper-cli "${ARGS[@]}" &>/dev/null &
+        WPID=$!
+    else
+        WCMD=$(get_python_cmd)
+        ARGS=(--model "$MODEL" --output_format txt --output_dir "$WORK")
+        [ -n "$LANG_FLAG" ] && ARGS+=(--language "$LANG_FLAG")
+        ARGS+=("$CHUNK")
+
+        (
+            ulimit -v $((MAX_MEM_GB * 1024 * 1024)) 2>/dev/null || true
+            nice -n 15 "$WCMD" "${ARGS[@]}" 2>/dev/null
+        ) &
+        WPID=$!
+    fi
+
+    # Start memory guard
+    memory_guard "$WPID" &
+    GUARD_PID=$!
+
+    if wait "$WPID" 2>/dev/null; then
+        echo "done"
+        if [ "$BACKEND" = "cpp" ]; then
+            cat "$CHUNK_OUT.txt" >> "$OUTPUT_FILE" 2>/dev/null || true
+        else
+            CHUNK_BASENAME=$(basename "$CHUNK" | sed 's/\.[^.]*$//')
+            cat "$WORK/${CHUNK_BASENAME}.txt" >> "$OUTPUT_FILE" 2>/dev/null || true
+        fi
+        echo "" >> "$OUTPUT_FILE"
+    else
+        echo "FAILED (memory limit or error)"
+        FAILED=$((FAILED + 1))
+        echo "[chunk $CHUNK_NUM failed]" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+    fi
+
+    kill "$GUARD_PID" 2>/dev/null || true
+    wait "$GUARD_PID" 2>/dev/null || true
+done
+
+echo ""
+if [ "$FAILED" -gt 0 ]; then
+    echo "[safe-whisper] WARNING: $FAILED chunk(s) failed. Try:"
+    echo "  - Smaller chunks:  safe-whisper -c 300 ..."
+    echo "  - Smaller model:   safe-whisper -m medium ..."
+    if [ "$BACKEND" = "python" ]; then
+        echo "  - Switch backend:  safe-whisper -b cpp ..."
+    fi
+fi
+
+echo "[safe-whisper] Output: $OUTPUT_FILE"
+WORD_COUNT=$(wc -w < "$OUTPUT_FILE" | tr -d ' ')
+echo "[safe-whisper] $WORD_COUNT words transcribed"

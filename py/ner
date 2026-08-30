@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""md-ner: deterministic named-entity extractor for Markdown. No AI.
+
+Strategy (rule-based, no models):
+  1. Strip Markdown structure (code blocks, links, emphasis, headers) so
+     punctuation and formatting don't pollute tokens.
+  2. Find candidate entities as runs of Capitalized tokens (optionally joined
+     by small connectors like "of", "and", "the", "&") plus all-caps acronyms.
+  3. Drop candidates that are merely sentence-initial common words, pure
+     stopwords, or known non-entities.
+  4. Classify each surviving candidate into PERSON / ORG / PRODUCT / PLACE /
+     MISC using gazetteers and lightweight suffix/context cues.
+
+Usage:
+    ner.py FILE.md                 # pretty grouped output
+    cat FILE.md | ner.py           # read stdin
+    ner.py FILE.md --format jsonl  # one JSON object per entity
+    ner.py FILE.md --format tsv    # type<TAB>text<TAB>count
+    ner.py FILE.md --min-count 2   # only entities seen >=2 times
+"""
+
+import argparse
+import json
+import re
+import sys
+from collections import Counter
+
+# ----------------------------------------------------------------------------
+# 1. Markdown stripping
+# ----------------------------------------------------------------------------
+
+def strip_markdown(text):
+    """Remove Markdown syntax, keeping human-readable text intact."""
+    # Fenced code blocks ```...```
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    # Inline code `...`
+    text = re.sub(r"`[^`]*`", " ", text)
+    # Images ![alt](url) -> drop entirely
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)
+    # Links [text](url) -> keep text
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    # Reference links [text][ref] -> keep text
+    text = re.sub(r"\[([^\]]*)\]\[[^\]]*\]", r"\1", text)
+    # Bare URLs -> drop
+    text = re.sub(r"https?://\S+", " ", text)
+    # Headers, blockquote, list markers at line start
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
+    text = re.sub(r"(?m)^\s*>\s?", "", text)
+    text = re.sub(r"(?m)^\s*[-*+]\s+", "", text)
+    text = re.sub(r"(?m)^\s*\d+\.\s+", "", text)
+    # Emphasis/bold markers (leave the words)
+    text = text.replace("**", " ").replace("__", " ")
+    text = re.sub(r"(?<!\w)[*_](?=\w)", " ", text)
+    text = re.sub(r"(?<=\w)[*_](?!\w)", " ", text)
+    # Table pipes
+    text = text.replace("|", " ")
+    return text
+
+
+# ----------------------------------------------------------------------------
+# 2. Gazetteers and lexicons
+# ----------------------------------------------------------------------------
+
+# Lowercase connectors allowed *inside* a multi-word entity.
+CONNECTORS = {"of", "and", "the", "for", "de", "la", "le", "van", "von",
+              "der", "den", "di", "da", "el", "al", "&"}
+
+# Months / days / date-ish words: not entities.
+TEMPORAL = {
+    "January", "February", "March", "April", "May", "June", "July", "August",
+    "September", "October", "November", "December",
+    "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sep", "Sept", "Oct",
+    "Nov", "Dec",
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+}
+
+# Words that look capitalized at sentence start but are not entities.
+COMMON_WORDS = {
+    "The", "This", "That", "These", "Those", "There", "Their", "They", "Them",
+    "It", "Its", "He", "She", "His", "Her", "We", "Our", "You", "Your", "I",
+    "A", "An", "As", "At", "By", "But", "And", "Or", "Nor", "For", "So", "Yet",
+    "If", "When", "While", "Where", "Why", "How", "What", "Which", "Who", "Whom",
+    "In", "On", "Of", "To", "From", "With", "Without", "Into", "Onto", "Over",
+    "Under", "After", "Before", "During", "Between", "Among", "Through",
+    "Detection", "Provenance", "Tools", "Tool", "Vendor", "Real", "Neither",
+    "Forensic", "Adopted", "Reports", "Offers", "Most", "Some", "Many", "All",
+    "Each", "Every", "Both", "Either", "Such", "No", "Not", "Yes", "Here",
+    "Now", "Then", "Today", "Yesterday", "Tomorrow", "Key", "Findings", "Details",
+    "Question", "Notably", "Typically", "Often", "Sometimes", "Always", "Never",
+    "Probabilistic", "Cryptographic", "Multimodal", "Independent", "Simple",
+    "Reality", "Check",
+}
+
+# Strong PLACE gazetteer (countries, regions, major cities relevant + generic).
+PLACES = {
+    "Baltimore", "Slovak", "Slovakia", "Pikesville", "Stanford", "Hollywood",
+    "America", "American", "U.S.", "US", "USA", "United States", "Europe",
+    "European", "China", "Chinese", "Russia", "Russian", "Ukraine", "London",
+    "Paris", "Berlin", "Washington", "California", "New York", "Texas",
+    "Cody", "Wyoming", "Helene",
+}
+
+# Strong ORG gazetteer for this domain + generic well-known orgs.
+ORGS = {
+    "Reuters", "Reuters Institute", "WITNESS", "Stanford", "FBI", "AFP",
+    "AP", "Associated Press", "Snopes", "PolitiFact", "Full Fact",
+    "The Dispatch", "Sports Illustrated", "Cody Enterprise", "Nikon",
+    "UMBC", "Hacker Factor", "NSA", "UCLA", "GetReal", "TrueMedia.org",
+    "TrueMedia", "Hive", "Hive AI", "Hive Moderation", "GPTZero",
+    "Originality.ai", "Reality Defender", "Sensity", "InVID-WeVerify",
+    "Deepware", "C2PA", "Content Credentials", "SynthID", "Digimarc",
+    "Case Western", "Coalition", "Adobe", "Google", "Microsoft", "OpenAI",
+    "Meta", "Anthropic",
+}
+
+# Org-name suffix cues: if a candidate ends in one of these, call it ORG.
+ORG_SUFFIXES = {
+    "Inc", "Inc.", "LLC", "Ltd", "Ltd.", "Corp", "Corp.", "Co", "Co.",
+    "Company", "Foundation", "Institute", "University", "College", "School",
+    "Lab", "Labs", "Laboratory", "Agency", "Bureau", "Department", "Group",
+    "Association", "Coalition", "Council", "Committee", "Commission", "Board",
+    "Organization", "Society", "Center", "Centre", "Network", "Alliance",
+    "Press", "Times", "Post", "Journal", "News", "Media", "Systems",
+    "Technologies", "Solutions", "Defender", "Moderation",
+}
+
+# Product cues: known product/standard names handled by gazetteer; also tokens
+# that are clearly tech standards (mixed case / version-y).
+PRODUCTS = {
+    "C2PA", "SynthID", "Digimarc", "GPTZero", "AP Verify", "Content Credentials",
+    "Deepfake-Eval-2024", "InVID-WeVerify", "Originality.ai",
+}
+
+# Honorifics / name particles that signal a PERSON when adjacent.
+PERSON_TITLES = {"Dr", "Dr.", "Mr", "Mr.", "Mrs", "Mrs.", "Ms", "Ms.",
+                 "Prof", "Prof.", "President", "Senator", "Judge", "Sen.",
+                 "Rep.", "Gov.", "Sir", "Dame"}
+
+# Known person surnames/full names in this domain (gazetteer assist).
+PERSONS = {
+    "Hany Farid", "Liang", "Zou", "Margaux Blanchard", "Farid",
+}
+
+# Common given names -> if a two-word Cap Cap candidate starts with one of
+# these and isn't a known org, lean PERSON.
+GIVEN_NAMES = {
+    "Hany", "James", "John", "Mary", "Robert", "Michael", "David", "Sarah",
+    "Emily", "Margaux", "Maria", "Anna", "Jan", "Peter", "Paul", "Mark",
+    "Luke", "Matthew", "Andrew", "Daniel", "Joseph", "Thomas", "Charles",
+    "Christopher", "Eunji", "Chris",
+}
+
+
+# ----------------------------------------------------------------------------
+# 3. Candidate extraction
+# ----------------------------------------------------------------------------
+
+# A token: word chars plus internal . - ' & (so "U.S.", "Originality.ai",
+# "InVID-WeVerify", "O'Brien", "Hive&Co" survive as single tokens).
+TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-'&]*")
+
+def is_capitalized(tok):
+    return bool(tok) and tok[0].isupper()
+
+# Acronyms/all-caps tokens that are generic concepts or section labels, not
+# named entities. Conservative: only clearly non-entity terms.
+ACRONYM_STOPLIST = {"AI", "ML", "QUESTION", "TL", "DR", "UGC", "UX", "SOTA",
+                    "PKI", "RFC", "AUC", "VAE", "OSINT", "SHA-256", "X.509"}
+
+def is_acronym(tok):
+    core = tok.replace(".", "")
+    return len(core) >= 2 and core.isupper() and any(c.isalpha() for c in core)
+
+def tokenize_sentences(text):
+    """Split into rough sentences so we can detect sentence-initial caps."""
+    # Split on . ! ? followed by whitespace+capital, plus newlines.
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])|\n+", text)
+    return [p for p in parts if p.strip()]
+
+
+def extract_candidates(text):
+    """Return Counter of candidate entity strings."""
+    candidates = Counter()
+    for sent in tokenize_sentences(text):
+        toks = TOKEN_RE.findall(sent)
+        i = 0
+        n = len(toks)
+        while i < n:
+            tok = toks[i]
+            if (is_capitalized(tok) or is_acronym(tok)) and tok not in TEMPORAL:
+                # Greedily grow the entity span. Temporal tokens end a span.
+                span = [tok]
+                j = i + 1
+                while j < n:
+                    nxt = toks[j]
+                    if nxt in TEMPORAL:
+                        break
+                    if is_capitalized(nxt) or is_acronym(nxt):
+                        span.append(nxt)
+                        j += 1
+                    elif nxt in CONNECTORS and j + 1 < n and (
+                        is_capitalized(toks[j + 1]) or is_acronym(toks[j + 1])
+                    ):
+                        # connector only if followed by another cap token
+                        span.append(nxt)
+                        j += 1
+                    else:
+                        break
+                # Trim trailing connectors just in case.
+                while span and span[-1] in CONNECTORS:
+                    span.pop()
+
+                sentence_initial = (i == 0)
+                # A long capitalized run is usually a list of distinct entities
+                # ("CNN NPR NBC WaPo"); split it into known-gazetteer chunks.
+                for sub in split_span(span):
+                    phrase = " ".join(sub)
+                    if keep_candidate(phrase, sub, sentence_initial):
+                        candidates[normalize(phrase)] += 1
+                    sentence_initial = False
+                i = j
+            else:
+                i += 1
+    return candidates
+
+
+KNOWN = ORGS | PERSONS | PLACES | PRODUCTS
+
+def split_span(span):
+    """Split a long capitalized run into plausible separate entities.
+
+    Greedy longest-match against the known-entity gazetteers; whatever
+    remains between matches is grouped into chunks of at most MAX_UNKNOWN
+    tokens so that "CNN NPR NBC WaPo" does not become one entity, while a
+    genuine three-word name stays intact when it isn't adjacent to a match.
+    """
+    MAX_UNKNOWN = 3
+    if len(span) <= MAX_UNKNOWN:
+        # Short spans: still peel a known entity off the front/back if the
+        # whole thing isn't itself known.
+        whole = normalize(" ".join(span))
+        if whole in KNOWN or len(span) <= 1:
+            return [span]
+    chunks = []
+    i = 0
+    n = len(span)
+    pending = []
+
+    def flush():
+        # Break pending unknowns into <=MAX_UNKNOWN groups.
+        k = 0
+        while k < len(pending):
+            chunks.append(pending[k:k + MAX_UNKNOWN])
+            k += MAX_UNKNOWN
+        pending.clear()
+
+    while i < n:
+        matched = False
+        # Try longest known-gazetteer match starting at i.
+        for L in range(min(n - i, 6), 0, -1):
+            cand = normalize(" ".join(span[i:i + L]))
+            if cand in KNOWN:
+                flush()
+                chunks.append(span[i:i + L])
+                i += L
+                matched = True
+                break
+        if not matched:
+            pending.append(span[i])
+            i += 1
+    flush()
+    return [c for c in chunks if c]
+
+
+def normalize(phrase):
+    """Light normalization: collapse spaces, strip stray trailing punctuation."""
+    phrase = re.sub(r"\s+", " ", phrase).strip()
+    phrase = phrase.strip(".,;:!?\"'")
+    # keep trailing period for acronyms like U.S.
+    return phrase
+
+
+def keep_candidate(phrase, span, sentence_initial):
+    norm = normalize(phrase)
+    if not norm:
+        return False
+    # Gazetteer hits always survive.
+    if norm in ORGS or norm in PERSONS or norm in PLACES or norm in PRODUCTS:
+        return True
+    # Generic acronyms / section labels are never entities.
+    if norm in ACRONYM_STOPLIST:
+        return False
+    # Single-token candidates need to clear a higher bar.
+    if len(span) == 1:
+        tok = span[0]
+        if is_acronym(tok):
+            return True  # acronyms like FBI, NSA, AFP, AP
+        if tok in COMMON_WORDS:
+            return False
+        if sentence_initial:
+            # A lone capitalized word starting a sentence is usually not an
+            # entity unless it's a known name/place/org (handled above).
+            return False
+        # Lone capitalized mid-sentence word: keep only if it's not a plain
+        # common word and is alphabetic+capitalized (proper-noun-ish).
+        if tok in COMMON_WORDS:
+            return False
+        return tok[0].isupper() and len(tok) > 1
+    # Multi-token: drop if every token is a common word.
+    if all(t in COMMON_WORDS or t in CONNECTORS for t in span):
+        return False
+    # Drop if the whole phrase is just a leading common word + connectors.
+    return True
+
+
+# ----------------------------------------------------------------------------
+# 4. Classification
+# ----------------------------------------------------------------------------
+
+def classify(entity):
+    toks = entity.split()
+    # Gazetteers first (most specific).
+    if entity in PRODUCTS:
+        return "PRODUCT"
+    if entity in PERSONS:
+        return "PERSON"
+    if entity in PLACES:
+        return "PLACE"
+    if entity in ORGS:
+        return "ORG"
+
+    last = toks[-1].rstrip(".")
+    # Org by suffix.
+    if last in {s.rstrip(".") for s in ORG_SUFFIXES}:
+        return "ORG"
+    # Person by given-name lead or honorific.
+    if toks[0].rstrip(".") in PERSON_TITLES:
+        return "PERSON"
+    if toks[0] in GIVEN_NAMES:
+        return "PERSON"
+    # Two capitalized words, neither org-ish, both look like name parts.
+    if len(toks) == 2 and all(t[:1].isupper() and t[1:].islower() for t in toks):
+        if toks[0] in GIVEN_NAMES or toks[1] in PERSONS:
+            return "PERSON"
+        # Ambiguous Cap Cap: default to ORG only if known, else MISC.
+        return "MISC"
+    # Acronym alone: usually an ORG (FBI, NSA, AFP) unless product gazetteer.
+    if len(toks) == 1 and is_acronym(toks[0]):
+        return "ORG"
+    # Product-y: contains digits or version-like dashes.
+    if any(ch.isdigit() for ch in entity) or "-" in entity:
+        return "PRODUCT"
+    return "MISC"
+
+
+# ----------------------------------------------------------------------------
+# 5. Driver
+# ----------------------------------------------------------------------------
+
+TYPE_ORDER = ["PERSON", "ORG", "PRODUCT", "PLACE", "MISC"]
+
+def run(text, min_count=1):
+    clean = strip_markdown(text)
+    cands = extract_candidates(clean)
+    entities = []
+    for ent, cnt in cands.items():
+        if cnt < min_count:
+            continue
+        entities.append({"text": ent, "type": classify(ent), "count": cnt})
+    # Sort: type order, then count desc, then alpha.
+    entities.sort(key=lambda e: (TYPE_ORDER.index(e["type"]) if e["type"] in TYPE_ORDER else 99,
+                                 -e["count"], e["text"].lower()))
+    return entities
+
+
+def fmt_pretty(entities):
+    out = []
+    by_type = {}
+    for e in entities:
+        by_type.setdefault(e["type"], []).append(e)
+    for t in TYPE_ORDER:
+        if t not in by_type:
+            continue
+        out.append(f"== {t} ({len(by_type[t])}) ==")
+        for e in by_type[t]:
+            tag = f"  ({e['count']}x)" if e["count"] > 1 else ""
+            out.append(f"  {e['text']}{tag}")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
+def fmt_jsonl(entities):
+    return "".join(json.dumps(e) + "\n" for e in entities)
+
+
+def fmt_tsv(entities):
+    return "".join(f"{e['type']}\t{e['text']}\t{e['count']}\n" for e in entities)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Deterministic Markdown NER (no AI).")
+    ap.add_argument("file", nargs="?", help="Markdown file (default: stdin)")
+    ap.add_argument("--format", choices=["pretty", "jsonl", "tsv"],
+                    default="pretty")
+    ap.add_argument("--min-count", type=int, default=1,
+                    help="Only emit entities seen at least this many times")
+    args = ap.parse_args()
+
+    if args.file:
+        with open(args.file, encoding="utf-8") as fh:
+            text = fh.read()
+    else:
+        text = sys.stdin.read()
+
+    entities = run(text, min_count=args.min_count)
+
+    if args.format == "jsonl":
+        sys.stdout.write(fmt_jsonl(entities))
+    elif args.format == "tsv":
+        sys.stdout.write(fmt_tsv(entities))
+    else:
+        sys.stdout.write(fmt_pretty(entities))
+
+
+if __name__ == "__main__":
+    main()

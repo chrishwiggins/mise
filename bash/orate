@@ -1,0 +1,107 @@
+#!/bin/bash
+# orate: render a text file to spoken audio via macOS `say` + afconvert.
+# Deterministic half of the /say skill. Text file in, .m4a (or .aiff) out.
+#
+# Usage: orate [-v VOICE] [-o OUTPUT] [-s SLUG] TEXTFILE
+#   -v VOICE   voice name (default "Ava (Premium)"); falls back if not installed
+#   -o OUTPUT  output path (default /tmp/say.m4a, never overwrites)
+#   -s SLUG    slug used when the default output already exists
+# On success prints two lines: absolute output path, then duration as M:SS.
+
+set -euo pipefail
+
+VOICE="Ava (Premium)"
+OUTPUT=""
+SLUG=""
+
+while getopts "v:o:s:" opt; do
+  case "$opt" in
+    v) VOICE="$OPTARG" ;;
+    o) OUTPUT="$OPTARG" ;;
+    s) SLUG="$OPTARG" ;;
+    *) echo "usage: orate [-v VOICE] [-o OUTPUT] [-s SLUG] TEXTFILE" >&2; exit 2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+if [ $# -lt 1 ]; then
+  echo "usage: orate [-v VOICE] [-o OUTPUT] [-s SLUG] TEXTFILE" >&2
+  exit 2
+fi
+TEXTFILE="$1"
+
+if [ ! -f "$TEXTFILE" ]; then
+  echo "orate: no such file: $TEXTFILE" >&2
+  exit 1
+fi
+
+# Verify the requested voice is installed; otherwise fall back.
+installed_voices=$(/usr/bin/say -v '?')
+if ! printf '%s\n' "$installed_voices" | grep -qF "$VOICE"; then
+  fallback=$(printf '%s\n' "$installed_voices" | grep -F "Premium" | head -1 \
+    | sed -E 's/  +[a-z].*$//')
+  if [ -z "$fallback" ]; then
+    fallback=$(printf '%s\n' "$installed_voices" | grep -F "Enhanced" | head -1 \
+      | sed -E 's/  +[a-z].*$//')
+  fi
+  if [ -z "$fallback" ]; then
+    echo "orate: requested voice '$VOICE' not found and no Premium/Enhanced fallback" >&2
+    exit 1
+  fi
+  echo "orate: voice '$VOICE' not installed; using '$fallback'" >&2
+  VOICE="$fallback"
+fi
+
+# Pick a non-colliding output path.
+if [ -z "$OUTPUT" ]; then
+  if [ ! -e /tmp/say.m4a ]; then
+    OUTPUT="/tmp/say.m4a"
+  else
+    if [ -n "$SLUG" ]; then
+      base="$SLUG"
+    else
+      base=$(basename "$TEXTFILE")
+      base="${base%.*}"
+      [ -n "$base" ] || base=$(date +%H%M%S)
+    fi
+    OUTPUT="/tmp/say_${base}.m4a"
+    if [ -e "$OUTPUT" ]; then
+      n=2
+      while [ -e "/tmp/say_${base}-${n}.m4a" ]; do
+        n=$((n + 1))
+      done
+      OUTPUT="/tmp/say_${base}-${n}.m4a"
+    fi
+  fi
+fi
+
+TMPAIFF=$(mktemp /tmp/orate.XXXXXX.aiff)
+trap 'rm -f "$TMPAIFF"' EXIT
+
+/usr/bin/say -v "$VOICE" -o "$TMPAIFF" -f "$TEXTFILE"
+
+if /usr/bin/afconvert -f m4af -d aac "$TMPAIFF" "$OUTPUT"; then
+  :
+else
+  # afconvert failed; ship the aiff instead.
+  aiff_out="${OUTPUT%.m4a}.aiff"
+  mv "$TMPAIFF" "$aiff_out"
+  trap - EXIT
+  echo "orate: afconvert failed; shipped aiff instead" >&2
+  OUTPUT="$aiff_out"
+fi
+
+# Duration in M:SS from afinfo "estimated duration".
+secs=$(/usr/bin/afinfo "$OUTPUT" 2>/dev/null \
+  | awk '/estimated duration/ {print $3}')
+if [ -n "${secs:-}" ]; then
+  isecs=${secs%.*}
+  m=$((isecs / 60))
+  s=$((isecs % 60))
+  dur=$(printf '%d:%02d' "$m" "$s")
+else
+  dur="0:00"
+fi
+
+echo "$OUTPUT"
+echo "$dur"

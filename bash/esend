@@ -1,0 +1,52 @@
+#!/bin/bash
+# esend: send a prepared .eml draft (with optional attachments) via `m`.
+#
+# The recipient, Cc/Bcc, and subject come from the .eml's own headers;
+# this helper just wires the draft and any attachment paths into one
+# `m send` call so a repeatable send is a command, not a re-typed pipeline.
+#
+# Usage:
+#   esend draft.eml                       # send, no attachment
+#   esend draft.eml photo.jpg             # send with one attachment
+#   esend draft.eml a.jpg b.pdf c.png     # send with several
+#   esend -n draft.eml photo.jpg          # dry-run: print the command, don't send
+#
+# Exit status is `m`'s.
+set -euo pipefail
+
+M="/Users/wiggins/mise/bash/m"
+
+dry=0
+if [[ "${1:-}" == "-n" || "${1:-}" == "--dry-run" ]]; then
+    dry=1
+    shift
+fi
+
+if [[ $# -lt 1 ]]; then
+    echo "usage: esend [-n] draft.eml [attachment ...]" >&2
+    exit 2
+fi
+
+eml="$1"; shift
+
+if [[ ! -f "$eml" ]]; then
+    echo "esend: draft not found: $eml" >&2
+    exit 2
+fi
+
+# Build the m argument list: send -H <eml> [-a <path>]...
+cmd=("$M" send -H "$eml")
+for att in "$@"; do
+    if [[ ! -f "$att" ]]; then
+        echo "esend: attachment not found: $att" >&2
+        exit 2
+    fi
+    cmd+=(-a "$att")
+done
+
+if [[ $dry -eq 1 ]]; then
+    printf 'would run:'; printf ' %q' "${cmd[@]}"; printf '\n'
+    exit 0
+fi
+
+exec "${cmd[@]}"

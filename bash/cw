@@ -10,29 +10,108 @@
 #   cw open <slug>            open URL in browser
 #
 # Examples:
-#   cw pub slides.pdf a       -> https://chrishwiggins.com/a
+#   cw pub slides.pdf a.pdf   -> https://chrishwiggins.com/a.pdf
 #   cw 301 b http://ex.com   -> 301 chrishwiggins.com/b -> http://ex.com
-#   cw rm a b                 remove file a and redirect b
+#   cw rm a.pdf b             remove file a.pdf and redirect b
 #   cw ls                     show what's live
+#
+# Two backends, because they answer different questions:
+#
+#   Files    -> Cloudflare R2 bucket `share`, served at the apex by the
+#               `apex-files` Worker (src/apex-files/ in the seiton cw repo),
+#               and also directly at https://files.chrishwiggins.com (custom
+#               domain on the same bucket). Uploads go through wrangler,
+#               which authenticates with its own OAuth token, NOT the API
+#               token below; the API token has no R2 scope.
+#   Redirects-> Cloudflare Single Redirects (dynamic redirect ruleset) on
+#               the chrishwiggins.com zone, via the API token below.
+#
+# The former RackNerd VPS backend (root@23.95.164.201) was cancelled
+# 2026-05-26; its IP now belongs to someone else. Do NOT re-accept SSH host
+# keys for that address. If an ssh/scp to it prompts about a changed host
+# key, the answer is no. Files published under the old /var/www/html/files/
+# are gone; anything that mattered has to be re-published.
+#
+# The apex has no origin: its A record is 192.0.2.1 (TEST-NET-1), proxied,
+# so anything reaching the origin 522s. The `apex-files` Worker answers at
+# the edge instead, streaming from R2, which is why chrishwiggins.com/<slug>
+# works. Deployed 2026-08-27; before that, files were only on files.
+#
+# Order of the three things answering on this zone, verified 2026-08-27:
+#   Single Redirects (e.g. /bos) run BEFORE Workers, so they win outright.
+#   The Worker runs next and serves any path matching an R2 key.
+#   The apex root 301 to https://www.columbia.edu/~chw2 is a PAGE RULE
+#     (target "chrishwiggins.com/", exact root only -- it does not shadow
+#     /<slug>). Page Rules run AFTER Workers, so the Worker returns that
+#     redirect for "/" itself rather than deferring to the rule.
+# A slug with no matching R2 object 302s to the same Columbia page.
 
 set -euo pipefail
 
-VPS="root@23.95.164.201"
-KEY="$HOME/.ssh/google_compute_engine"
-DIR="/var/www/html/files"
-REDIR="/etc/nginx/redirects.conf"
+ZONE="c82c2e46950311ea6b0374e4fa3eb2c0"   # chrishwiggins.com
+TOKEN_FILE="$HOME/.config/cloudflare/token"
+API="https://api.cloudflare.com/client/v4"
+EP="$API/zones/$ZONE/rulesets/phases/http_request_dynamic_redirect/entrypoint"
 DOMAIN="https://chrishwiggins.com"
+BUCKET="share"
+FILES="https://files.chrishwiggins.com"
 
 usage() {
     sed -nE '2,/^$/s/^# ?//p' "$0"
     exit 0
 }
 
+cf() {
+    curl -sS -m 30 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+         -H "Content-Type: application/json" "$@"
+}
+
+check_slug() {
+    [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Error: bad slug '$1' (use letters, digits, . _ -)"; exit 1; }
+}
+
+get_rules() {
+    # existing redirect rules as a JSON array; [] if no ruleset exists yet
+    cf "$EP" | jq '(.result.rules // []) | map({expression, description, action, action_parameters})'
+}
+
+put_rules() {
+    # $1 = JSON array of rules; replaces the entrypoint ruleset wholesale
+    local RESP
+    RESP=$(jq -n --argjson rules "$1" '{rules: $rules}' | cf -X PUT --data-binary @- "$EP")
+    if ! echo "$RESP" | jq -e '.success' >/dev/null 2>&1; then
+        # no entrypoint ruleset yet: create it
+        RESP=$(jq -n --argjson rules "$1" \
+            '{name: "default", kind: "zone", phase: "http_request_dynamic_redirect", rules: $rules}' \
+            | cf -X POST --data-binary @- "$API/zones/$ZONE/rulesets")
+        if ! echo "$RESP" | jq -e '.success' >/dev/null 2>&1; then
+            echo "Error: Cloudflare API:" >&2
+            echo "$RESP" | jq '.errors' >&2 2>/dev/null || echo "$RESP" >&2
+            if echo "$RESP" | jq -e '.errors[]? | select(.code == 10000)' >/dev/null 2>&1; then
+                echo "" >&2
+                echo "The token at ~/.config/cloudflare/token can read but not edit redirects" >&2
+                echo "(it is cf-bill's Read All Resources token). Fix once, keeping the same secret:" >&2
+                echo "  1. https://dash.cloudflare.com/profile/api-tokens" >&2
+                echo "  2. Edit that token (created 2026-03-06, Read All Resources template)" >&2
+                echo "  3. Add permission: Zone / Dynamic URL Redirects / Edit, all zones" >&2
+                echo "  4. Save (the token string does not change), then rerun this command" >&2
+            fi
+            exit 1
+        fi
+    fi
+}
+
 do_redirect() {
     local CODE="$1" SLUG="$2" URL="$3"
-    local RULE="location = /${SLUG} { return ${CODE} ${URL}; }"
-    ssh -i "$KEY" "$VPS" "sed -i '/^location = \/${SLUG} {/d' ${REDIR} && echo '${RULE}' >> ${REDIR}"
-    ssh -i "$KEY" "$VPS" "nginx -t 2>&1 && nginx -s reload 2>&1" || { echo "Error: nginx reload failed"; exit 1; }
+    check_slug "$SLUG"
+    local EXPR="(http.request.uri.path eq \"/${SLUG}\")"
+    local RULES NEW
+    RULES=$(get_rules)
+    NEW=$(jq -n --arg expr "$EXPR" --arg desc "cw: $SLUG" --arg url "$URL" --argjson code "$CODE" \
+        '{expression: $expr, description: $desc, action: "redirect",
+          action_parameters: {from_value: {target_url: {value: $url}, status_code: $code, preserve_query_string: false}}}')
+    put_rules "$(jq -n --argjson r "$RULES" --argjson n "$NEW" \
+        '[$r[] | select(.expression != $n.expression)] + [$n]')"
     echo "$DOMAIN/$SLUG -> $URL ($CODE)"
 }
 
@@ -41,7 +120,16 @@ case "${1:-}" in
         [ $# -lt 3 ] && { echo "Usage: cw pub <file> <slug>"; exit 1; }
         FILE="$2"; SLUG="$3"
         [ ! -f "$FILE" ] && { echo "Error: $FILE not found"; exit 1; }
-        scp -i "$KEY" "$FILE" "$VPS:$DIR/$SLUG"
+        check_slug "$SLUG"
+        command -v wrangler >/dev/null 2>&1 || {
+            echo "Error: wrangler not found. Uploads need it (the API token has no R2 scope)." >&2
+            exit 1
+        }
+        # --remote so this hits the real bucket, not a local simulation.
+        wrangler r2 object put "$BUCKET/$SLUG" --file="$FILE" --remote >/dev/null || {
+            echo "Error: upload failed. If this is an auth error, run: wrangler login" >&2
+            exit 1
+        }
         echo "$DOMAIN/$SLUG"
         ;;
     301|302)
@@ -52,37 +140,66 @@ case "${1:-}" in
     rm|del|remove)
         shift
         [ $# -lt 1 ] && { echo "Usage: cw rm <slug> [...]"; exit 1; }
-        NEED_RELOAD=false
+        RULES=$(get_rules)
+        CHANGED=false
+        MISSING=false
         for slug in "$@"; do
-            if ssh -i "$KEY" "$VPS" "test -f $DIR/$slug"; then
-                ssh -i "$KEY" "$VPS" "rm -f $DIR/$slug"
-                echo "Removed file: $DOMAIN/$slug"
-            fi
-            if ssh -i "$KEY" "$VPS" "grep -q '^location = /$slug {' $REDIR 2>/dev/null"; then
-                ssh -i "$KEY" "$VPS" "sed -i '/^location = \\/$slug {/d' $REDIR"
+            check_slug "$slug"
+            FOUND=false
+            EXPR="(http.request.uri.path eq \"/${slug}\")"
+            if echo "$RULES" | jq -e --arg e "$EXPR" 'any(.[]; .expression == $e)' >/dev/null; then
+                RULES=$(echo "$RULES" | jq --arg e "$EXPR" '[.[] | select(.expression != $e)]')
                 echo "Removed redirect: $DOMAIN/$slug"
-                NEED_RELOAD=true
+                CHANGED=true
+                FOUND=true
+            fi
+            # A slug can name a file, a redirect, or both; check each.
+            if command -v wrangler >/dev/null 2>&1 &&
+               wrangler r2 object get "$BUCKET/$slug" --remote --pipe >/dev/null 2>&1; then
+                if wrangler r2 object delete "$BUCKET/$slug" --remote >/dev/null 2>&1; then
+                    echo "Removed file: $DOMAIN/$slug"
+                    FOUND=true
+                fi
+            fi
+            if ! $FOUND; then
+                echo "Not found: $slug"
+                MISSING=true
             fi
         done
-        $NEED_RELOAD && ssh -i "$KEY" "$VPS" "nginx -s reload 2>/dev/null"
+        # Guarded, not `$CHANGED && ...`: as the last command that would make
+        # a file-only removal exit 1 under set -e and report success as failure.
+        if $CHANGED; then
+            put_rules "$RULES"
+        fi
+        $MISSING && exit 1
+        exit 0
         ;;
     ls|list)
-        ssh -i "$KEY" "$VPS" '
-            for f in '"$DIR"'/*; do
-                [ -f "$f" ] || continue
-                b=$(basename "$f")
-                sz=$(stat -c%s "$f" 2>/dev/null | numfmt --to=iec 2>/dev/null || wc -c < "$f" | tr -d " ")
-                printf "%-6s  %s\n" "$sz" "'"$DOMAIN"'/$b"
-            done
-            awk "/^location = / { slug=\$3; code=\$6; url=\$7; gsub(/;/,\"\",url); gsub(/^\\//,\"\",slug); printf \"  ->   %-40s %s %s\\n\", \"'"$DOMAIN"'/\" slug, code, url }" '"$REDIR"' 2>/dev/null
-        '
+        # slug-style rules (the ones cw creates) print as $DOMAIN/<slug>;
+        # anything else (wildcard expressions, rules made in the dashboard)
+        # prints its raw expression so ls never silently hides a rule.
+        get_rules | jq -r --arg d "$DOMAIN" '
+            .[]
+            | (.action_parameters.from_value // {}) as $f
+            | ((.expression | capture("eq \"/(?<p>[^\"]+)\"").p) // null) as $slug
+            | if $slug then "  ->   \($d)/\($slug)  \($f.status_code) \($f.target_url.value // "?")"
+              else "  ->   [\(.description // "no description")]  \($f.status_code // "?") \($f.target_url.value // "?")\n         expr: \(.expression)"
+              end'
+        # Published files live in R2 and are NOT listed here. wrangler has no
+        # object-list subcommand (only get/put/delete), and the API token has
+        # no R2 scope, so neither path can enumerate the bucket. Rather than
+        # print an empty list that reads as "no files", say so.
+        echo "(files: $DOMAIN/<slug>, stored in R2 bucket '$BUCKET', not listed here)"
+        echo "(       also reachable at $FILES/<slug>)"
+        echo "(apex: $DOMAIN/ -> https://www.columbia.edu/~chw2, 301, via a Cloudflare Page Rule)"
         ;;
     open)
         [ $# -lt 2 ] && { open "$DOMAIN"; exit 0; }
         open "$DOMAIN/$2"
         ;;
     status|st)
-        ssh -i "$KEY" "$VPS" 'echo "=== Gateway ===" && curl -sf http://127.0.0.1:18789/health && echo "" && echo "=== Postfix ===" && systemctl is-active postfix && echo "=== Nginx ===" && systemctl is-active nginx && echo "=== OpenDKIM ===" && systemctl is-active opendkim && echo "=== Load ===" && uptime'
+        cf "$API/zones/$ZONE" | jq -r '"zone: \(.result.name) (\(.result.status))"'
+        echo "redirects: $(get_rules | jq 'length')"
         ;;
     -h|--help|help|"?"|"")
         usage

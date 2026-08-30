@@ -1,0 +1,77 @@
+#!/bin/sh
+# nite - blank the display now while the machine keeps computing.
+#
+# Blanks the screen immediately and holds an idle-sleep assertion so the Mac
+# itself never drops off (downloads, builds, renders keep running in the dark).
+# Touch a key or the trackpad and the screen wakes; the assertion is released.
+#
+# On first run it also sets battery idle sleep to "never" permanently, which
+# needs your password once. After that it never prompts again.
+#
+# If the lock screen lights the panel back up after it goes dark, that is not
+# something a script can turn off (the setting lives in a protected store, so
+# `defaults` cannot read or write it). Set it by hand, once:
+#   System Settings > Lock Screen
+#     "Require password after ... display is turned off"  -> Never
+#     "Start Screen Saver when inactive"                  -> Never
+
+set -e
+
+# --- one-time: keep the Mac awake on battery, not just on AC ----------------
+# `pmset -g custom` reports the battery block first, so pull the sleep value
+# out of that block only.
+battery_sleep=$(
+    /usr/bin/pmset -g custom |
+        /usr/bin/awk '/^Battery Power:/{b=1;next} /^AC Power:/{b=0} b && $1=="sleep"{print $2;exit}'
+)
+
+if [ "$battery_sleep" != "0" ]; then
+    echo "nite: battery idle sleep is ${battery_sleep}m; setting to never (needs your password once)."
+    if sudo /usr/bin/pmset -b sleep 0; then
+        echo "nite: done, this will not be asked again."
+    else
+        echo "nite: skipped; on battery the Mac will still sleep after ${battery_sleep}m." >&2
+    fi
+fi
+
+# --- warn if the lock screen will just relight the panel --------------------
+# This is the usual reason "the screen went dark then came back lit": the Mac
+# locks the moment the display sleeps, and the login window turns it on again.
+if sysadminctl -screenLock status 2>&1 | grep -q 'immediate'; then
+    echo "nite: screen lock is set to 'immediate', so the login window will" >&2
+    echo "      relight the display right after it blanks. To stop that:" >&2
+    echo "        sudo sysadminctl -screenLock off        # never lock" >&2
+    echo "        sudo sysadminctl -screenLock 900 -password -   # or lock after 15m" >&2
+fi
+
+# --- hold sleep off for as long as the screen is dark -----------------------
+# -i prevent idle system sleep, -s prevent sleep on AC, -m keep disks spun up.
+#
+# A previous run killed hard (closed terminal) can leave a caffeinate holding
+# sleep off forever, so clear our own strays before starting a new one.
+/usr/bin/pkill -f '^/usr/bin/caffeinate -ism$' 2>/dev/null || true
+
+/usr/bin/caffeinate -ism &
+caffeinate_pid=$!
+
+# Always release the assertion, however this script exits.
+trap 'kill "$caffeinate_pid" 2>/dev/null || true' EXIT INT TERM
+
+/usr/bin/pmset displaysleepnow
+
+# UserIsActive stays 1 until the display actually goes down, so wait for the
+# 1 -> 0 edge before watching for the wake. (IODisplayWrangler, the usual way
+# to read display power state, does not exist on Apple Silicon.)
+user_is_active() {
+    /usr/bin/pmset -g assertions 2>/dev/null |
+        grep -qE '^ *UserIsActive +1'
+}
+
+while user_is_active; do
+    sleep 1
+done
+
+# Dark now. Hold the assertion until you touch something.
+while ! user_is_active; do
+    sleep 5
+done

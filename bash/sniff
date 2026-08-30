@@ -1,13 +1,20 @@
 #!/bin/bash
 # WiFi network scanner - replacement for deprecated 'airport -s'
-# Enumerates available WiFi networks sorted by signal strength
+# macOS 15+ redacts SSID names in system_profiler output unless the app has
+# Location Services permission. If a CoreWLAN helper named 'wifi-scan' is on
+# PATH, use it (it shows real SSIDs once Location Services is granted).
+# Otherwise fall back to parsing system_profiler (names may be <redacted>).
+
+if command -v wifi-scan >/dev/null 2>&1; then
+    exec wifi-scan "$@"
+fi
+
+printf "%-40s %8s\n" "SSID" "RSSI"
+print_line() { printf '%.0s-' {1..66}; echo; }
+print_line
 
 system_profiler SPAirPortDataType 2>/dev/null | \
 awk '
-BEGIN {
-    printf "%-40s %10s\n", "SSID", "RSSI"
-    print "--------------------------------------------------------------------------------"
-}
 /Other Local Wi-Fi Networks:/ { in_other=1; next }
 in_other && /^[[:space:]]*$/ { next }
 in_other && /:$/ {
