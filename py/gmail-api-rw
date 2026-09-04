@@ -2364,6 +2364,14 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
         reply_to = msg.get("Reply-To", orig_from)
         _, reply_addr = parseaddr(reply_to)
 
+    # Preserve the reply target derived from the original message. reply_addr
+    # gets reassigned from editor output below, and the edit-then-outbox-switch
+    # path can hand back a blank To: (a stray blank line in the edited header
+    # block truncates the header parse, or the outbox swap re-opens the editor
+    # with the wrong From: context). If that happens we re-derive To: from this
+    # instead of silently sending with no recipient.
+    original_reply_addr = reply_addr
+
     # Collect all known self-addresses for exclusion from Cc
     self_addrs = set()
     if account:
@@ -2461,8 +2469,10 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
             new_account_info = None
             final_headers["From"] = send_account
 
-        # Update variables from editor results
-        reply_addr = final_headers["To"]
+        # Update variables from editor results. A blank To: coming back from
+        # the editor (stray blank line truncating the header parse, etc.) must
+        # not become a send with no recipient; fall back to the original target.
+        reply_addr = final_headers["To"] or original_reply_addr
         cc_addrs = final_headers["Cc"]
         re_subject = final_headers["Subject"]
 
@@ -2522,19 +2532,31 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
                 args.attach = _attachment_menu(getattr(args, 'attach', None)) or None
                 continue
             elif answer in ('e', 'edit'):
-                # Re-open editor with current values
+                # Re-open editor with current values. When an outbox is set the
+                # From: shown must be the send account (matching the first-pass
+                # block above), not the read account, or the user "changes" From:
+                # to the outbox and needlessly trips the account-swap path.
+                edit_from = send_account or account or "Unknown account"
+                edit_current = send_account or account or ""
                 current_headers = {
                     "To": reply_addr,
                     "Cc": cc_addrs,
                     "Subject": re_subject,
-                    "From": account or "Unknown account"
+                    "From": edit_from
                 }
                 final_headers, body, new_account_info = edit_headers_and_body(
-                    current_headers, body, account or ""
+                    current_headers, body, edit_current
                 )
+                if send_account and send_service is not service:
+                    # Outbox is fixed on the command line; ignore any From: edits.
+                    new_account_info = None
+                    final_headers["From"] = send_account
 
-                # Update variables from editor results
-                reply_addr = final_headers["To"]
+                # Update variables from editor results. If the edited header
+                # block came back with a blank To: (e.g. a stray blank line
+                # truncated the header parse), fall back to the original reply
+                # target rather than sending with no recipient.
+                reply_addr = final_headers["To"] or original_reply_addr
                 cc_addrs = final_headers["Cc"]
                 re_subject = final_headers["Subject"]
 
@@ -2553,6 +2575,14 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
     # /tmp/spool/last-draft-edit.eml by edit_headers_and_body.
     reply_addr = _assert_valid_header_addrs(reply_addr, "To")
     cc_addrs = _assert_valid_header_addrs(cc_addrs, "Cc")
+
+    # Final hard guard: a reply must never reach the Gmail API with no
+    # recipient (that bounces as HttpError 400 "Recipient address required").
+    # _assert_valid_header_addrs returns "" unchanged, so it does not catch an
+    # empty To:; catch it here before composing or sending.
+    if not (reply_addr or "").strip():
+        print("Empty recipient, aborting.", file=sys.stderr)
+        sys.exit(1)
 
     # Build reply message
     reply = MIMEText(body, "plain", "utf-8")
