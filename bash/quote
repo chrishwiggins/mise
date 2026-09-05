@@ -1,0 +1,5 @@
+#!/bin/bash
+# `quote` opens quoteinvestigator.com; `quote <sub> ...` runs quote-<sub>.
+exec subcommand-dispatch quote \
+    open https://quoteinvestigator.com/ \
+    -- "$@"

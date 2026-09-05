@@ -1,0 +1,78 @@
+#!/bin/bash
+# subcommand-dispatch — turn a "<name>-<sub>" script family into a `<name> <sub>` CLI.
+#
+# Why this exists: in tcsh, an alias without a `\!` history marker silently
+# APPENDS the user's arguments to the expansion. So
+#     alias gcal chrome-profile-open 0 https://calendar.google.com/...
+# turns `gcal solo "tomorrow 4:30 pm bar6"` into
+#     chrome-profile-open 0 <url> solo tomorrow 4:30 pm bar6
+# and chrome-profile-open, which reads only $1 and $2, throws the rest away.
+# No event, no error. Several alias families had this exact shape.
+#
+# Usage (from a tiny wrapper named <name>):
+#     exec subcommand-dispatch <name> <fallback-cmd> [fallback-args...] -- "$@"
+#
+# Bare `<name>` (or a leading flag / URL) runs the fallback, preserving the old
+# browser-opening behavior. `<name> <sub>` runs `<name>-<sub>` if it exists on
+# PATH, and otherwise FAILS LOUDLY instead of discarding the arguments.
+
+set -u
+
+NAME="${1:?subcommand-dispatch: missing <name>}"
+shift
+
+FALLBACK=()
+while [[ $# -gt 0 && "$1" != "--" ]]; do
+    FALLBACK+=("$1")
+    shift
+done
+[[ $# -gt 0 ]] && shift   # drop the --
+
+run_fallback() {
+    if [[ ${#FALLBACK[@]} -eq 0 ]]; then
+        printf '%s: no arguments and no fallback command\n' "$NAME" >&2
+        exit 1
+    fi
+    exec "${FALLBACK[@]}"
+}
+
+list_subcommands() {
+    local dir f base
+    local -a dirs
+    IFS=: read -ra dirs <<< "$PATH"
+    for dir in "${dirs[@]}"; do
+        [[ -d "$dir" ]] || continue
+        for f in "$dir/$NAME"-*; do
+            [[ -x "$f" && ! -d "$f" ]] || continue
+            base="${f##*/}"
+            printf '%s\n' "${base#"$NAME"-}"
+        done
+    done | sort -u
+}
+
+usage() {
+    printf 'Usage: %s                  %s\n' "$NAME" "${FALLBACK[*]:-(no fallback)}"
+    printf '       %s <sub> [args...]  run %s-<sub> with args\n\n' "$NAME" "$NAME"
+    printf 'Available subcommands:\n'
+    list_subcommands | sed 's/^/  /'
+}
+
+[[ $# -eq 0 ]] && run_fallback
+
+case "$1" in
+    -h|--help|help) usage; exit 0 ;;
+esac
+
+SUB="$1"
+
+# A leading flag or a URL is not a subcommand.
+[[ "$SUB" == -* || "$SUB" == *://* ]] && run_fallback
+
+if command -v "$NAME-$SUB" >/dev/null 2>&1; then
+    shift
+    exec "$NAME-$SUB" "$@"
+fi
+
+printf '%s: no such subcommand: %s\n\n' "$NAME" "$SUB" >&2
+usage >&2
+exit 1
