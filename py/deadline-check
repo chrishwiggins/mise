@@ -70,8 +70,11 @@ def month_num(word):
 def dates_in(line, today):
     """Every date this line refers to, resolved against `today`."""
     out = []
-    m = DATE_PATTERNS[0][0].search(line)
-    if m:
+    # finditer, not search: an item often carries more than one ISO date
+    # ("asked 2026-08-07, due 2026-08-18"), and taking only the first one
+    # silently hides the deadline behind whatever date happens to be
+    # mentioned earlier in the sentence.
+    for m in DATE_PATTERNS[0][0].finditer(line):
         try:
             out.append(dt.date(int(m[1]), int(m[2]), int(m[3])))
         except ValueError:
@@ -122,11 +125,29 @@ def anchor_date(text):
 
 
 def item_lines(text):
-    """(number-or-bullet label, full line) for each top-level task line."""
+    """One entry per top-level task, with wrapped continuation lines joined.
+
+    Items in these files are hard-wrapped, so a deadline frequently lands
+    on the second or third physical line ("...cancellation, due\n
+    2026-08-18 and still unsent"). Reading only the first line hides
+    those dates completely, which is how three overdue hackNY items went
+    unreported on 2026-08-21 while the tool printed a clean all-clear.
+    """
     out = []
+    cur = None
     for line in text.split("\n"):
         if re.match(r"^\s*(?:\d{1,2}[.)]|[-*+])\s+\S", line):
-            out.append(line)
+            if cur is not None:
+                out.append(cur)
+            cur = line
+        elif cur is not None:
+            if line.strip():
+                cur += " " + line.strip()
+            else:
+                out.append(cur)
+                cur = None
+    if cur is not None:
+        out.append(cur)
     return out
 
 
@@ -151,6 +172,12 @@ def main():
     ap.add_argument("--file", default="doc/NEXT.md")
     ap.add_argument("--retro", default="retro.md")
     ap.add_argument("--hours", type=int, default=48)
+    ap.add_argument(
+        "--overdue-days",
+        type=int,
+        default=30,
+        help="also report items whose date passed within this many days (default 30)",
+    )
     ap.add_argument("--quiet", action="store_true", help="print nothing when nothing is due")
     ap.add_argument("--today", help="override today's date as YYYY-MM-DD (for testing)")
     a = ap.parse_args()
@@ -175,21 +202,37 @@ def main():
     anchor = anchor_date(text)
     stale = anchor is not None and (today - anchor).days > 1
 
+    # An item whose date has already passed is more urgent than one still
+    # ahead, so the window looks backward as well as forward. A purely
+    # forward window reports a clean all-clear while items rot: on
+    # 2026-08-21 three overdue hackNY items (a held email, a bank check,
+    # a filing chase) were all invisible for exactly this reason.
+    # The lookback is bounded so that long-dead dates quoted in prose do
+    # not resurface forever.
+    floor = today - dt.timedelta(days=max(1, a.overdue_days))
+
     due = []
     for line in item_lines(text):
         cands = dates_in(line, today) + relative_dates(line, anchor)
-        ds = [d for d in cands if today <= d <= horizon]
+        ds = [d for d in cands if floor <= d <= horizon]
         if not ds:
             continue
         due.append((min(ds), line.strip(), survived(retro_text, line)))
 
     if not due:
         if not a.quiet:
-            print(f"Nothing in {a.file} is dated within {a.hours}h of {today}.")
+            print(
+                f"Nothing in {a.file} is dated within {a.hours}h of {today}, "
+                f"and nothing is overdue in the last {a.overdue_days} days."
+            )
         return 0
 
     due.sort()
-    print(f"DUE WITHIN {a.hours}H (today is {today}):")
+    overdue = [x for x in due if x[0] < today]
+    header = f"DUE WITHIN {a.hours}H (today is {today})"
+    if overdue:
+        header = f"{len(overdue)} OVERDUE, plus what is due within {a.hours}h (today is {today})"
+    print(f"{header}:")
     if stale:
         print(
             f"  WARNING: {a.file} was last stamped 'Updated {anchor}', "
@@ -200,7 +243,14 @@ def main():
     print()
     for d, line, n in due:
         days = (d - today).days
-        when = "TODAY" if days == 0 else ("TOMORROW" if days == 1 else f"in {days} days")
+        if days < 0:
+            when = f"OVERDUE by {-days} day{'s' if days != -1 else ''}"
+        elif days == 0:
+            when = "TODAY"
+        elif days == 1:
+            when = "TOMORROW"
+        else:
+            when = f"in {days} days"
         print(f"  [{when}] {line[:150]}")
         if n >= 2:
             print(

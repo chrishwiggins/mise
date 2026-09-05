@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 import datetime
 import sys
+import subprocess
+import os
 
 
 def countdown(date_str):
@@ -19,8 +21,13 @@ def countdown(date_str):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python countdown.py <date>")
+        print("Usage: countdown.py <date> or countdown.py -e")
         sys.exit(1)
 
-    date_str = sys.argv[1]
-    countdown(date_str)
+    arg = sys.argv[1]
+
+    if arg == "-e":
+        countdowns_file = os.path.expanduser("~/gd/local/seiton/aux/countdowns.sh")
+        subprocess.run([os.environ.get("EDITOR", "vim"), countdowns_file])
+    else:
+        countdown(arg)

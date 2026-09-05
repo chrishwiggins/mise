@@ -13,23 +13,44 @@ Example: python3 yt-clean.py dQw4w9WgXcQ
 Requires: yt-dlp installed (pip install yt-dlp)
 """
 
+import glob
 import os
+import shutil
 import sys
 import re
 import subprocess
 import tempfile
 
 
-def download_transcript(video_id, temp_file_path):
-    """Download the auto-generated transcript of a YouTube video using yt-dlp."""
+def download_transcript(video_id, out_template):
+    """Download a video's auto-generated transcript; return the file yt-dlp wrote.
+
+    yt-dlp always appends its own ".<lang>.<ext>" to the -o template, so the
+    caller cannot know the final name in advance: ask for a directory template
+    and glob for the result, which also covers not knowing which of the
+    requested language tags the video actually turned out to have.
+    """
+    # YouTube 403 workaround (2026-08-20), matching seiton/bash/yt-dlp-w: the
+    # default android_vr player client now yields URLs YouTube rejects, and the
+    # clients that replace it require a GVS PO Token we do not have.
     command = [
         "yt-dlp",
+        "--extractor-args",
+        "youtube:player_client=web_embedded",
         "--write-auto-sub",
-        "--sub-lang",
-        "en",
+        # An explicit list, deliberately not the regex "en.*": that pattern also
+        # matches machine translations ("en-fr", "en-es") and downloads all of
+        # them. Which native track exists varies by video -- some expose plain
+        # "en", others only the auto-generated "en-en" -- so name the real
+        # candidates and let yt-dlp take whichever is present.
+        # (Do NOT add extractor-arg skip=translated_subs to prune the "en-xx"
+        # noise instead: it drops the native track too, leaving nothing at all.
+        # Both behaviors verified against real videos 2026-08-20.)
+        "--sub-langs",
+        "en-en,en-US,en-GB,en",
         "--skip-download",
         "-o",
-        temp_file_path,
+        out_template,
         f"https://www.youtube.com/watch?v={video_id}",
     ]
     print(f"Running command: {' '.join(command)}")
@@ -37,7 +58,13 @@ def download_transcript(video_id, temp_file_path):
     if result.returncode != 0:
         print("Error downloading transcript:", result.stderr)
         sys.exit(1)
-    print(f"Transcript downloaded to {temp_file_path}")
+
+    written = sorted(glob.glob(os.path.join(os.path.dirname(out_template), "*.vtt")))
+    if not written:
+        print("Transcript download produced no subtitle file.")
+        sys.exit(1)
+    print(f"Transcript downloaded to {written[0]}")
+    return written[0]
 
 
 def clean_transcript(temp_file_path):
@@ -73,22 +100,18 @@ def main():
         sys.exit(1)
 
     video_id = sys.argv[1]
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".en.vtt")
-    temp_file.close()  # Close the file so yt-dlp can write to it
+    temp_dir = tempfile.mkdtemp(prefix="yt-clean.")
 
     try:
-        download_transcript(video_id, temp_file.name)
+        vtt = download_transcript(video_id, os.path.join(temp_dir, "%(id)s"))
 
-        print(f"Checking if the file {temp_file.name} exists and its size...")
-        if os.path.exists(temp_file.name) and os.path.getsize(temp_file.name) > 0:
-            print(f"File {temp_file.name} exists and is not empty.")
-            clean_transcript(temp_file.name)
+        if os.path.getsize(vtt) > 0:
+            clean_transcript(vtt)
         else:
             print("Transcript download failed or the file is empty.")
             sys.exit(1)
     finally:
-        os.remove(temp_file.name)
-        print(f"Removed temporary file {temp_file.name}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
