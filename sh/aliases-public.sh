@@ -335,7 +335,7 @@ alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
 alias cwnotes 'head `ls -1t $ndir/cwnote_2026_*T*_*_*.md | normalize` | more'
 
 
-alias no-wiml "cat $mise/aux/no-wiml.txt $setup/aux/wiml.tsv | pbcopy"
+alias no-wiml "cat $mise/aux/no-wiml.txt $home/gd/local/seiton/aux/wiml.tsv | pbcopy"
 alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
 #alias vi-null vim -u NONE
 alias vi-null "vi -c 'set nonumber' -c 'set list!' -c 'Copilot disable'"
@@ -562,7 +562,16 @@ alias hideme-start echo i think you mean vpn start
 alias hideme-stop echo i think you mean vpn stop
 alias hideme-status echo i think you mean vpn status
 alias hideme-check echo i think you mean vpn check
-alias claw 'ssh -i ~/.ssh/google_compute_engine root@23.95.164.201'
+alias claw 'echo "RIP claw (2026-03-15 to 2026-05-26): VPS cancelled, IP reassigned to a stranger. Do NOT ssh. See seiton/tooling/claw/RIP.md"'
 alias lostdmv "open 'https://eservices.dmv.ny.gov/TAP/eServices/?Link=MiscLinks.ReplaceCrd'"
 
+## HEALTH LOGGING (oura-dashboard)
+alias vitals "$mise/py/vitals"
+alias bp "$mise/py/vitals"
+alias wt "$mise/py/vitals"
+
+# crashing out
+alias memsave 'killall ControlCenter NotificationCenter Dock; echo "daemons restarted. run: sudo purge  (if still sluggish)"'
+
 skip_verbose_startup:
+

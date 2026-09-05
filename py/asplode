@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""
+asplode - give every window its own macOS desktop, then close the empties.
+
+Spaces accumulate lopsidedly: one desktop ends up with seven windows on it
+while a dozen others sit empty. asplode redistributes them so the mapping is
+one window <-> one space, then removes any space left with nothing on it.
+
+Usage:
+    asplode              plan and apply
+    asplode -n           dry run: print the plan, change nothing
+    asplode -v           verbose (show per-move detail)
+
+Native-fullscreen windows are left alone: macOS already gives each one its own
+space, and yabai refuses to move windows into or out of them.
+
+REQUIRES yabai's scripting addition. Without it yabai cannot create spaces, and
+window moves fail SILENTLY (exit 0, window does not move), so every move here is
+verified by re-querying rather than trusted. Install with:
+
+    sudo yabai --load-sa
+
+and make it persistent via a sudoers entry (see yabai's wiki). asplode checks
+the addition up front and refuses to run a partial redistribution without it.
+"""
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+
+# Windows yabai reports but that are not really user windows to spread out.
+IGNORED_APPS = {"Dock", "WindowManager", "Window Manager", "SystemUIServer",
+                "Control Center", "Notification Center"}
+
+
+def yabai(*args, check=True):
+    """Run a yabai command, returning (exit_code, stdout, stderr)."""
+    proc = subprocess.run(["yabai", "-m", *args],
+                          capture_output=True, text=True)
+    if check and proc.returncode != 0:
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def query(what, *extra):
+    """yabai query returning parsed JSON, or None on failure."""
+    code, out, _ = yabai("query", f"--{what}", *extra)
+    if code != 0 or not out:
+        return None
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        return None
+
+
+def window_space(wid):
+    """Current space index of one window, or None if it is gone."""
+    data = query("windows", "--window", str(wid))
+    return data.get("space") if isinstance(data, dict) else None
+
+
+def real_windows():
+    """User windows worth placing, newest-space-first ordering left to caller."""
+    wins = query("windows") or []
+    keep = []
+    for w in wins:
+        if w.get("app") in IGNORED_APPS:
+            continue
+        if w.get("is-minimized"):
+            continue          # minimized windows occupy no space visually
+        if w.get("is-sticky"):
+            continue          # sticky windows are on every space by design
+        keep.append(w)
+    return keep
+
+
+def check_scripting_addition():
+    """
+    Verify the scripting addition is live.
+
+    yabai reports a clear error for space creation, so probe with that: create a
+    space and immediately destroy it. Returns (ok, message).
+    """
+    spaces_before = query("spaces") or []
+    code, _, err = yabai("space", "--create")
+    if code != 0:
+        return False, err or "space --create failed"
+    spaces_after = query("spaces") or []
+    if len(spaces_after) <= len(spaces_before):
+        return False, "space --create reported success but no space appeared"
+    # Clean up the probe space.
+    yabai("space", str(len(spaces_after)), "--destroy")
+    return True, "ok"
+
+
+def plan(windows, spaces):
+    """
+    Work out which windows need to move.
+
+    Each non-fullscreen space keeps exactly one of its current windows (the
+    first); every other window is surplus and needs a space of its own. Keeping
+    an incumbent avoids pointless churn: a space with one window already is
+    already correct and nothing on it moves.
+    """
+    fullscreen_spaces = set()
+    by_space = {}
+    for w in windows:
+        sp = w["space"]
+        if w.get("is-native-fullscreen"):
+            fullscreen_spaces.add(sp)
+            continue
+        by_space.setdefault(sp, []).append(w)
+
+    stay, surplus = [], []
+    for sp, wins in sorted(by_space.items()):
+        stay.append((sp, wins[0]))
+        surplus.extend(wins[1:])
+
+    # Spaces with no movable window are landing pads for surplus windows.
+    occupied = {sp for sp, _ in stay} | fullscreen_spaces
+    vacant = [s["index"] for s in spaces
+              if s["index"] not in occupied and not s.get("is-native-fullscreen")]
+
+    return surplus, vacant, fullscreen_spaces
+
+
+def move_window(wid, target, verbose=False):
+    """
+    Move one window to a space and confirm it landed.
+
+    The confirmation is not paranoia: without the scripting addition yabai exits
+    0 without moving anything, so an unverified move reports false success.
+    """
+    code, _, err = yabai("window", str(wid), "--space", str(target))
+    if code != 0:
+        return False, err
+    time.sleep(0.12)          # the move is async; give the WM a beat to apply it
+    landed = window_space(wid)
+    if landed == target:
+        return True, ""
+    return False, f"did not land (still on space {landed})"
+
+
+def destroy_empty_spaces(dry_run, verbose):
+    """
+    Remove spaces with no windows, highest index first.
+
+    Descending order matters: destroying space 4 renumbers everything above it,
+    so a low-to-high pass would delete the wrong desktops.
+    """
+    spaces = query("spaces") or []
+    windows = real_windows()
+    live = {w["space"] for w in windows}
+
+    empties = [s["index"] for s in spaces
+               if s["index"] not in live
+               and not s.get("is-native-fullscreen")]
+
+    # macOS must keep at least one desktop.
+    if len(empties) >= len(spaces):
+        empties = empties[1:]
+
+    if not empties:
+        return 0
+
+    removed = 0
+    for idx in sorted(empties, reverse=True):
+        if dry_run:
+            print(f"  would destroy empty space {idx}")
+            removed += 1
+            continue
+        code, _, err = yabai("space", str(idx), "--destroy")
+        if code == 0:
+            removed += 1
+            if verbose:
+                print(f"  destroyed empty space {idx}")
+        else:
+            print(f"  could not destroy space {idx}: {err}", file=sys.stderr)
+    return removed
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Give every window its own desktop; close empty desktops.")
+    ap.add_argument("-n", "--dry-run", action="store_true",
+                    help="print the plan without changing anything")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="show each move as it happens")
+    args = ap.parse_args()
+
+    if subprocess.run(["which", "yabai"], capture_output=True).returncode != 0:
+        sys.exit("asplode: yabai is not installed (brew install koekeishiya/formulae/yabai)")
+
+    spaces = query("spaces")
+    if spaces is None:
+        sys.exit("asplode: yabai is not running (yabai --start-service)")
+
+    windows = real_windows()
+    surplus, vacant, fs_spaces = plan(windows, spaces)
+
+    print(f"asplode: {len(windows)} windows across {len(spaces)} spaces "
+          f"({len(fs_spaces)} fullscreen, left alone)")
+
+    if not surplus:
+        print("  every window already has its own desktop")
+    else:
+        print(f"  {len(surplus)} window(s) need a desktop of their own")
+
+    if not args.dry_run and surplus:
+        ok, msg = check_scripting_addition()
+        if not ok:
+            sys.exit("asplode: yabai scripting addition is not working "
+                     f"({msg}).\n"
+                     "  Spaces cannot be created and window moves fail silently.\n"
+                     "  Fix with: sudo yabai --load-sa")
+
+    moved = 0
+    for w in surplus:
+        label = f"{w['app']}: {w.get('title', '')[:40]}"
+        if vacant:
+            target = vacant.pop(0)
+            action = f"space {target}"
+        else:
+            target = None
+            action = "new space"
+
+        if args.dry_run:
+            print(f"  would move [{label}] -> {action}")
+            continue
+
+        if target is None:
+            code, _, err = yabai("space", "--create")
+            if code != 0:
+                print(f"  could not create space: {err}", file=sys.stderr)
+                break
+            fresh = query("spaces") or []
+            target = fresh[-1]["index"]
+
+        ok, err = move_window(w["id"], target, args.verbose)
+        if ok:
+            moved += 1
+            if args.verbose:
+                print(f"  moved [{label}] -> space {target}")
+        else:
+            print(f"  failed [{label}] -> space {target}: {err}", file=sys.stderr)
+
+    if not args.dry_run and surplus:
+        print(f"  moved {moved} of {len(surplus)} window(s)")
+
+    print("closing empty desktops")
+    removed = destroy_empty_spaces(args.dry_run, args.verbose)
+    verb = "would remove" if args.dry_run else "removed"
+    print(f"  {verb} {removed} empty desktop(s)")
+
+    if not args.dry_run:
+        final = query("spaces") or []
+        print(f"asplode: now {len(final)} desktop(s)")
+
+
+if __name__ == "__main__":
+    main()
