@@ -1,0 +1,52 @@
+#!/bin/bash
+# chrome-safety-check - is it safe to launch Playwright right now?
+#
+# Launching Playwright against a profile while headed Chrome is running wedges the
+# running instance and can kill the Claude side-panel extension (2026-08-14: forced a
+# killall that took down every profile). The check is mechanical, so it should not be
+# re-derived by hand from ps output every time.
+#
+# Exit 0: no headed Chrome, Playwright is safe.
+# Exit 1: headed Chrome is running, use /cic or WebFetch instead.
+#
+# Usage: chrome-safety-check [-q]
+#   -q  quiet, exit status only
+
+QUIET=0
+[ "$1" = "-q" ] && QUIET=1
+
+# Main browser processes only. Helper/renderer children live under Frameworks/ and must be
+# excluded or every tab counts as a browser (a first cut of this script reported 28 headed
+# instances when there was one). Also drop the grep pipeline's own command line.
+MAIN=$(/bin/ps ax -o command= \
+       | /usr/bin/grep "MacOS/Google Chrome" \
+       | /usr/bin/grep -v "Frameworks/" \
+       | /usr/bin/grep -v "^/usr/bin/grep" \
+       | /usr/bin/grep -v "^/bin/")
+
+HEADLESS=$(echo "$MAIN" | /usr/bin/grep -c -- "--headless")
+AUTOMATED=$(echo "$MAIN" | /usr/bin/grep -c -- "--disable-field-trial-config\|--remote-debugging-port\|--enable-automation")
+
+# A headed instance is a main process that is neither headless nor automation-flagged.
+HEADED=$(echo "$MAIN" | /usr/bin/grep -v -- "--headless" \
+                      | /usr/bin/grep -v -- "--disable-field-trial-config" \
+                      | /usr/bin/grep -v -- "--remote-debugging-port" \
+                      | /usr/bin/grep -v -- "--enable-automation" \
+                      | /usr/bin/grep -c "MacOS/Google Chrome")
+
+if [ "$QUIET" -eq 0 ]; then
+    echo "headed Chrome instances:     $HEADED"
+    echo "headless instances:          $HEADLESS"
+    echo "automation-controlled:       $AUTOMATED"
+    echo ""
+    if [ "$HEADED" -gt 0 ]; then
+        echo "UNSAFE for Playwright: headed Chrome is running."
+        echo "Use /cic (side-panel bus) for logged-in sites, or WebFetch for public pages."
+        echo "Do not launch Playwright or mcp__playwright__* tools."
+    else
+        echo "SAFE for Playwright: no headed Chrome found."
+    fi
+fi
+
+[ "$HEADED" -gt 0 ] && exit 1
+exit 0

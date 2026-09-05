@@ -1,0 +1,29 @@
+#!/bin/bash
+# gcal-range: list Google Calendar events over a span of days.
+# Wraps gcal-list (which takes exactly one signed day offset) so a
+# multi-week sweep is one command instead of N inline calls.
+#
+# usage: gcal-range [START_OFFSET [END_OFFSET]]
+#   offsets are days from today; sign optional. Defaults: 0 13.
+#   examples: gcal-range 0 21    # next three weeks
+#             gcal-range -7 0    # the past week
+set -euo pipefail
+
+start=${1:-0}
+end=${2:-13}
+start=${start#+}
+end=${end#+}
+
+if ! [[ "$start" =~ ^-?[0-9]+$ && "$end" =~ ^-?[0-9]+$ ]]; then
+    echo "usage: gcal-range [START_OFFSET [END_OFFSET]]" >&2
+    exit 1
+fi
+if (( end < start )); then
+    echo "gcal-range: END ($end) is before START ($start)" >&2
+    exit 1
+fi
+
+for (( i = start; i <= end; i++ )); do
+    if (( i >= 0 )); then off="+$i"; else off="$i"; fi
+    /Users/wiggins/mise/py/gcal-list "$off" | /usr/bin/grep -v -e '^  flags:' -e '^  (gcal-list'
+done

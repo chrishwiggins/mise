@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Flag pushy constructions in an email draft before it reaches Chris.
+
+Usage: pushy-lint FILE [FILE ...]
+Exit: 0 clean, 1 findings, 2 usage error.
+
+Why this exists. On 2026-08-27 Chris rewrote a draft to two CPAs and every
+single edit ran the same direction: softer, more owned, less pointed. His
+words: "you are a pushy douchebag compared to me. you make implicit
+accusations and demands regularly. be nice."
+
+The rules he was editing toward were ALREADY in writing-style-chris.md, under
+"Writing to Professionals/Advisors" and "Email Tone Calibration": softer asks,
+never sound like a boss, don't re-teach them their own work, don't editorialize
+urgency. Four principles, all present, all violated in one draft. That is the
+signature of a rule that needs a mechanism instead of more prose, the same way
+svo-lint replaced the subject-verb-object rule after it failed twice.
+
+Each check below is a literal string pattern from that session, not a
+generalization. When a new pushy construction gets caught by hand, add the
+pattern here with a regression case in test/test_pushy_lint.py rather than
+adding another sentence to the style guide.
+"""
+
+import re
+import sys
+
+# Each rule: (compiled pattern, short name, what to write instead).
+# Patterns are deliberately narrow. A linter that cries wolf stops being run,
+# and then it protects nothing.
+RULES = [
+    (re.compile(r"\b(?:[A-Z][a-z]+)\s+(?:told|said to|informed)\s+me\b"),
+     "attribution-as-fact",
+     'state another person\'s position as your reading: "my understanding '
+     'from X\'s email is ..."'),
+
+    (re.compile(r"\bAccording to\s+[A-Z][a-z]+\b"),
+     "attribution-as-fact",
+     'write "my understanding from X\'s email is ..." instead'),
+
+    (re.compile(r"\bwhat I need from you\b", re.I),
+     "demand-framing",
+     'write "what I\'m hoping you can help me with"'),
+
+    (re.compile(r"\bI need you to\b", re.I),
+     "demand-framing",
+     'write "I\'m hoping you can ..." or ask it as a question'),
+
+    (re.compile(r"\bplease (?:prepare|send|confirm|provide|advise)\b(?!\s+can)", re.I),
+     "demand-framing",
+     'soften to "please can you ..."; an advisor is not a direct report'),
+
+    (re.compile(r"\bhas not (?:been )?(?:answered|replied|responded)\b", re.I),
+     "blame-framing",
+     'make it a shared open item: "that I don\'t think we\'ve resolved"'),
+
+    (re.compile(r"\b(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+                r"(?:days?|weeks?|months?)\s+of\s+silence\b", re.I),
+     "counting-silence",
+     "delete it; writing again IS the follow-up"),
+
+    (re.compile(r"\b(?:still )?(?:have|has)(?:n't| not)\s+heard\s+back\b", re.I),
+     "counting-silence",
+     'soften to "I don\'t think we\'ve resolved this"'),
+
+    (re.compile(r"\bas instructed\b", re.I),
+     "finger-pointing",
+     '"as intended" describes a shared plan; "as instructed" points at whoever '
+     "gave the instruction"),
+
+    (re.compile(r"\bas we discussed\b", re.I),
+     "finger-pointing",
+     "reference the prior conversation implicitly through context, or cut it"),
+
+    (re.compile(r"\byou said you would\b", re.I),
+     "finger-pointing",
+     "reframe around what you are ready to do, not what they owe"),
+
+    (re.compile(r"\bwere you able to\b", re.I),
+     "finger-pointing",
+     '"are you still able to" implies hope; "were you able to" implies failure'),
+
+    (re.compile(r"\b(?:immediate action|urgent(?:ly)?|ASAP|as soon as possible)\b", re.I),
+     "manufactured-urgency",
+     "state the deadline as a fact and let them assess urgency"),
+
+    (re.compile(r"\bthis is critical\b", re.I),
+     "manufactured-urgency",
+     "state the facts and the date instead"),
+
+    (re.compile(r"\bhappy to (?:grab|jump on|hop on|get on)\b", re.I),
+     "preemptive-logistics",
+     "cut it; if they want a call they will suggest one"),
+
+    (re.compile(r"\bglad to get on the phone\b", re.I),
+     "preemptive-logistics",
+     "cut it; if they want a call they will suggest one"),
+]
+
+HEADER_RE = re.compile(r"^(?:To|From|Cc|Bcc|Subject|Date|In-Reply-To|References|"
+                       r"Message-ID|Reply-To|MIME-Version|Content-\S+):",
+                       re.I)
+
+
+def body_lines(path):
+    """Yield (lineno, text), skipping .eml headers and quoted reply text.
+
+    Consecutive non-blank lines are JOINED into one unit before matching.
+    Email bodies hard-wrap at about 72 columns, so a pushy phrase routinely
+    straddles a line break ("that has\nnot been answered yet"). Matching
+    line by line misses exactly those, which is the bug svo-lint hit first;
+    the lineno reported is the line the unit starts on.
+    """
+    with open(path, "r", errors="replace") as fh:
+        raw = fh.read().splitlines()
+
+    start = 0
+    if path.endswith(".eml"):
+        for i, line in enumerate(raw):
+            if not line.strip():
+                start = i + 1
+                break
+            if not HEADER_RE.match(line):
+                # Not a header block after all; treat the whole file as body.
+                start = 0
+                break
+
+    buf, buf_lineno = [], None
+    for i, line in enumerate(raw[start:], start=start + 1):
+        if line.lstrip().startswith(">") or not line.strip():
+            if buf:
+                yield buf_lineno, " ".join(buf)
+                buf, buf_lineno = [], None
+            continue
+        if buf_lineno is None:
+            buf_lineno = i
+        buf.append(line.strip())
+    if buf:
+        yield buf_lineno, " ".join(buf)
+
+
+def check(path):
+    """Return a list of (lineno, line, message) findings."""
+    found = []
+    for lineno, line in body_lines(path):
+        for pattern, name, fix in RULES:
+            m = pattern.search(line)
+            if m:
+                found.append((lineno, line.strip(),
+                              "%s: %r -- %s" % (name, m.group(0), fix)))
+    return found
+
+
+def main(argv):
+    if len(argv) < 2:
+        sys.stderr.write("usage: pushy-lint FILE [FILE ...]\n")
+        return 2
+
+    total = 0
+    for path in argv[1:]:
+        try:
+            found = check(path)
+        except OSError as exc:
+            sys.stderr.write("pushy-lint: %s\n" % exc)
+            return 2
+        if found:
+            print("%s:" % path)
+            for lineno, line, msg in found:
+                print("  line %d: %s" % (lineno, msg))
+                print("    %s" % line)
+            total += len(found)
+
+    if total:
+        plural = "" if total == 1 else "s"
+        print("\n%d pushy construction%s. Chris writes softer than this: "
+              "hedge attributions, frame asks as hopes, never count silence."
+              % (total, plural))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

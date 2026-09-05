@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""sent-verify: prove a drafted email was actually sent, and show what changed.
+
+Given a draft file with To:/Subject: headers, search the Gmail sent archive of
+one or more configured accounts (via gmails -e <acct> out -q ...) for a message
+with that exact subject, download the newest hit, and diff its body against the
+draft body. Exit 0 = found (and prints IDENTICAL or a unified diff), exit 1 =
+not found in any searched account, exit 2 = usage/tool error.
+
+Usage:
+  sent-verify DRAFT.eml [-e ACCT ...] [--days N]
+
+Accounts default to every account listed by `gmails -E`. Search scope is
+printed explicitly so a "not found" carries its scope with it.
+"""
+import argparse
+import difflib
+import email
+import email.policy
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+GMAILS = Path.home() / "mise/py/gmails"
+
+
+def parse_draft(path: Path):
+    to = subject = None
+    lines = path.read_text(errors="replace").splitlines()
+    body_start = 0
+    for i, line in enumerate(lines):
+        if not line.strip():
+            body_start = i + 1
+            break
+        if line.lower().startswith("to:"):
+            to = line[3:].strip()
+        elif line.lower().startswith("subject:"):
+            subject = line[8:].strip()
+    body = "\n".join(lines[body_start:])
+    return to, subject, body
+
+
+def list_accounts():
+    out = subprocess.run([str(GMAILS), "-E"], capture_output=True, text=True).stdout
+    accts = []
+    seen = set()
+    for line in out.splitlines():
+        m = re.match(r"\s*(\S+):\s+(\S+@\S+)", line)
+        if m and m.group(2) not in seen:
+            seen.add(m.group(2))
+            accts.append(m.group(1))
+    return accts
+
+
+def search(acct: str, subject: str, days: int):
+    q = f'subject:"{subject}" newer_than:{days}d'
+    r = subprocess.run([str(GMAILS), "-e", acct, "out", "-q", q, "-n", "5"],
+                       capture_output=True, text=True)
+    hits = [l for l in r.stdout.splitlines() if re.match(r"\s*\d+\.\s", l)]
+    return hits, q
+
+
+def download(acct: str, q: str):
+    r = subprocess.run([str(GMAILS), "-e", acct, "out", "-q", q, "1"],
+                       capture_output=True, text=True)
+    m = re.search(r"Saved:\s+(\S+\.eml)", r.stdout + r.stderr)
+    return Path(m.group(1)) if m else None
+
+
+def eml_body(path: Path) -> str:
+    msg = email.message_from_bytes(path.read_bytes(), policy=email.policy.default)
+    part = msg.get_body(preferencelist=("plain",))
+    text = part.get_content() if part else ""
+    # drop quoted history and trailing signature noise
+    kept = []
+    for line in text.splitlines():
+        if line.startswith(">") or re.match(r"^On .* wrote:$", line.strip()):
+            break
+        kept.append(line.rstrip())
+    return "\n".join(kept)
+
+
+def norm(s: str):
+    return [l.strip() for l in s.splitlines() if l.strip()]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("draft", type=Path)
+    ap.add_argument("-e", "--account", action="append", help="gmails account key; repeatable")
+    ap.add_argument("--days", type=int, default=3, help="newer_than window (default 3)")
+    a = ap.parse_args()
+
+    if not a.draft.exists():
+        print(f"no such draft: {a.draft}", file=sys.stderr)
+        return 2
+    to, subject, draft_body = parse_draft(a.draft)
+    if not subject:
+        print("draft has no Subject: header", file=sys.stderr)
+        return 2
+    accts = a.account or list_accounts()
+    if not accts:
+        print("no gmails accounts found (gmails -E)", file=sys.stderr)
+        return 2
+
+    print(f"draft:   {a.draft}")
+    print(f"to:      {to}")
+    print(f"subject: {subject}")
+    print(f"scope:   sent mail, last {a.days}d, accounts {', '.join(accts)}")
+    for acct in accts:
+        hits, q = search(acct, subject, a.days)
+        if not hits:
+            print(f"  {acct}: no hit")
+            continue
+        print(f"  {acct}: FOUND  {hits[0].strip()}")
+        saved = download(acct, q)
+        if not saved:
+            print("  (could not download the sent copy to diff)")
+            return 0
+        sent_body = eml_body(saved)
+        d = list(difflib.unified_diff(norm(draft_body), norm(sent_body),
+                                      "draft", "sent", lineterm=""))
+        if d:
+            print("body differs (draft -> sent):")
+            print("\n".join(d))
+        else:
+            print("body IDENTICAL to draft")
+        return 0
+    print("NOT FOUND in the accounts above within the window; do not mark as sent.")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

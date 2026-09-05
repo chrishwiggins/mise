@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Flag subjectless sentence openers in prose Chris signs.
+
+Chris's standing rule (writing-style-chris.md): write subject-verb-object,
+not verb-object. Dropping the "I" reads as curt/superior. The rule has been
+restated and broken repeatedly because it lived only as prose plus a list of
+example strings, so a form that was not in the list slid past.
+
+This checks the STRUCTURE instead of matching a word list: for each sentence,
+look at the first token and ask whether a subject is present. Three opener
+shapes fail, all for the same reason (no subject):
+
+  imperative   "Sent the invite."            -> "I sent the invite."
+  participial  "Sending it now rather than"  -> "I am sending it now"
+  predicative  "Happy to send it."           -> "I am happy to send it."
+
+Usage:
+    svo-lint draft.eml [more.eml ...]
+    svo-lint --quiet draft.eml      # exit status only, no output
+
+Exit 0 = clean, 1 = findings, 2 = usage error.
+
+Scope: .eml bodies (headers skipped) and plain text/markdown. Quoted reply
+lines, signatures, list bullets, and headings are skipped: a bullet is not a
+sentence and the rule does not apply to it.
+"""
+
+import re
+import sys
+import os
+
+# Words that legitimately open a subjectless sentence without being a dropped
+# "I": conjunctions, prepositions, and adverbials that introduce a real clause
+# later in the sentence ("Before I send this, ..." / "Attached is the form.").
+SAFE_OPENERS = {
+    "attached", "enclosed", "included", "per", "re", "fyi",
+    "before", "after", "when", "while", "since", "because", "although",
+    "though", "if", "unless", "until", "as", "given", "assuming",
+    "according", "based", "regarding", "concerning", "depending",
+    "thanks", "thank", "sorry", "congratulations", "hi", "hello", "dear",
+    "yes", "no", "ok", "okay", "sure", "maybe", "perhaps",
+    "there", "here", "this", "that", "these", "those", "it", "its",
+    "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "both", "either", "neither", "each", "every", "all",
+    "some", "any", "most", "several", "few", "many", "much", "another",
+    "the", "a", "an", "my", "our", "your", "his", "her", "their",
+    "not", "never", "nothing", "nobody", "none", "let", "please",
+    "first", "second", "third", "next", "then", "finally", "meanwhile",
+    "however", "instead", "also", "still", "again", "once", "twice",
+}
+
+# Pronouns and other real subjects. If the sentence opens with one of these,
+# a subject is present and the sentence passes.
+SUBJECT_OPENERS = {
+    "i", "we", "you", "he", "she", "they", "who", "what", "which",
+    "someone", "anyone", "everyone", "nobody", "chris", "matt",
+}
+
+# Predicative adjectives that in practice stand in for a dropped "I am ...".
+PREDICATIVE = {
+    "happy", "glad", "sorry", "keen", "eager", "willing", "able",
+    "available", "free", "curious", "unsure", "hoping", "wondering",
+}
+
+IRREGULAR_PAST = {
+    "sent", "wrote", "made", "took", "got", "gave", "put", "read",
+    "found", "built", "ran", "went", "came", "saw", "told", "left",
+    "kept", "held", "meant", "paid", "set", "won", "lost", "drew",
+    "began", "brought", "bought", "caught", "chose", "did", "drove",
+    "fell", "felt", "forgot", "heard", "knew", "led", "let", "lay",
+    "met", "rose", "said", "sold", "spent", "stood", "thought", "understood",
+}
+
+SENT_SPLIT = re.compile(r'(?<=[.!?])\s+')
+WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
+
+
+def body_of(path):
+    """Return (lines, first_line_number). For .eml, skip the header block."""
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        raw = fh.read().splitlines()
+    if path.lower().endswith(".eml"):
+        for i, line in enumerate(raw):
+            if line.strip() == "":
+                return raw[i + 1:], i + 2
+    return raw, 1
+
+
+def skippable(line):
+    s = line.strip()
+    if not s:
+        return True
+    if s.startswith(">"):          # quoted reply text
+        return True
+    if s.startswith("#"):          # markdown heading
+        return True
+    if s.startswith("--"):         # signature delimiter / rule
+        return True
+    if re.match(r"^[-*+]\s", s):   # bullet
+        return True
+    if re.match(r"^\d+[.)]\s", s): # numbered item
+        return True
+    if re.match(r"^\w[\w-]*:\s", s) and len(s.split()) < 12:
+        return True                # header-ish "Label: value"
+    if s.startswith("http://") or s.startswith("https://"):
+        return True
+    return False
+
+
+def classify(sentence):
+    """Return a finding string if the sentence opens without a subject."""
+    m = WORD.search(sentence)
+    if not m:
+        return None
+    first = m.group(0)
+    low = first.lower()
+
+    # Only judge sentences that start capitalized; a mid-quote fragment is noise.
+    if not first[0].isupper():
+        return None
+    if low in SAFE_OPENERS or low in SUBJECT_OPENERS:
+        return None
+    # An all-caps token is a label or acronym, not a verb.
+    if first.isupper() and len(first) > 1:
+        return None
+
+    rest = sentence[m.end():].lstrip()
+
+    # A capitalized word followed by another capitalized word is a proper noun
+    # ("Advanced LAN Techs", "Morgan Stanley"), not a dropped-subject verb.
+    nxt = WORD.search(rest)
+    if nxt and nxt.group(0)[0].isupper():
+        return None
+
+    if low.endswith("ing") and rest:
+        return "participial opener (no subject); write \"I am %s ...\"" % low
+    if low in PREDICATIVE:
+        return "predicative opener (no subject); write \"I am %s ...\"" % low
+    if low in IRREGULAR_PAST:
+        return "bare past-tense verb (no subject); write \"I %s ...\"" % low
+    if low.endswith("ed") and rest and len(low) > 4:
+        return "bare past-tense verb (no subject); write \"I %s ...\"" % low
+    return None
+
+
+def paragraphs(lines, offset):
+    """Join hard-wrapped lines into paragraphs.
+
+    Email bodies wrap at ~72 columns, so a sentence routinely starts
+    mid-line. Splitting per line makes every wrapped continuation look
+    like a new sentence, which produced a false positive on the proper
+    noun "Advanced LAN Techs" the first time this ran.
+    """
+    buf, start, out = [], None, []
+    for idx, line in enumerate(lines):
+        if skippable(line):
+            if buf:
+                out.append((start, " ".join(buf)))
+                buf, start = [], None
+            continue
+        if start is None:
+            start = offset + idx
+        buf.append(line.strip())
+    if buf:
+        out.append((start, " ".join(buf)))
+    return out
+
+
+def check(path):
+    findings = []
+    lines, offset = body_of(path)
+    for lineno, para in paragraphs(lines, offset):
+        for sentence in SENT_SPLIT.split(para):
+            if not sentence.strip():
+                continue
+            note = classify(sentence)
+            if note:
+                findings.append((lineno, sentence.strip()[:70], note))
+    return findings
+
+
+def main(argv):
+    quiet = "--quiet" in argv
+    paths = [a for a in argv if not a.startswith("-")]
+    if not paths:
+        sys.stderr.write(__doc__.split("Usage:")[1].split("Exit")[0])
+        return 2
+
+    total = 0
+    for path in paths:
+        if not os.path.exists(path):
+            sys.stderr.write("svo-lint: no such file: %s\n" % path)
+            return 2
+        findings = check(path)
+        total += len(findings)
+        if findings and not quiet:
+            print("%s:" % path)
+            for lineno, snippet, note in findings:
+                print("  line %d: %s" % (lineno, note))
+                print("    %s" % snippet)
+    if total and not quiet:
+        print("\n%d subjectless opener%s. Chris writes subject-verb-object."
+              % (total, "" if total == 1 else "s"))
+    return 1 if total else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

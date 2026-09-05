@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Append a blood-pressure / weight / symptom reading to the Oura dashboard log.
+
+Built 2026-08-22 so logging a reading is one short command instead of hand-editing
+CSV columns and remembering their order.
+
+Usage:
+  vitals 128/82                     # BP only
+  vitals 181.4                      # weight only
+  vitals 128/82 181.4               # both, any order
+  vitals 128/82 headache:2          # with a symptom (severity 0-3, default 1)
+  vitals 181.4 headache reflux:2 -n "woke at 3am"
+  vitals -d 2026-08-20 128/82       # backdate (default: today)
+  vitals                            # show the last 10 entries
+  vitals --show 30                  # show the last 30
+
+Arguments are positional and order-free; each is recognized by shape:
+  NNN/NN     blood pressure          130/85
+  NNN.N      weight                  181.4
+  word[:N]   symptom, severity 0-3   headache:2
+
+Several readings on one day are kept as separate rows on purpose: the parser
+reports mean/min/max/count, so a morning spike stays visible instead of being
+averaged away.
+
+Writes to dat/manual-log.csv in the oura-dashboard project, then runs the parser
+so `make ask` and `make context` see it immediately.
+"""
+import argparse
+import csv
+import os
+import re
+import subprocess
+import sys
+from datetime import date
+
+PROJECT = os.path.expanduser('~/Projects/oura-dashboard')
+CSV_PATH = os.path.join(PROJECT, 'dat', 'manual-log.csv')
+PARSER = os.path.join(PROJECT, 'src', 'parse_manual_log.py')
+HEADER = ['day', 'bp_systolic', 'bp_diastolic', 'weight', 'symptoms', 'notes']
+
+BP_RE = re.compile(r'^(\d{2,3})/(\d{2,3})$')
+WEIGHT_RE = re.compile(r'^\d{2,3}(\.\d+)?$')
+SYMPTOM_RE = re.compile(r'^([A-Za-z][A-Za-z0-9_-]*)(?::([0-3]))?$')
+
+# Plausibility bounds. Outside these a typo is likelier than a real reading.
+BP_SYS = (60, 260)
+BP_DIA = (30, 180)
+WEIGHT = (50, 600)
+
+
+def die(msg):
+    sys.exit(f"vitals: {msg}")
+
+
+def parse_args(tokens):
+    """Classify free-form tokens by shape. Returns (bp, weight, symptoms)."""
+    bp = weight = None
+    symptoms = []
+    for t in tokens:
+        m = BP_RE.match(t)
+        if m:
+            if bp:
+                die(f"two blood-pressure readings in one command ({bp[0]}/{bp[1]} "
+                    f"and {t}). Log them as separate commands so each is its own row.")
+            s, d = int(m.group(1)), int(m.group(2))
+            if not (BP_SYS[0] <= s <= BP_SYS[1]):
+                die(f"systolic {s} is outside {BP_SYS[0]}-{BP_SYS[1]}; typo?")
+            if not (BP_DIA[0] <= d <= BP_DIA[1]):
+                die(f"diastolic {d} is outside {BP_DIA[0]}-{BP_DIA[1]}; typo?")
+            if s <= d:
+                die(f"systolic ({s}) should exceed diastolic ({d}); did you swap them?")
+            bp = (s, d)
+            continue
+        if WEIGHT_RE.match(t):
+            w = float(t)
+            if not (WEIGHT[0] <= w <= WEIGHT[1]):
+                die(f"weight {w} is outside {WEIGHT[0]}-{WEIGHT[1]}; typo?")
+            if weight is not None:
+                die(f"two weights in one command ({weight} and {w}).")
+            weight = w
+            continue
+        m = SYMPTOM_RE.match(t)
+        if m:
+            tag = m.group(1).lower()
+            sev = int(m.group(2)) if m.group(2) else 1
+            symptoms.append(f"{tag}:{sev}")
+            continue
+        die(f"could not read {t!r}. Expected 128/82, 181.4, or headache:2.")
+    return bp, weight, symptoms
+
+
+def show(n):
+    if not os.path.exists(CSV_PATH):
+        die(f"no log yet at {CSV_PATH}")
+    with open(CSV_PATH, newline='') as f:
+        rows = [r for r in csv.DictReader(f) if (r.get('day') or '').strip()]
+    if not rows:
+        print("Log is empty. Add one:  vitals 128/82 181.4")
+        return
+    for r in rows[-n:]:
+        bits = [r['day']]
+        if r['bp_systolic'] and r['bp_diastolic']:
+            bits.append(f"{r['bp_systolic']}/{r['bp_diastolic']}")
+        if r['weight']:
+            bits.append(f"{r['weight']} lb")
+        if r['symptoms']:
+            bits.append(r['symptoms'])
+        if r['notes']:
+            bits.append(f"({r['notes']})")
+        print("  " + "  ".join(bits))
+    print(f"\n{len(rows)} row(s) total in {CSV_PATH}")
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        prog='vitals', add_help=True,
+        description='Log BP / weight / symptoms to the Oura dashboard.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__.split('Usage:')[1].split('Arguments')[0].rstrip())
+    ap.add_argument('tokens', nargs='*', help='128/82, 181.4, headache:2')
+    ap.add_argument('-d', '--day', default=None, help='YYYY-MM-DD (default: today)')
+    ap.add_argument('-n', '--note', default='', help='free-text note')
+    ap.add_argument('--show', nargs='?', type=int, const=10, default=None,
+                    metavar='N', help='print the last N entries and exit')
+    a = ap.parse_args()
+
+    if a.show is not None or not a.tokens:
+        show(a.show or 10)
+        return
+
+    day = a.day or date.today().isoformat()
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', day):
+        die(f"day {day!r} is not YYYY-MM-DD")
+
+    bp, weight, symptoms = parse_args(a.tokens)
+    if not (bp or weight or symptoms):
+        die("nothing to log.")
+
+    if not os.path.isdir(os.path.dirname(CSV_PATH)):
+        die(f"missing {os.path.dirname(CSV_PATH)}; is the project there?")
+    fresh = not os.path.exists(CSV_PATH) or os.path.getsize(CSV_PATH) == 0
+    with open(CSV_PATH, 'a', newline='') as f:
+        w = csv.writer(f, lineterminator='\n')
+        if fresh:
+            w.writerow(HEADER)
+        w.writerow([day,
+                    bp[0] if bp else '', bp[1] if bp else '',
+                    weight if weight is not None else '',
+                    ",".join(symptoms), a.note])
+
+    logged = []
+    if bp:
+        logged.append(f"BP {bp[0]}/{bp[1]}")
+    if weight is not None:
+        logged.append(f"weight {weight}")
+    if symptoms:
+        logged.append("sx " + ",".join(symptoms))
+    print(f"{day}: " + ", ".join(logged))
+
+    # Refresh the parsed JSON so `make ask` / `make context` see it right away.
+    if os.path.exists(PARSER):
+        r = subprocess.run([PARSER], cwd=PROJECT,
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print("  (row saved, but the parser failed; run `make log` to see why)",
+                  file=sys.stderr)
+            if r.stderr.strip():
+                print("  " + r.stderr.strip().splitlines()[-1], file=sys.stderr)
+
+
+if __name__ == '__main__':
+    main()
