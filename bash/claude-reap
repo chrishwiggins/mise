@@ -1,0 +1,168 @@
+#!/bin/bash
+# claude-reap - list and kill stale Claude Code processes
+# Usage: claude-reap [-a HOURS] [-k] [-f] [-v]
+#   -a  Age threshold in hours (default 24). Only processes older than this.
+#   -k  Actually kill them. Without -k this is a dry run.
+#   -f  Force: SIGKILL instead of SIGTERM. Skips transcript flush.
+#   -v  Verbose: show every Claude process, not just the stale ones.
+#
+# Stale sessions accumulate when a terminal window closes without the session
+# exiting. They keep a `bg-spare` worker resident (~100-400MB each), and enough
+# of them will drive load average into the double digits.
+#
+# Only whole sessions are reaped: a `bg-spare` or `bg-pty-host` is killed with
+# the CLI process that owns it, never on its own, so a live session is never
+# left without its worker.
+
+set -u
+
+age_hours=24
+do_kill=false
+force=false
+verbose=false
+
+while getopts "a:kfvh" opt; do
+    case $opt in
+        a) age_hours="$OPTARG" ;;
+        k) do_kill=true ;;
+        f) force=true ;;
+        v) verbose=true ;;
+        h|*)
+            /usr/bin/sed -n '2,10p' "$0" | /usr/bin/cut -c3-
+            exit 0
+            ;;
+    esac
+done
+
+case "$age_hours" in
+    ''|*[!0-9]*) echo "claude-reap: -a wants a whole number of hours, got '$age_hours'" >&2; exit 1 ;;
+esac
+
+age_secs=$((age_hours * 3600))
+me=$$
+
+# Never reap the session running this script, nor its process group.
+mypgid=$(/bin/ps -o pgid= -p $me | /usr/bin/tr -d ' ')
+
+# Collect: pid pgid rss etime command
+# BSD ps has no etimes (seconds), only etime as [[dd-]hh:]mm:ss, so the
+# elapsed seconds get computed below rather than read off directly.
+procs=$(/bin/ps -A -o pid=,pgid=,rss=,etime=,command= \
+    | /usr/bin/grep -E '(/\.local/bin/claude|/\.local/share/claude/|claude bg-)' \
+    | /usr/bin/grep -v 'claude-reap' \
+    | /usr/bin/grep -v 'Applications/Claude.app')
+
+if [ -z "$procs" ]; then
+    echo "No Claude Code processes found."
+    exit 0
+fi
+
+# Group by pgid: a session is the CLI plus its bg-spare and bg-pty-host.
+# The session's age is the age of its oldest member.
+tmp=$(/usr/bin/mktemp -t claude-reap)
+trap '/bin/rm -f "$tmp"' EXIT
+printf '%s\n' "$procs" > "$tmp"
+
+pgids=$(/usr/bin/awk '{print $2}' "$tmp" | /usr/bin/sort -u)
+
+total_rss=0
+reap_rss=0
+reap_pids=""
+n_sessions=0
+n_stale=0
+
+printf '%-8s %-9s %8s %10s  %s\n' PGID STATUS RSS AGE MEMBERS
+printf '%s\n' '--------------------------------------------------------------------'
+
+for pgid in $pgids; do
+    n_sessions=$((n_sessions + 1))
+    members=$(/usr/bin/awk -v g="$pgid" '$2 == g {print}' "$tmp")
+
+    grp_rss=$(printf '%s\n' "$members" | /usr/bin/awk '{s += $3} END {print s+0}')
+    # $4 is etime as [[dd-]hh:]mm:ss; fold it down to seconds.
+    oldest=$(printf '%s\n' "$members" | /usr/bin/awk '
+        BEGIN { m = 0 }
+        {
+            e = $4; d = 0
+            if (e ~ /-/) { split(e, p, "-"); d = p[1]; e = p[2] }
+            n = split(e, t, ":")
+            if (n == 3)      s = t[1] * 3600 + t[2] * 60 + t[3]
+            else if (n == 2) s = t[1] * 60 + t[2]
+            else             s = t[1]
+            s += d * 86400
+            if (s > m) m = s
+        }
+        END { print m + 0 }')
+    pids=$(printf '%s\n' "$members" | /usr/bin/awk '{print $1}' | /usr/bin/tr '\n' ' ')
+
+    total_rss=$((total_rss + grp_rss))
+
+    # Human-readable age.
+    d=$((oldest / 86400)); h=$(((oldest % 86400) / 3600)); m=$(((oldest % 3600) / 60))
+    if [ "$d" -gt 0 ]; then age="${d}d${h}h"; elif [ "$h" -gt 0 ]; then age="${h}h${m}m"; else age="${m}m"; fi
+
+    if [ "$pgid" = "$mypgid" ]; then
+        status="SELF"
+    elif [ "$oldest" -ge "$age_secs" ]; then
+        status="STALE"
+        n_stale=$((n_stale + 1))
+        reap_rss=$((reap_rss + grp_rss))
+        reap_pids="$reap_pids $pids"
+    else
+        status="live"
+    fi
+
+    if [ "$status" = "live" ] && [ "$verbose" = false ]; then
+        continue
+    fi
+
+    printf '%-8s %-9s %7sM %10s  %s\n' "$pgid" "$status" "$((grp_rss / 1024))" "$age" "$pids"
+done
+
+printf '%s\n' '--------------------------------------------------------------------'
+echo "$n_sessions session(s), $((total_rss / 1024))M resident."
+echo "$n_stale stale (older than ${age_hours}h), $((reap_rss / 1024))M reclaimable."
+
+[ "$verbose" = false ] && [ "$n_stale" -lt "$n_sessions" ] \
+    && echo "(live sessions hidden; -v shows all)"
+
+if [ "$n_stale" -eq 0 ]; then
+    exit 0
+fi
+
+if [ "$do_kill" = false ]; then
+    echo
+    echo "Dry run. To reap: claude-reap -a $age_hours -k"
+    exit 0
+fi
+
+sig="-TERM"
+[ "$force" = true ] && sig="-KILL"
+
+echo
+printf 'Kill %d session(s) with %s? [y/N] ' "$n_stale" "$sig"
+read -r reply
+case "$reply" in
+    [yY]*) ;;
+    *) echo "Nothing killed."; exit 0 ;;
+esac
+
+# shellcheck disable=SC2086
+/bin/kill $sig $reap_pids 2>/dev/null
+
+if [ "$force" = false ]; then
+    # SIGTERM lets a session flush its transcript; give it a moment, then
+    # report anything that ignored it rather than escalating silently.
+    /bin/sleep 3
+    survivors=""
+    for p in $reap_pids; do
+        /bin/kill -0 "$p" 2>/dev/null && survivors="$survivors $p"
+    done
+    if [ -n "$survivors" ]; then
+        echo "Still running after SIGTERM:$survivors"
+        echo "Escalate with: claude-reap -a $age_hours -k -f"
+        exit 1
+    fi
+fi
+
+echo "Reaped $n_stale session(s), $((reap_rss / 1024))M."
