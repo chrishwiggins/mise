@@ -1,16 +1,16 @@
 #/bin/tcsh -f -X -V
- 
- 
+
+
 # old and busted
 ## ls -1 | grep ' ' | sed -e 's/ /_/g' | sed -f ~//mise//sed/normalize  >! /tmp/new_$$
 ## ls -1 | grep ' ' | sed -f ~//mise//sed/normalize  >! /tmp/old_$$
 # new hotness (include files in all subfolders and the folders themselves)
 # 20201030 change to undo recursive
 # find . | grep -e ' ' -e ',' -e '-' -e '_' | sed -f ~//mise//sed/normalize  >! /tmp/old_$$
-ls -1 | grep -e '&' -e ' ' -e ',' -e '-' -e '_' | sed -f ~//mise//sed/normalize  >! /tmp/old_$$
+ls -1 | perl -ne 'print if /[& ,_-]|\xE2\x80[\x98\x99\x9C\x9D]/' | sed -f ~//mise//sed/normalize  >! /tmp/old_$$
 # 20200723 changing becuase 20200722 i ran on ~ and killed files named '-'
 # cat /tmp/old_$$ |  sed -e 's/[, _-][, _-]*/_/g' -e 's/'"'"'/_/g' | tr '()' '-' >! /tmp/new_$$
-  cat /tmp/old_$$ |  sed -e 's/-/_/g' -e 's/[, _][, _]*/_/g'   -e 's/'"'"'/_/g' | tr '()&' '-' >! /tmp/new_$$
+  cat /tmp/old_$$ | perl -pe 's/(?:\xE2\x80[\x98\x99\x9C\x9D])+//g' | sed -e 's/-/_/g' -e 's/[, _][, _]*/_/g'   -e 's/'"'"'/_/g' | tr '()&' '-' >! /tmp/new_$$
 # 20211222 replacing home with ~
 
 

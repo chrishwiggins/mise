@@ -10,13 +10,14 @@ MANPAGE = """
 NDIR(1)                     User Commands                     NDIR(1)
 
 NAME
-    ndir - create timestamped directories for Claude sessions
+    ndir - create timestamped directories for AI sessions
 
 SYNOPSIS
     ndir [title]
     ndir -c [prompt]
+    ndir -a [prompt]
     ndir -p <prompt>
-    ndir -c -t <title> [prompt]
+    ndir -c|-a -t <title> [prompt]
 
 DESCRIPTION
     Creates a timestamped directory in /tmp and optionally launches
@@ -28,6 +29,11 @@ OPTIONS
         it becomes Claude's first message. Without a prompt, Claude
         starts with an empty session. If claude(1) is not on PATH,
         runs agent(1) instead.
+
+    -a, --agent
+        Start an interactive Cursor Agent session. If a prompt is
+        provided, it becomes Agent's first message. Without a prompt,
+        Agent starts with an empty session.
 
     -p, --print
         Run Claude in print mode (non-interactive). Claude processes
@@ -46,7 +52,7 @@ ARGUMENT INTERPRETATION
     The positional argument's meaning depends on the mode:
 
     No flags:    argument is the directory TITLE
-    With -c/-p:  argument is the Claude PROMPT (title auto-generated)
+    With -c/-a/-p: argument is the PROMPT (title auto-generated)
 
     This design lets you type natural prompts without worrying about
     directory names:
@@ -58,6 +64,7 @@ ARGUMENT INTERPRETATION
 ALIASES (recommended for .cshrc/.tcshrc)
     alias ndd  'set ndpath=`ndir \\!*`; cd $ndpath'
     alias ndc  'ndir -c'
+    alias nda  'ndir -a'
     alias ndp  'ndir -p'
 
 EXAMPLES
@@ -66,6 +73,8 @@ EXAMPLES
 
     ndc                     Create dir, start interactive Claude
     ndc "explain this code" Create dir, Claude with initial prompt
+    nda                     Create dir, start interactive Agent
+    nda "explain this code" Create dir, Agent with initial prompt
 
     ndp "summarize README"  Create dir, Claude prints response and exits
 
@@ -88,22 +97,24 @@ SEE ALSO
 
 """
 
-def _ai_cli():
-    """Prefer claude; if not on PATH, use agent (e.g. Cursor Agent CLI)."""
-    if shutil.which("claude"):
-        return "claude"
-    if shutil.which("agent"):
-        return "agent"
-    print("Error: neither 'claude' nor 'agent' found in PATH", file=sys.stderr)
+def _resolve_cli(*names):
+    """Return the first available CLI from names."""
+    for name in names:
+        if shutil.which(name):
+            return name
+    quoted_names = ", ".join(f"'{name}'" for name in names)
+    print(f"Error: none of {quoted_names} found in PATH", file=sys.stderr)
     sys.exit(127)
 
 
 def main():
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('arg', nargs='*', help='Title (no flags) or prompt (with -c/-p)')
-    parser.add_argument('-t', '--title', help='Explicit directory name (use with -c/-p)')
-    parser.add_argument('-c', '--claude', action='store_true', help='Start interactive Claude')
-    parser.add_argument('-p', '--print', action='store_true', dest='print_mode', help='Run Claude in print mode')
+    parser.add_argument('arg', nargs='*', help='Title (no flags) or prompt (with -c/-a/-p)')
+    parser.add_argument('-t', '--title', help='Explicit directory name (use with -c/-a/-p)')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('-c', '--claude', action='store_true', help='Start interactive Claude')
+    mode.add_argument('-a', '--agent', action='store_true', help='Start interactive Agent')
+    mode.add_argument('-p', '--print', action='store_true', dest='print_mode', help='Run Claude in print mode')
     parser.add_argument('-h', '--help', action='store_true', dest='show_help', help='Show help')
     args = parser.parse_args()
 
@@ -115,8 +126,8 @@ def main():
     arg_text = ' '.join(args.arg) if args.arg else None
 
     # Determine prompt and title based on mode
-    if args.claude or args.print_mode:
-        # Claude mode: arg is the prompt, auto-generate title
+    if args.claude or args.agent or args.print_mode:
+        # AI mode: arg is the prompt, auto-generate title
         prompt_text = arg_text
         if args.title:
             name = f"{datestr}_{args.title}"
@@ -133,24 +144,20 @@ def main():
 
     dir_path = f"/tmp/{name}"
     os.makedirs(dir_path, exist_ok=True)
-    print(dir_path)
+    print(dir_path, flush=True)
 
-    # Run claude (or agent if claude unavailable) if requested
-    if args.claude:
+    # Run claude/agent if requested
+    if args.claude or args.agent:
         os.chdir(dir_path)
-        cmd = _ai_cli()
-        if prompt_text:
-            subprocess.run([cmd, prompt_text])
-        else:
-            subprocess.run([cmd])
+        cmd = _resolve_cli("agent") if args.agent else _resolve_cli("claude", "agent")
+        subprocess.run([cmd, prompt_text] if prompt_text else [cmd])
     elif args.print_mode:
-        os.chdir(dir_path)
-        cmd = _ai_cli()
-        if prompt_text:
-            subprocess.run([cmd, "-p", prompt_text])
-        else:
+        if not prompt_text:
             print("Error: -p (print mode) requires a prompt", file=sys.stderr)
             sys.exit(1)
+        os.chdir(dir_path)
+        cmd = _resolve_cli("claude", "agent")
+        subprocess.run([cmd, "-p", prompt_text])
 
 if __name__ == '__main__':
     main()
