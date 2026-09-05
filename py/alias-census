@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""Classify every alias in a tcsh alias file as LIVE, DEAD, SHADOWED, SHELL-ONLY,
+or UNKNOWN, so a tcsh-to-bash migration knows what is worth translating.
+
+Companion to alias-health, which answers "did the file source cleanly?". This
+answers the next question: "of what registered, what still points at something
+that exists?". Written 2026-09-05 for doc/plan-tcsh2bash.md step 2.
+
+Method, and why it is this way:
+
+Resolution happens INSIDE tcsh, not in Python. The alias body is handed to the
+same shell that would run it, after sourcing the real login chain, and we ask
+`which` about the command it would invoke. Reimplementing csh word-splitting,
+variable expansion and $PATH search in Python would be a second implementation
+to keep correct, and alias-health's docstring already records what happens when
+a static scan disagrees with the shell: 18 of 19 findings were false positives.
+Empirical beats static here too.
+
+The classes:
+
+  SHADOWED    an earlier definition of a name that a later line redefines.
+              tcsh keeps the last, so these lines have never been reachable.
+              Detected by line order, before any resolution is attempted.
+  SHELL-ONLY  mutates the caller's shell (cd, setenv, source, history, pushd,
+              popd, unset, set, alias, rehash). Cannot become a script at all,
+              because a child process cannot change its parent's state.
+  LIVE        the first command word resolves to something that exists.
+  DEAD        it does not, and the target looks like a real command that has
+              gone away (absolute path, or a bare name nothing provides).
+  UNKNOWN     resolution was inconclusive: the body starts with a shell
+              construct, a variable that expands to nothing useful, or the
+              probe errored. These need human eyes, not a guess.
+
+Usage:
+  alias-census                      # the public alias file, table to stdout
+  alias-census FILE                 # a specific alias file
+  alias-census --markdown           # emit the doc/alias-census.md table
+  alias-census --class DEAD         # only rows of one class
+  alias-census --verbose            # show the resolved target per row
+
+Exit status: 0 always; this is a report, not a gate.
+"""
+import os
+import re
+import subprocess
+import sys
+from collections import OrderedDict
+
+LOGIN_PRIVATE = os.path.expanduser('~/gd/local/seiton/sh/login-private.sh')
+LOGIN_PUBLIC = os.path.expanduser('~/mise/sh/login-public.sh')
+PUBLIC_ALIASES = os.path.expanduser('~/mise/sh/aliases-public.sh')
+
+ALIAS_RE = re.compile(r'^alias\s+(\S+)\s+(.*)$')
+
+# Builtins that act on the calling shell. A script cannot do these for its
+# parent, so they stay aliases or become shell functions.
+SHELL_BUILTINS = {
+    'cd', 'chdir', 'pushd', 'popd', 'setenv', 'unsetenv', 'set', 'unset',
+    'source', 'history', 'alias', 'unalias', 'rehash', 'bg', 'fg', 'jobs',
+    'limit', 'umask', 'exec', 'eval', 'suspend', 'nohup', 'setv',
+}
+
+# Leading tokens that mean "this is shell code", not "this invokes a command".
+SHELL_CONSTRUCTS = {'if', 'while', 'foreach', 'switch', 'end', 'endif', 'else'}
+
+
+def read_aliases(path):
+    """Return [(lineno, name, body)] for every alias line, in file order."""
+    out = []
+    with open(path, errors='replace') as f:
+        for n, line in enumerate(f, 1):
+            line = line.rstrip('\n')
+            if line.startswith('#') or not line.strip():
+                continue
+            m = ALIAS_RE.match(line)
+            if m:
+                out.append((n, m.group(1), m.group(2)))
+    return out
+
+
+def mark_shadowed(rows):
+    """tcsh keeps the LAST definition of a name. Everything earlier is dead
+    code that has never been reachable, so it is retired, never translated."""
+    last_line = {}
+    for lineno, name, _ in rows:
+        last_line[name] = lineno
+    return {lineno for lineno, name, _ in rows if last_line[name] != lineno}
+
+
+def first_word(body):
+    """The command an alias body would actually invoke.
+
+    Strips one layer of surrounding quotes, then takes the first bare word.
+    Returns '' when the body starts with something that is not a command name.
+    """
+    b = body.strip()
+    # Strip a trailing comment before anything else, so `... \!*'   # macOS`
+    # does not leave a stray quote glued to the command word.
+    b = re.sub(r"\s+#.*$", "", b).strip()
+    # Strip one matched layer of surrounding quotes.
+    if len(b) >= 2 and b[0] in '"\'' and b[0] == b[-1]:
+        b = b[1:-1].strip()
+    else:
+        # Unmatched leading quote (the trailing one lived past a comment).
+        b = b.lstrip('"\'').strip()
+    # A leading parenthesis or brace is a subshell/group, not a command.
+    b = b.lstrip('(){ \t')
+    # A path may contain BACKSLASH-ESCAPED SPACES, as in
+    # /Applications/Google\ Chrome.app/... . Splitting on bare whitespace
+    # truncates it to "/Applications/Google\" and reports a live app as dead,
+    # so consume escaped characters as part of the word.
+    m = re.match(r'((?:\\.|[^\s;|&<>()])+)', b)
+    if not m:
+        return ''
+    return m.group(1).replace('\\ ', ' ').replace('\\', '')
+
+
+def probe_targets(words, alias_file=None):
+    """Ask a real tcsh, with the real login chain sourced, where each word
+    resolves. One shell invocation for the whole batch; starting a tcsh per
+    alias would take minutes for a file this size.
+
+    Returns {word: resolved_path_or_empty}.
+    """
+    if not words:
+        return {}
+    # A sentinel carrying the word itself lets output lines be paired back.
+    script = []
+    script.append(f'source {LOGIN_PRIVATE} >& /dev/null')
+    script.append(f'source {LOGIN_PUBLIC} >& /dev/null')
+    # Source the alias file itself. Many aliases target OTHER aliases in the
+    # same file (datecp -> datestr, pu -> up, miseup -> cd-mise). Without this
+    # every such chain probes as "not found" and 30 live aliases are reported
+    # dead. tcsh -f skips startup files, so nothing else registers them.
+    if alias_file:
+        script.append(f'source {alias_file} >& /dev/null')
+    for w in words:
+        safe = w.replace("'", "")
+        script.append(f"echo '@@@{safe}'")
+        if safe.startswith('$'):
+            # Must stay unquoted for tcsh to expand the variable, but then a
+            # space in the expansion would split it. These paths do not have
+            # spaces in practice; `ls -d` reports existence either way.
+            script.append(f'ls -d {safe} |& head -1')
+        elif ' ' in safe:
+            # A path with spaces has to be quoted to survive as one word, and
+            # cannot be an alias name anyway, so losing alias lookup is fine.
+            script.append(f'ls -d "{safe}" |& head -1')
+        else:
+            # BARE, not quoted. `which "datestr"` reports "Command not found"
+            # for a name that `which datestr` resolves as an alias: quoting
+            # suppresses tcsh's alias lookup. Quoting everything reported 30
+            # live alias-to-alias chains as dead.
+            script.append(f'which {safe} |& head -1')
+    r = subprocess.run(['/bin/tcsh', '-f', '-c', '\n'.join(script)],
+                       capture_output=True, text=True)
+    out = {}
+    cur = None
+    for line in (r.stdout or '').splitlines():
+        if line.startswith('@@@'):
+            cur = line[3:]
+            out[cur] = ''
+        elif cur is not None and not out.get(cur):
+            out[cur] = line.strip()
+    return out
+
+
+def classify(name, body, word, resolved):
+    """Return (class, detail) for one alias."""
+    if not word:
+        return 'UNKNOWN', 'no command word found'
+    if word in SHELL_BUILTINS:
+        return 'SHELL-ONLY', f'{word} acts on the calling shell'
+    if word in SHELL_CONSTRUCTS:
+        return 'UNKNOWN', f'starts with shell construct {word}'
+
+    r = (resolved or '').strip()
+    if word.startswith('$') and not r:
+        # The variable expanded to nothing useful, or is set only in an
+        # interactive shell. A human has to say which.
+        return 'UNKNOWN', f'target is variable {word}, did not resolve'
+    if not r:
+        return 'DEAD', f'{word}: nothing provides it'
+    low = r.lower()
+    if 'not found' in low or low.startswith('no ') or 'no such file' in low:
+        return 'DEAD', f'{word}: not found'
+    if 'aliased to' in r:
+        return 'CHAIN', r.split('aliased to', 1)[1].strip()[:50]
+    if r.startswith('/'):
+        # Do NOT split on whitespace to get the path: an app bundle path such
+        # as "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        # is one filename containing spaces, and splitting reported a live
+        # Chrome as dead. `ls -d` output may carry a trailing size column, so
+        # test the whole string first and only then trim a trailing field.
+        cand = r
+        if not os.path.exists(cand) and '  ' in cand:
+            cand = cand.rsplit('  ', 1)[0].strip()
+        if not os.path.exists(cand):
+            return 'DEAD', f'{cand}: path does not exist'
+        return 'LIVE', cand
+    return 'LIVE', r
+
+
+def census(path):
+    rows = read_aliases(path)
+    shadowed = mark_shadowed(rows)
+
+    # Resolve every distinct command word once.
+    words = []
+    for lineno, name, body in rows:
+        if lineno in shadowed:
+            continue
+        w = first_word(body)
+        # A $var target IS resolvable: tcsh expands it against the login env,
+        # so `$mise/py/vitals` becomes a real path. Probe it like any other
+        # word rather than giving up and calling it UNKNOWN.
+        if w and w not in SHELL_BUILTINS \
+                and w not in SHELL_CONSTRUCTS and w not in words:
+            words.append(w)
+    resolved = probe_targets(words, alias_file=path)
+
+    out = []
+    for lineno, name, body in rows:
+        if lineno in shadowed:
+            out.append((lineno, name, 'SHADOWED',
+                        'redefined later in the file', body))
+            continue
+        w = first_word(body)
+        cls, detail = classify(name, body, w, resolved.get(w, ''))
+        out.append((lineno, name, cls, detail, body))
+    return out
+
+
+def main():
+    argv = sys.argv[1:]
+    markdown = '--markdown' in argv
+    verbose = '--verbose' in argv or '-v' in argv
+    want = None
+    if '--class' in argv:
+        want = argv[argv.index('--class') + 1].upper()
+    files = [a for a in argv if not a.startswith('-')
+             and a != want and os.path.exists(a)]
+    path = files[0] if files else PUBLIC_ALIASES
+
+    rows = census(path)
+    counts = OrderedDict()
+    for _, _, cls, _, _ in rows:
+        counts[cls] = counts.get(cls, 0) + 1
+
+    shown = [r for r in rows if want is None or r[2] == want]
+
+    if markdown:
+        print(f'# Alias census: `{path.replace(os.path.expanduser("~"), "~")}`')
+        print()
+        print(f'Generated by `py/alias-census`. {len(rows)} alias lines.')
+        print()
+        for cls, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            print(f'- {cls}: {n}')
+        print()
+        print('| line | alias | class | target | decision |')
+        print('|---|---|---|---|---|')
+        for lineno, name, cls, detail, body in shown:
+            d = detail.replace('|', '\\|')[:60]
+            print(f'| {lineno} | `{name}` | {cls} | {d} | |')
+    else:
+        for cls, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            print(f'  {cls:<11} {n}')
+        print()
+        for lineno, name, cls, detail, body in shown:
+            line = f'  {lineno:>4}  {name:<22} {cls:<11}'
+            if verbose:
+                line += f' {detail}'
+            print(line)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

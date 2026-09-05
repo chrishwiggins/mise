@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Turn a messy filename into Chris's yyyy-mm-dd-{slug}.{ext} form.
+
+This is the MECHANICAL half of the /rational skill: ASCII-folding, case,
+separators, and the stripping of yt-dlp's "[videoId]" tags and macOS's
+fullwidth substitutions. It deliberately does NOT invent a date and does NOT
+decide whether a slug is memorable; those are judgment and belong to whoever
+is running the rename.
+
+Usage:
+  rational-name --date 2026-03-02 "BetaBagels 014 - A Fireside Chat [kPgG].mp4"
+  rational-name --date 2026-03-02 --slug council-tech-committee-chair f.mp4
+  ls *.mp4 | rational-name --date 2025-08-15
+
+With --slug, the given slug is normalized and used as-is. Without it, the slug
+is derived from the filename, which gets you a legal name but usually a
+long-winded one: review and shorten it before applying.
+
+Prints "OLD<TAB>NEW". It never touches the filesystem; pipe it somewhere or
+use it to build a rename script.
+"""
+
+import argparse
+import os
+import re
+import sys
+import unicodedata
+
+# Characters that arrive with scraped titles and must not survive into a name.
+# Keyed by codepoint rather than written as literals: a repo hook bans the dash
+# characters from appearing literally in any file, this one included.
+TRANSLATE = {
+    chr(0xFF1A): "-",      # fullwidth colon, macOS substitute for ':'
+    chr(0xFF1F): "",       # fullwidth question mark, substitute for '?'
+    chr(0xFF0F): "-",      # fullwidth solidus, substitute for '/'
+    chr(0xFF5C): "-",      # fullwidth vertical bar
+    chr(0x2019): "",       # right single quote
+    chr(0x2018): "",       # left single quote
+    chr(0x201C): "",       # left double quote
+    chr(0x201D): "",       # right double quote
+    chr(0x2014): "-",      # em dash
+    chr(0x2013): "-",      # en dash
+    "&": " and ",
+}
+
+# yt-dlp appends the video id in square brackets; it is a matching handle, not
+# part of the name Chris wants to read.
+ID_TAG = re.compile(r"\[[A-Za-z0-9_-]{6,}\]")
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def slugify(text):
+    for src, dst in TRANSLATE.items():
+        text = text.replace(src, dst)
+    text = ID_TAG.sub(" ", text)
+    # Fold accents to ASCII, then drop whatever will not fold.
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii")
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return re.sub(r"-{2,}", "-", text).strip("-")
+
+
+def rename(path, date, slug=None):
+    base = os.path.basename(path)
+    stem, ext = os.path.splitext(base)
+    body = slugify(slug) if slug else slugify(stem)
+    if not body:
+        body = "untitled"
+    return f"{date}-{body}{ext.lower()}"
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--date", required=True, help="content date, yyyy-mm-dd")
+    ap.add_argument("--slug", help="explicit slug; derived from filename if omitted")
+    ap.add_argument("files", nargs="*", help="filenames (or pass them on stdin)")
+    args = ap.parse_args()
+
+    if not DATE_RE.match(args.date):
+        sys.exit(f"error: --date must be yyyy-mm-dd, got {args.date!r}")
+
+    files = args.files or [l.strip() for l in sys.stdin if l.strip()]
+    if not files:
+        sys.exit("error: no filenames given")
+    if args.slug and len(files) > 1:
+        sys.exit("error: --slug takes exactly one file; it would collide across many")
+
+    for f in files:
+        print(f"{f}\t{rename(f, args.date, args.slug)}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,119 @@
+#!/usr/bin/python3
+"""Fetch Slack messages via the Web API.
+
+Token is read from $SLACK_TOKEN, else ~/.config/slack/token (first line).
+
+Usage:
+    slack-fetch <permalink>            # one message + its thread
+    slack-fetch <channel> <ts>         # same, by explicit ids
+    slack-fetch --history <channel> [--limit N]
+    slack-fetch --whoami               # verify the token works
+
+Output is JSON on stdout; pipe through slack2tsv for a table.
+"""
+
+import json
+import os
+import re
+import sys
+import urllib.parse
+import urllib.request
+
+API = "https://slack.com/api/"
+
+
+def token():
+    t = os.environ.get("SLACK_TOKEN")
+    if t:
+        return t.strip()
+    path = os.path.expanduser("~/.config/slack/token")
+    try:
+        with open(path) as fh:
+            return fh.readline().strip()
+    except OSError:
+        sys.exit(
+            "no token: set $SLACK_TOKEN or put one in ~/.config/slack/token\n"
+            "see the header of this file for how to mint one"
+        )
+
+
+# Slack's error strings are terse and several of them are actively misleading;
+# channel_not_found on a private channel usually means "wrong token type", not
+# "wrong id". Translate the ones that cost the most time to diagnose.
+HINTS = {
+    "not_in_channel": "the token's owner is not a member of that channel; join it in Slack",
+    "channel_not_found": (
+        "either the wrong workspace, or a BOT token (xoxb-) aimed at a private\n"
+        "  channel. Slack hides private channels from bots as 'not found' rather\n"
+        "  than 'forbidden'. Check `slack-fetch --whoami`, and use the USER token (xoxp-)."
+    ),
+    "missing_scope": (
+        "add the scope Slack names above, then REINSTALL the app.\n"
+        "  A token is minted against the scopes present at install time, so adding\n"
+        "  a scope does nothing until you reinstall and copy the new token."
+    ),
+    "invalid_auth": "token revoked, expired, or the app was uninstalled; remint it",
+    "token_revoked": "someone uninstalled the app; reinstall and copy the new token",
+    "ratelimited": "too many calls; wait and retry",
+}
+
+
+def call(method, **params):
+    url = API + method + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token()})
+    r = json.load(urllib.request.urlopen(req))
+    if not r.get("ok"):
+        err = r.get("error", "unknown")
+        msg = "slack api error on %s: %s" % (method, err)
+        if r.get("needed"):
+            msg += "\n  needs scope: %s" % r["needed"]
+        if err in HINTS:
+            msg += "\n  %s" % HINTS[err]
+        sys.exit(msg)
+    return r
+
+
+def parse_permalink(url):
+    """https://host/archives/C123/p1786912252317009 -> (C123, 1786912252.317009)
+
+    Handles the ?redir= login-bounce wrapper too, where the path is percent-encoded.
+    """
+    m = re.search(r"/archives/([A-Z0-9]+)/p(\d{10})(\d{6})", urllib.parse.unquote(url))
+    if not m:
+        return None
+    return m.group(1), "%s.%s" % (m.group(2), m.group(3))
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        sys.exit(__doc__)
+
+    if args[0] == "--whoami":
+        r = call("auth.test")
+        print(json.dumps({k: r[k] for k in ("team", "team_id", "user", "url") if k in r},
+                         indent=2))
+        return
+
+    if args[0] == "--history":
+        limit = 100
+        if "--limit" in args:
+            limit = int(args[args.index("--limit") + 1])
+        r = call("conversations.history", channel=args[1], limit=limit)
+        print(json.dumps(r["messages"], indent=2))
+        return
+
+    parsed = parse_permalink(args[0])
+    if parsed:
+        channel, ts = parsed
+    elif len(args) >= 2:
+        channel, ts = args[0], args[1]
+    else:
+        sys.exit("could not parse a permalink; pass <channel> <ts> instead")
+
+    r = call("conversations.replies", channel=channel, ts=ts, limit=200)
+    print(json.dumps(r["messages"], indent=2))
+
+
+if __name__ == "__main__":
+    main()

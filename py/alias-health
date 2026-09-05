@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Check that the shell alias files source cleanly and register what they define.
+
+Built 2026-08-22 after finding that `aliases-public.sh` line 338 referenced `$setup`,
+a variable set nowhere in the live login path. tcsh aborts a sourced file on an
+undefined variable, so every alias below that line, roughly 230 of them, had been
+silently failing to register. The only symptom was "that alias doesn't work", and
+nothing surfaced the cause.
+
+This compares the number of `alias` lines a file DEFINES against the number tcsh
+actually REGISTERS after sourcing it. A gap means the file died partway through.
+
+Do NOT "fix" undefined variables found by grepping the file. A static scan of
+aliases-private.sh on 2026-08-22 flagged 19 apparently-undefined variables; 18 were
+false positives, because a variable inside a single-quoted alias body expands when the
+alias RUNS, not when the file is sourced, and is therefore harmless. Only the one using
+"${...}" inside DOUBLE quotes aborted the source. Editing all 19 would have broken
+working aliases. The method that works: fix one, rerun this checker, look at where it
+stops next. Empirical beats static here.
+
+Usage:
+  alias-health              # check the known alias files
+  alias-health FILE ...     # check specific files
+  alias-health -v           # also print the first error tcsh reported
+
+Exit status: 0 if every file registers everything it defines, 1 otherwise.
+"""
+import os
+import re
+import subprocess
+import sys
+
+# Files that must source standalone, and the login script to source first for
+# those that legitimately depend on variables set earlier in the login chain.
+LOGIN = os.path.expanduser('~/gd/local/seiton/sh/login-private.sh')
+DEFAULTS = [
+    (os.path.expanduser('~/mise/sh/aliases-public.sh'), None),
+    (os.path.expanduser('~/gd/local/seiton/sh/aliases-private.sh'), LOGIN),
+]
+# Lines that define an alias: `alias name ...`, not indented, not commented.
+ALIAS_RE = re.compile(r'^alias\s+(\S+)', re.M)
+
+
+def defined_count(path):
+    """Count DISTINCT alias names. A name defined twice still registers once,
+    so counting lines would report a phantom gap."""
+    with open(path, errors='replace') as f:
+        return len(set(ALIAS_RE.findall(f.read())))
+
+
+def registered_count(path, prelude=None):
+    """Source the file in tcsh and count what actually landed.
+
+    `prelude` is a login script sourced first, for files that legitimately rely
+    on variables it sets. Without it those files look broken when they are not.
+    """
+    pre = f'source {prelude} >& /dev/null; ' if prelude else ''
+    r = subprocess.run(
+        ['/bin/tcsh', '-c', f'{pre}source {path} >& /dev/null; alias | wc -l'],
+        capture_output=True, text=True)
+    try:
+        return int(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return -1
+
+
+def first_error(path, prelude=None):
+    pre = f'source {prelude} >& /dev/null; ' if prelude else ''
+    r = subprocess.run(['/bin/tcsh', '-c', f'{pre}source {path}'],
+                       capture_output=True, text=True)
+    for line in (r.stderr or '').splitlines():
+        if line.strip():
+            return line.strip()
+    return ''
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith('-')]
+    verbose = '-v' in sys.argv or '--verbose' in sys.argv
+    # An explicitly named file is checked standalone unless it is a known one.
+    known = dict(DEFAULTS)
+    paths = [(a, known.get(os.path.realpath(a), known.get(a))) for a in args] \
+        or DEFAULTS
+
+    bad = 0
+    for path, prelude in paths:
+        if not os.path.exists(path):
+            print(f"  skip  {path} (not found)")
+            continue
+        want, got = defined_count(path), registered_count(path, prelude)
+        name = path.replace(os.path.expanduser('~'), '~')
+        if got < 0:
+            print(f"  FAIL  {name}: could not source")
+            bad += 1
+            continue
+        # tcsh may carry a couple of its own builtins; allow a small margin.
+        if got < want - 2:
+            missing = want - got
+            print(f"  FAIL  {name}: defines {want}, registers {got} "
+                  f"({missing} missing)")
+            err = first_error(path, prelude)
+            if err:
+                print(f"        first error: {err}")
+                m = re.match(r'(\w+): Undefined variable', err)
+                if m:
+                    print(f"        an undefined variable aborts the whole file; "
+                          f"every alias after that line is dead")
+            bad += 1
+        else:
+            print(f"  ok    {name}: {got} aliases registered")
+            if verbose:
+                err = first_error(path, prelude)
+                if err:
+                    print(f"        (note: {err})")
+
+    if bad:
+        print(f"\n{bad} file(s) not registering everything they define.")
+    return 1 if bad else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Emit the `> `-quoted original for an email reply, fetched from the mailbox.
+
+The point of this script is that Claude never retypes a quoted original. Claude
+runs this, and the bytes in the draft come from the mailbox rather than from a
+language model's recollection of the mailbox.
+
+Usage:
+    eml-quote --account h --index 9                 # hackNY inbox, message 9
+    eml-quote --account h --index 9 --sent          # hackNY sent folder
+    eml-quote --file /path/to/message.eml           # a .eml on disk
+    eml-quote --file msg.eml --out /tmp/quote.txt   # write instead of print
+
+Output is the attribution line plus the body with every line prefixed by "> ",
+ready to paste at the bottom of a reply draft:
+
+    On Fri, 14 Aug 2026 at 21:08, Katie Cumiskey <k@example.edu> wrote:
+    >
+    > Yes Chris it was so great to meet in person!
+
+Exit codes:
+    0  quote written
+    1  usage error
+    2  message could not be fetched (nothing written; do NOT fabricate)
+"""
+
+import argparse
+import email
+import email.policy
+import os
+import re
+import subprocess
+import sys
+
+M = "/Users/wiggins/mise/bash/m"
+MAX_QUOTE_LINES = 60
+
+
+def die(msg, code=2):
+    print("eml-quote: " + msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def fetch_via_m(account, index, sent):
+    """Fetch one message through `m`. Returns (headers_text, body_text).
+
+    `m <acct> <N>` prints headers, then a line of exactly '---', then the body,
+    all on stdout. Progress chatter ("Cache miss...") can precede the headers,
+    so the header block is taken as everything between the first line matching
+    a mail header and the separator.
+    """
+    cmd = [M, account]
+    if sent:
+        cmd.append("sent")
+    cmd.append(str(index))
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    except FileNotFoundError:
+        die("cannot find %s" % M)
+    except subprocess.TimeoutExpired:
+        die("timed out fetching message")
+    if p.returncode != 0:
+        die("fetch failed (exit %d): %s" % (p.returncode, p.stderr.strip()[:400]))
+
+    lines = p.stdout.splitlines()
+    try:
+        sep = lines.index("---")
+    except ValueError:
+        die("unexpected output from m: no '---' header separator found")
+    head = [ln for ln in lines[:sep] if re.match(r"^[A-Za-z-]+:", ln)]
+    if not head:
+        die("unexpected output from m: no headers before the separator")
+    return "\n".join(head), "\n".join(lines[sep + 1:])
+
+
+def fetch_via_file(path):
+    try:
+        with open(path, "rb") as fh:
+            msg = email.message_from_binary_file(fh, policy=email.policy.default)
+    except OSError as exc:
+        die("cannot read %s: %s" % (path, exc))
+    hdr = "\n".join(
+        "%s: %s" % (k, msg.get(k, "")) for k in ("From", "To", "Date", "Subject") if msg.get(k)
+    )
+    body = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                body = part.get_content()
+                break
+    else:
+        body = msg.get_content()
+    return hdr, body
+
+
+def header(text, name):
+    m = re.search(r"^%s:[ \t]*(.*)$" % re.escape(name), text, re.M | re.I)
+    return m.group(1).strip() if m else ""
+
+
+def strip_quoted_history(body):
+    """Drop the incoming message's own quoted history and signature cruft.
+
+    Quoting someone's quote of you, recursively, is noise. Cut at the first
+    attribution line or Outlook separator.
+    """
+    lines = body.splitlines()
+    cuts = (
+        re.compile(r"^\s*_{10,}\s*$"),                       # Outlook separator
+        re.compile(r"^\s*-{5,}\s*Original Message", re.I),
+        re.compile(r"^\s*On .{4,120}\bwrote:\s*$"),
+        re.compile(r"^\s*Get Outlook for", re.I),
+        re.compile(r"^\s*From:\s.+", re.I),
+    )
+    out = []
+    for line in lines:
+        if any(c.match(line) for c in cuts):
+            break
+        out.append(line)
+    while out and not out[-1].strip():
+        out.pop()
+    return out
+
+
+PROVENANCE_LOG = os.path.expanduser("~/.claude/state/eml-quote-provenance.log")
+
+
+def log_provenance(text):
+    """Record every emitted quote so the PreToolUse hook can verify a draft.
+
+    A reply draft's quoted block is checked against this log. Text that never
+    passed through here reads as fabricated and the write is blocked.
+    """
+    try:
+        os.makedirs(os.path.dirname(PROVENANCE_LOG), exist_ok=True)
+        with open(PROVENANCE_LOG, "a") as fh:
+            fh.write(text)
+            fh.write("\n")
+    except OSError:
+        # Logging is a safety net, not the job. Never fail the fetch over it.
+        pass
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--account", help="mail account shorthand passed to m, e.g. h")
+    ap.add_argument("--index", type=int, help="message number in that listing")
+    ap.add_argument("--sent", action="store_true", help="read the sent folder")
+    ap.add_argument("--file", help="a .eml file on disk instead of a mailbox fetch")
+    ap.add_argument("--out", help="write here instead of stdout")
+    ap.add_argument("--max-lines", type=int, default=MAX_QUOTE_LINES)
+    ap.add_argument(
+        "--expect-from",
+        help="substring that MUST appear in the fetched From header. Mailbox indexes shift "
+        "when new mail arrives, so pass the sender you believe you are quoting.",
+    )
+    args = ap.parse_args()
+
+    if args.file:
+        hdr, body = fetch_via_file(args.file)
+    elif args.account and args.index:
+        hdr, body = fetch_via_m(args.account, args.index, args.sent)
+    else:
+        ap.print_usage(sys.stderr)
+        die("need --file, or both --account and --index", 1)
+
+    frm = header(hdr, "From")
+    date = header(hdr, "Date")
+
+    # A mailbox index is not a stable identifier: one new arrival shifts every
+    # number. Caught 2026-08-15, when index 9 became a Bitwarden code between
+    # two runs minutes apart.
+    if args.expect_from and args.expect_from.lower() not in frm.lower():
+        die(
+            "identity check FAILED: expected From to contain %r but got %r.\n"
+            "The index has probably shifted. Re-list the mailbox and try again.\n"
+            "Nothing was written." % (args.expect_from, frm)
+        )
+
+    if not body.strip():
+        die("fetched message has an empty body; refusing to emit a quote")
+
+    lines = strip_quoted_history(body)
+    if not lines:
+        die("nothing left after trimming quoted history; refusing to emit a quote")
+
+    truncated = False
+    if len(lines) > args.max_lines:
+        lines = lines[: args.max_lines]
+        truncated = True
+
+    attrib = "On %s, %s wrote:" % (date or "an earlier date", frm or "they")
+    out = [attrib, ">"]
+    out += [("> " + ln).rstrip() for ln in lines]
+    if truncated:
+        out.append("> [...]")
+    text = "\n".join(out) + "\n"
+
+    log_provenance(text)
+
+    if args.out:
+        with open(args.out, "w") as fh:
+            fh.write(text)
+        print("eml-quote: wrote %d quoted lines to %s" % (len(lines), args.out), file=sys.stderr)
+    else:
+        sys.stdout.write(text)
+
+
+if __name__ == "__main__":
+    main()
