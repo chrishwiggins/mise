@@ -1,0 +1,5 @@
+#!/bin/bash
+# `gdrive` opens Google Drive; `gdrive <sub> ...` runs gdrive-<sub>.
+exec subcommand-dispatch gdrive \
+    pers-gmail-browser http://drive.google.com \
+    -- "$@"

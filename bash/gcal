@@ -1,0 +1,7 @@
+#!/bin/bash
+# `gcal` opens Google Calendar; `gcal <sub> ...` runs gcal-<sub>.
+# Replaces a tcsh alias that silently swallowed arguments — see
+# subcommand-dispatch for the full story.
+exec subcommand-dispatch gcal \
+    "$HOME/mise/bash/chrome-profile-open" 0 https://www.google.com/calendar/b/0/render \
+    -- "$@"

@@ -1,0 +1,5 @@
+#!/bin/bash
+# `gsheet` opens Google Sheets; `gsheet <sub> ...` runs gsheet-<sub>.
+exec subcommand-dispatch gsheet \
+    fox https://docs.google.com/spreadsheet/ \
+    -- "$@"
