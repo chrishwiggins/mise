@@ -66,14 +66,51 @@ def entries(kind):
     return out
 
 
+def wired_hooks():
+    """Absolute paths of every hook command actually referenced by settings.json.
+
+    A file sitting in ~/.claude/hooks/ is NOT evidence that it runs. Caught
+    2026-08-15: require-email-reply-quote.sh had been written, tested, and left
+    unregistered since April because sessions were running when it was authored,
+    and this tool reported it as "wired in settings.json" the whole time.
+    """
+    import json
+
+    paths = set()
+    settings = os.path.join(HOME, ".claude", "settings.json")
+    try:
+        with open(settings) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None  # unknown, not empty; caller must not claim either way
+    for matchers in (data.get("hooks") or {}).values():
+        for m in matchers or []:
+            for h in m.get("hooks") or []:
+                cmd = h.get("command") or ""
+                for tok in cmd.split():
+                    if "/hooks/" in tok:
+                        paths.add(os.path.realpath(os.path.expanduser(tok)))
+    return paths
+
+
+def hook_note(path, wired):
+    if wired is None:
+        return "hook script, wiring UNKNOWN (settings.json unreadable)"
+    if os.path.realpath(path) in wired:
+        return "hook script, wired in settings.json"
+    return "hook script, NOT WIRED (present but never referenced in settings.json)"
+
+
 def find(name):
     """Return [(kind, path, note)] for every kind under which `name` exists."""
     hits = []
+    wired = wired_hooks()
     for kind, (d, topath, note) in KINDS.items():
         if kind == "hook":
             for e in entries("hook"):
                 if e.startswith(name) or name in e:
-                    hits.append((kind, os.path.join(d, e), note))
+                    p = os.path.join(d, e)
+                    hits.append((kind, p, hook_note(p, wired)))
             continue
         p = topath(d, name)
         if os.path.exists(p):
