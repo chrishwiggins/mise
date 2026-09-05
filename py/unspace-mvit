@@ -5,7 +5,7 @@ import argparse
 
 # Regex patterns for normalization
 BRACKET_PATTERN = re.compile(r"\[[^]]*\]")
-PUNCT_PATTERN = re.compile(r"[,\s\-\[\]\(\)'\"\uff1a:\uff5c|]+")
+PUNCT_PATTERN = re.compile(r"[,\s\-\[\]\(\)'\"\u2018\u2019\u201c\u201d\uff1a:\uff5c|]+")
 
 
 def normalize_name(path):
@@ -40,9 +40,20 @@ def unique_path(path, used):
         counter += 1
 
 
+def rename_path(old_path, used_paths, dry_run):
+    new_path = normalize_name(old_path)
+    if new_path != old_path:
+        new_path = unique_path(new_path, used_paths)
+        print(f"Renaming: {old_path} -> {new_path}")
+        if not dry_run:
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            os.rename(old_path, new_path)
+    used_paths.add(new_path)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Normalize filenames by removing bracketed IDs and cleaning punctuation."
+        description="Normalize file and directory names by removing bracketed IDs and cleaning punctuation."
     )
     parser.add_argument(
         "directory",
@@ -64,20 +75,14 @@ def main():
 
     used_paths = set()
     if args.local:
-        items = [(args.directory, f) for f in os.listdir(args.directory)
-                 if os.path.isfile(os.path.join(args.directory, f))]
+        for name in os.listdir(args.directory):
+            rename_path(os.path.join(args.directory, name), used_paths, args.dry_run)
     else:
-        items = [(dp, fn) for dp, _, fns in os.walk(args.directory) for fn in fns]
-    for dirpath, filename in items:
-            old_path = os.path.join(dirpath, filename)
-            new_path = normalize_name(old_path)
-            if new_path != old_path:
-                new_path = unique_path(new_path, used_paths)
-                print(f"Renaming: {old_path} -> {new_path}")
-                if not args.dry_run:
-                    os.makedirs(os.path.dirname(new_path), exist_ok=True)
-                    os.rename(old_path, new_path)
-            used_paths.add(new_path)
+        for dirpath, dirnames, filenames in os.walk(args.directory, topdown=False):
+            for filename in filenames:
+                rename_path(os.path.join(dirpath, filename), used_paths, args.dry_run)
+            for dirname in dirnames:
+                rename_path(os.path.join(dirpath, dirname), used_paths, args.dry_run)
 
 
 if __name__ == "__main__":

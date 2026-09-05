@@ -14,20 +14,27 @@ capture_filenames() {
     echo "Capturing filenames with problematic characters..."
     find . -depth \
         | sed 's|^\./||' \
-        | grep -E "[ _\-\[\]\(\),'\"]" \
+        | perl -ne 'print if /[ _\-\[\]\(\),'\''"]|\xE2\x80[\x98\x99\x9C\x9D]/' \
         > "$tmp_old"
     echo "  found $(wc -l < "$tmp_old") entries"
 }
 
 normalize_filenames() {
     echo "Normalizing filenames..."
-    perl -pe '
+    perl -lpe '
+        if (m{^(.*)/(.*?)$}) {
+            ($dir, $_) = ($1, $2);
+        } else {
+            $dir = "";
+        }
         s/\[[^]]*\]//g;                       # strip [bracketed] content
+        s/(?:\xE2\x80[\x98\x99\x9C\x9D])+//g; # strip smart quotes
         s/[, _\-\[\]()'"'"'"]+/_/g;          # collapse punctuation+spaces → _
         s/_+/_/g;                             # collapse multiple underscores
         s/^_//;                               # trim leading underscore
         s/_$//;                               # trim trailing underscore
         s/_\.(?=\w+$)/./;                    # drop underscore before extension
+        $_ = ($dir ne "" ? "$dir/$_" : $_);
     ' "$tmp_old" > "$tmp_new"
     echo "  sample before → after:"
     paste -d ' → ' <(head -n3 "$tmp_old") <(head -n3 "$tmp_new")
@@ -38,8 +45,11 @@ generate_move_commands() {
     paste -d $'\t' "$tmp_old" "$tmp_new" \
         | awk -F '\t' '
             $1 != $2 {
-                dir = gensub("/[^/]+$","","",$2)
-                print "mkdir -p \"" dir "\""
+                dir = $2
+                if (dir ~ /\//) {
+                    sub("/[^/]+$","",dir)
+                    print "mkdir -p \"" dir "\""
+                }
                 print "mv -i -- \"" $1 "\" \"" $2 "\""
             }
         ' > "$tmp_mvs"

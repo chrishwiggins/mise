@@ -191,6 +191,8 @@ alias cabal-tend "cabal update"
 alias normalize "sed -f $mise/sed/normalize "
 alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
 alias cdc "pwd | normalize | pbcopy"
+alias pwstore /opt/homebrew/bin/pass
+setenv PASSWORD_STORE_CLIP_TIME 28800
 alias cdp 'cd `pbpaste`'
 alias mise "open https://github.com/chrishwiggins/mise"
 alias citibike open http://www.citibikenyc.com/stations
