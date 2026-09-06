@@ -1,2 +1,0 @@
-$ tft
-curl --silent 'http://itsthisforthat.com/api.php?text';echo

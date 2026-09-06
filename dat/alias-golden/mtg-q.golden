@@ -1,2 +1,0 @@
-$ mtg-q
-grep -v '^%' ~/mise/aux/rp-mtg.asc| pbcopy

@@ -1,4 +1,0 @@
-$ toc
-Bad ! arg selector.
-$ toc ARG1 ARG2
-grep -v ^%%% ARG1 >! /tmp/pandoc_tmp_$$ ; pandoc -V colorlinks=true -V linkcolor=blue -V urlcolor=red -V toccolor=gray --number-sections --table-of-contents /tmp/pandoc_tmp_$$ -o ARG1.pdf

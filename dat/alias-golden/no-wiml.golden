@@ -1,2 +1,0 @@
-$ no-wiml
-cat $mise/aux/no-wiml.txt $home/gd/local/private/aux/wiml.tsv | pbcopy

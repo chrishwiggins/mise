@@ -1,2 +1,0 @@
-$ brew-tend
-brew upgrade | tee /tmp/brew_upgrade_`datestr` ; brew update;doctor-link;brew cleanup;brew link openssl --force; brew cleanup -s

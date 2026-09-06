@@ -1,2 +1,0 @@
-$ asciify-clean
-/usr/bin/perl -pe 's/[^[:ascii:]]//g'

@@ -1,2 +1,0 @@
-$ tend
-clear;date;qtend;cd ~;brew link openssl --force;  softwareupdate --all --install ; date

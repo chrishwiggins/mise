@@ -1,4 +1,0 @@
-$ tool-ssl
-Bad ! arg selector.
-$ tool-ssl ARG1 ARG2
-sudo install_name_tool -change ARG1 /usr/local/Cellar/openssl@1.1/1.1.1h/lib/libssl.1.1.dylib    ARG2

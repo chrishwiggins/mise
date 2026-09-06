@@ -1,2 +1,0 @@
-$ rewind
-ls -t $ndir | xargs -I % more $ndir/%

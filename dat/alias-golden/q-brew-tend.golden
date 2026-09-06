@@ -1,2 +1,0 @@
-$ q-brew-tend
-brew update;brew doctor;brew cleanup;brew link openssl --force; brew cleanup -s

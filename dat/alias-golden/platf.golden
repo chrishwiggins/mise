@@ -1,4 +1,0 @@
-$ platf
-pdff :r ; bibtex :r ; pdff :r ; pdff :r ; grep Citation :r.log 
-$ platf ARG1 ARG2
-pdff ARG1 ARG2:r ; bibtex ARG1 ARG2:r ; pdff ARG1 ARG2:r ; pdff ARG1 ARG2:r ; grep Citation ARG1 ARG2:r.log

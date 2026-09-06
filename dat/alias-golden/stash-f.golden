@@ -1,2 +1,0 @@
-$ stash-f
-mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -f * stash_`date +%Y-%m-%dT%Hh%Mm`

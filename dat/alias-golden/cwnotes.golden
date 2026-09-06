@@ -1,2 +1,0 @@
-$ cwnotes
-head `ls -1t $ndir/cwnote_2026_*T*_*_*.md | normalize` | more

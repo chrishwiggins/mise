@@ -1,2 +1,0 @@
-$ pbmunpack
-mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump

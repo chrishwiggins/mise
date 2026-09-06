@@ -1,2 +1,0 @@
-$ pbpy
-pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; py3  /tmp/$$.py

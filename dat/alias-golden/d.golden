@@ -1,2 +1,0 @@
-$ d
-setd; date +"%a %b %d, week %U of %Y" >>! $dstr; vi $dstr; echo dstr:;echo $dstr

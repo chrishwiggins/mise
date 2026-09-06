@@ -1,4 +1,0 @@
-$ md2pdf
-Bad ! arg selector.
-$ md2pdf ARG1 ARG2
-pandoc --number-sections ARG1 -s -o ARG1.pdf
