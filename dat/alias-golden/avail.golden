@@ -1,0 +1,2 @@
+$ avail
+vi ~/available.txt; sed '/^=/q'  ~/available.txt | grep -v '^=' | pbcopy

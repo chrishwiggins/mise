@@ -1,0 +1,4 @@
+$ gcomp
+open https://mail.google.com/mail/u/0/#compose/
+$ gcomp ARG1 ARG2
+open https://mail.google.com/mail/u/0/#compose/ARG1 ARG2

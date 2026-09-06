@@ -1,0 +1,4 @@
+$ docxdump
+Bad ! arg selector.
+$ docxdump ARG1 ARG2
+cp ARG1 /tmp/input.docx ; qlmanage -p /tmp/input.docx -o /tmp ; lynx -dump -hiddenlinks=ignore -image_links=no -minimal -nobold -nolist -pseudo_inlines -force_html /tmp/input.docx.qlpreview/Preview.html | /usr/bin/perl -pe 's/[^[:ascii:]]/+/g'

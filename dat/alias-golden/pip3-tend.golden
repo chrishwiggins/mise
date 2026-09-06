@@ -1,0 +1,2 @@
+$ pip3-tend
+pip3 install --upgrade distribute; pip3 install --upgrade pip3;pip3s

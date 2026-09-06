@@ -1,0 +1,2 @@
+$ bs
+curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2

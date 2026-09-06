@@ -1,0 +1,2 @@
+$ hask-tend
+cabal new-update;  ghc-pkg check --simple-output

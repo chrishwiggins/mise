@@ -1,0 +1,4 @@
+$ pocket
+pbpaste | m send add@getpocket.com -s ' @`date +%yy%mm%dd_%Hh%Mm%Ss`'
+$ pocket ARG1 ARG2
+pbpaste | m send add@getpocket.com -s 'ARG1 ARG2 @`date +%yy%mm%dd_%Hh%Mm%Ss`'

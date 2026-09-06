@@ -1,0 +1,2 @@
+$ htm2png
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --screenshot

@@ -1,0 +1,2 @@
+$ setd
+setenv dstr $ndir/cwnote_`date +%Y_%m_%d`.md

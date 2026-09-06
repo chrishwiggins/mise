@@ -1,0 +1,4 @@
+$ txt2m4a
+Bad ! arg selector.
+$ txt2m4a ARG1 ARG2
+say -v Jamie -r 200 -f ARG1 -o ARG1.m4a

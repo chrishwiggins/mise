@@ -1,0 +1,4 @@
+$ oslow
+pers-gmail-browser  `slow  | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`
+$ oslow ARG1 ARG2
+pers-gmail-browser  `slow ARG1 ARG2 | tr '"'"' '"'"' '"'"'\n'"'"' | grep ^http`

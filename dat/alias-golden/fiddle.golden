@@ -1,0 +1,2 @@
+$ fiddle
+echo GG ; play -q  -n synth 1 sin 196.00; echo DD ; play -q  -n synth 1 sin 293.66; echo AA ; play -q  -n synth 1 sin 440.00; echo EE ; play -q  -n synth 1 sin 659.26

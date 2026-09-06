@@ -1,0 +1,4 @@
+$ similar
+gsearch related:
+$ similar ARG1 ARG2
+gsearch related:ARG1 ARG2

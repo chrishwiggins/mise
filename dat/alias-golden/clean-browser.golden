@@ -1,0 +1,4 @@
+$ clean-browser
+open /Applications/Camino.app 
+$ clean-browser ARG1 ARG2
+open /Applications/Camino.app ARG1 ARG2

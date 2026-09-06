@@ -1,0 +1,2 @@
+$ pdff
+pdflatex -interaction=nonstopmode

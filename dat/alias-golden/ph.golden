@@ -1,0 +1,4 @@
+$ ph
+grep -i  $phonefile | tr '\' '\n'
+$ ph ARG1 ARG2
+grep -i ARG1 ARG2 $phonefile | tr '\' '\n'

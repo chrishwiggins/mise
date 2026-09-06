@@ -1,0 +1,2 @@
+$ findbig
+find . -type f -size +1000000 -exec ls -lh {}\;

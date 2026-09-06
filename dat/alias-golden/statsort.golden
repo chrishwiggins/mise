@@ -1,0 +1,2 @@
+$ statsort
+stat -f "%Sm %N" -t "%Y-%m-%dT%H:%M:%S" * | sort

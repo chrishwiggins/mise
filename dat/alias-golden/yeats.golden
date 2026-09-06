@@ -1,0 +1,2 @@
+$ yeats
+pbcopy < $mise/aux/yeats.txt

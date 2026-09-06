@@ -1,0 +1,2 @@
+$ mdump
+set _ds=`datestr`; pbpaste > $_ds.eml; pbmunpack; mv mail-dump $_ds-files

@@ -1,0 +1,2 @@
+$ pbclaude
+set tmpfile="/tmp/claude_`date +%Y%m%d_%H%M%S`_$$.txt" && pbpaste > $tmpfile && claude $tmpfile

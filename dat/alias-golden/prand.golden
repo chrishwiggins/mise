@@ -1,0 +1,2 @@
+$ prand
+python3 -c 'import random;print(random.randint(0,99))'

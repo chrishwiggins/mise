@@ -1,0 +1,4 @@
+$ tool-crypto
+Bad ! arg selector.
+$ tool-crypto ARG1 ARG2
+sudo install_name_tool -change ARG1 /usr/local/Cellar/openssl@1.1/1.1.1h/lib/libcrypto.1.1.dylib ARG2

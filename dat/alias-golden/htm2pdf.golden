@@ -1,0 +1,2 @@
+$ htm2pdf
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --headless --disable-gpu --print-to-pdf

@@ -1,0 +1,2 @@
+$ estrip
+fix | /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' | tr ' , (){}:;[]=<>\*' '\n' | grep @ | sort -bfdu | grep -v -e wiggins@tantanmen -e wiggins@karaage -e '^@' -e git@github.com | tr '\n' ' ' | fix | sed -e 's/\.\ /\ /g' -e 's/ [ ]*/,/g'

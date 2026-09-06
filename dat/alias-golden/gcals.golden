@@ -1,0 +1,4 @@
+$ gcals
+chrome-profile-open 0 'https://calendar.google.com/calendar/u/0/r/search?q='
+$ gcals ARG1 ARG2
+chrome-profile-open 0 'https://calendar.google.com/calendar/u/0/r/search?q=ARG1 ARG2'

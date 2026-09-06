@@ -1,0 +1,2 @@
+$ dusort
+learn;date;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`;date

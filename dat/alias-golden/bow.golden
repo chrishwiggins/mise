@@ -1,0 +1,2 @@
+$ bow
+asciify | fix | lower | words | nodud | sort -bfd | uniq -c | sort -nr

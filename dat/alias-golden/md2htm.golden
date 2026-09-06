@@ -1,0 +1,4 @@
+$ md2htm
+Bad ! arg selector.
+$ md2htm ARG1 ARG2
+pandoc ARG1 -s -o ARG1.htm

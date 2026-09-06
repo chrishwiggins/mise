@@ -1,0 +1,4 @@
+$ vs
+code $PWD 
+$ vs ARG1 ARG2
+code $PWD ARG1 ARG2

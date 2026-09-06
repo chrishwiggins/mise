@@ -1,0 +1,2 @@
+$ v
+setv; vi $vstr; echo vstr:;echo $vstr

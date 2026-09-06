@@ -1,0 +1,2 @@
+$ manel
+pbcopy < $mise/aux/manel.txt

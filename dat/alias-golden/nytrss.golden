@@ -1,0 +1,2 @@
+$ nytrss
+curl --silent https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml | grep -A 1 title
