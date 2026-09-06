@@ -1,2 +1,0 @@
-$ dstr
-setenv dstr `datestr`

@@ -1,4 +1,0 @@
-$ call
-echo  >> $phonefile
-$ call ARG1 ARG2
-echo ARG1 ARG2 >> $phonefile

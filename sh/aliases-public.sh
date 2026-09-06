@@ -350,7 +350,10 @@ alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
 alias cwnotes 'head `ls -1t $ndir/cwnote_2026_*T*_*_*.md | normalize` | more'
 
 
-alias no-wiml "cat $mise/aux/no-wiml.txt $home/gd/local/seiton/aux/wiml.tsv | pbcopy"
+# MOVED 2026-09-06 to the private alias file: it reads a private data file,
+# and this public file must name no path outside this repo. Original text:
+# alias no-wiml "cat $mise/aux/no-wiml.txt $home/gd/local/seiton/aux/wiml.tsv | pbcopy"
+unalias no-wiml
 alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
 #alias vi-null vim -u NONE
 alias vi-null "vi -c 'set nonumber' -c 'set list!' -c 'Copilot disable'"

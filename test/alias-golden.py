@@ -16,9 +16,10 @@ That was the wrong design, and every one of these came out of it:
     $paliases to aliases-public.sh itself. Running it APPENDED SIX LINES TO
     THE ALIAS FILE BEING CAPTURED. Recovered with git checkout, and only
     because the file happened to be committed minutes earlier.
-  - `pip3-tend` chains to `pip3s` in the private alias file, which writes
-    $cwaux/pip3-<timestamp>.asc. A capture run left 29 junk files in
-    ~/gd/local/seiton/aux.
+  - `pip3-tend` chains to `pip3s` in a private alias file, which writes
+    $cwaux/pip3-<timestamp>.asc. A capture run left 29 junk files in that
+    directory. A guard inspecting the invoked alias body cannot see a
+    redirect two aliases away.
   - `htm2pdf` and `htm2png` invoke Chrome by absolute path, which no stub PATH
     can intercept. Real headless Chrome ran and left screenshot.png and
     output.pdf in the repo root.
@@ -59,13 +60,19 @@ empty string, which is precisely the silent-failure class that started this
 migration.
 
 Usage:
-  alias-golden.py                 capture to dat/alias-golden/
+  alias-golden.py                 capture to the golden dir (see below)
   alias-golden.py --check         re-expand and diff against what is stored
   alias-golden.py --alias NAME    print one alias, write nothing
   alias-golden.py --file FILE     use a different alias file
+  alias-golden.py --golden-dir D  read and write captures in D
+
+Captures are FIXTURES: each is an expansion of one particular person's aliases,
+while this file is a general csh-expansion tool, so keep them apart. Locate them
+with --golden-dir, which beats $ALIAS_GOLDEN_DIR, which beats a repo-local
+default.
 
 Exit: 0 if captures were written, or if --check found no differences; 1 if
---check found a difference.
+--check found a difference; 2 if --check found no capture directory at all.
 """
 import os
 import re
@@ -73,7 +80,15 @@ import sys
 
 MISE = os.path.expanduser('~/mise')
 DEFAULT_ALIASES = os.path.join(MISE, 'sh/aliases-public.sh')
-GOLDEN_DIR = os.path.join(MISE, 'dat/alias-golden')
+
+# Captures are FIXTURES, not tool. Each is an expansion of one particular
+# person's aliases, while this file is a general csh-expansion tool, so the
+# two should not live together. Point $ALIAS_GOLDEN_DIR (or --golden-dir) at
+# wherever the captures are kept; this repo names no location outside itself.
+# The fallback is repo-local so the tool works standalone out of a fresh
+# checkout. Absent captures affect only --check, which has nothing to compare.
+DEFAULT_GOLDEN_DIR = os.path.join(MISE, 'dat/alias-golden')
+GOLDEN_DIR = os.environ.get('ALIAS_GOLDEN_DIR') or DEFAULT_GOLDEN_DIR
 
 ALIAS_RE = re.compile(r'^alias\s+(\S+)\s+(.*)$')
 
@@ -182,10 +197,13 @@ def safe_filename(name):
 
 
 def main():
+    global GOLDEN_DIR
     argv = sys.argv[1:]
     alias_file = DEFAULT_ALIASES
     if '--file' in argv:
         alias_file = os.path.abspath(argv[argv.index('--file') + 1])
+    if '--golden-dir' in argv:
+        GOLDEN_DIR = os.path.abspath(argv[argv.index('--golden-dir') + 1])
     only = argv[argv.index('--alias') + 1] if '--alias' in argv else None
 
     results = capture_all(alias_file, only)
@@ -196,6 +214,15 @@ def main():
         return 0
 
     if '--check' in argv:
+        # Distinguish "captures are missing" from "captures disagree". Without
+        # this, a checkout that lacks the private fixture dir reports all 303
+        # aliases as NEW, which reads like catastrophic drift.
+        if not os.path.isdir(GOLDEN_DIR):
+            print(f'no captures at '
+                  f'{GOLDEN_DIR.replace(os.path.expanduser("~"), "~")}')
+            print('nothing to check against; set $ALIAS_GOLDEN_DIR or pass '
+                  '--golden-dir')
+            return 2
         bad = 0
         for name, text in sorted(results.items()):
             p = os.path.join(GOLDEN_DIR, safe_filename(name) + '.golden')

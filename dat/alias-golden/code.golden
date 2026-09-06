@@ -1,4 +1,0 @@
-$ code
-open -a "Visual Studio Code" 
-$ code ARG1 ARG2
-open -a "Visual Studio Code" ARG1 ARG2

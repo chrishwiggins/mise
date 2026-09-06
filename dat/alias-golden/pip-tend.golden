@@ -1,2 +1,0 @@
-$ pip-tend
-pip install --upgrade distribute; pip install --upgrade pip;pips

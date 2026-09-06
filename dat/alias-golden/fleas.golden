@@ -1,2 +1,0 @@
-$ fleas
-play -q  -n synth 1 sin 783.99; play -q  -n synth 1 sin 523.25; play -q  -n synth 1 sin 659.25; play -q  -n synth 1 sin 880.00

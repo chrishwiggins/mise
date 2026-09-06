@@ -1,2 +1,0 @@
-$ pbR
-pbpaste >! /tmp/$$.py ; wc -w /tmp/$$.py; R -f /tmp/$$.py

@@ -1,2 +1,0 @@
-$ vv
-setv; pbpaste >! $vstr; vi $vstr; echo vstr:;echo $vstr

@@ -115,7 +115,10 @@ class TestAliasesRemoved(unittest.TestCase):
 
     FILES = [
         Path("/Users/wiggins/mise/sh/aliases-public.sh"),
-        Path("/Users/wiggins/gd/local/seiton/sh/aliases-private.sh"),
+        # A second, private alias file may also define shadowing aliases.
+        # Located by $PRIVATE_ALIASES so this public repo names no path
+        # outside itself; the loop below skips it when absent.
+        Path(os.environ.get("PRIVATE_ALIASES", "/nonexistent")),
     ]
 
     def test_no_alias_shadows_a_dispatcher(self):

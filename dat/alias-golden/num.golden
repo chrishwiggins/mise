@@ -1,2 +1,0 @@
-$ num
-awk -f $mise/awk/num.awk

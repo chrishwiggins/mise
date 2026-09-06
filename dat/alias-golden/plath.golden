@@ -1,4 +1,0 @@
-$ plath
-pdflatex -halt-on-error :r ; bibtex :r ; pdflatex -halt-on-error :r ; pdflatex -halt-on-error :r 
-$ plath ARG1 ARG2
-pdflatex -halt-on-error ARG1 ARG2:r ; bibtex ARG1 ARG2:r ; pdflatex -halt-on-error ARG1 ARG2:r ; pdflatex -halt-on-error ARG1 ARG2:r

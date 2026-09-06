@@ -1,4 +1,0 @@
-$ hG
-Bad ! arg selector.
-$ hG ARG1 ARG2
-history 99999999999999 | grep -i ARG1 | grep -v hG

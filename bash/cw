@@ -18,7 +18,7 @@
 # Two backends, because they answer different questions:
 #
 #   Files    -> Cloudflare R2 bucket `share`, served at the apex by the
-#               `apex-files` Worker (src/apex-files/ in the seiton cw repo),
+#               `apex-files` Worker (src/apex-files/ in the private cw repo),
 #               and also directly at https://files.chrishwiggins.com (custom
 #               domain on the same bucket). Uploads go through wrangler,
 #               which authenticates with its own OAuth token, NOT the API

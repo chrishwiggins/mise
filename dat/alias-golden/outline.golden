@@ -1,4 +1,0 @@
-$ outline
-Bad ! arg selector.
-$ outline ARG1 ARG2
-grep -v ^%%% ARG1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-sections /tmp/pandoc_tmp_$$ -o ARG1.pdf

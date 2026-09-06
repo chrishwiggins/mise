@@ -1,2 +1,0 @@
-$ sudo-gem-tend
-sudo gem cleanup;sudo gem update

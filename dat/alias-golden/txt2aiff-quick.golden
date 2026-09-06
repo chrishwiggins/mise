@@ -1,4 +1,0 @@
-$ txt2aiff-quick
-Bad ! arg selector.
-$ txt2aiff-quick ARG1 ARG2
-say -v Jamie -r 270 -f ARG1 -o ARG1.aiff

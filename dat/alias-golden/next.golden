@@ -1,2 +1,0 @@
-$ next
-shuf ~/mise/doc/strategies.txt | head -1

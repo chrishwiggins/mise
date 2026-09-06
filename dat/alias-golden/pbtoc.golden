@@ -1,2 +1,0 @@
-$ pbtoc
-pbpaste | ununi >! /tmp/$$.md ; toc /tmp/$$.md ; open /tmp/$$.pdf

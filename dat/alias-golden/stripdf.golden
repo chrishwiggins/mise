@@ -1,4 +1,0 @@
-$ stripdf
-Bad ! arg selector.
-$ stripdf ARG1 ARG2
-exiftool -all= ARG1 -o stripped.pdf; qpdf --linearize stripped.pdf ARG2

@@ -1,4 +1,0 @@
-$ amazon
-gsearch  site:worldcat.org 
-$ amazon ARG1 ARG2
-gsearch  site:worldcat.org ARG1 ARG2

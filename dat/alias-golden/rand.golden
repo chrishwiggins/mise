@@ -1,2 +1,0 @@
-$ rand
-echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4

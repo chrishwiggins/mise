@@ -1,2 +1,0 @@
-$ countbig
-find . -type f -size 10000 | wc -l

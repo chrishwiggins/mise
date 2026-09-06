@@ -1,2 +1,0 @@
-$ pbvx
-pbpaste >! /tmp/$$_pbcx; source /tmp/$$_pbcx; rm -f /tmp/$$_pbcx

@@ -7,8 +7,13 @@
 #   -v          Verbose output (generate summary file)
 #   -h          Show this help
 #
+# $GCAL_INVITE_DIR is where gcal-invite-advanced lives. It is personal, so
+# this public repo takes it from the environment rather than naming a path.
+#
 # Default: solo mode (no invites, no Meet)
 # Generates /tmp/calparse.sh for review, then run: bash /tmp/calparse.sh
+
+: "${GCAL_INVITE_DIR:=$HOME/bin}"
 
 show_help() {
     cat << 'EOF'
@@ -154,7 +159,7 @@ Output ONLY the raw bash script between these markers. NO markdown, NO code fenc
 The script must:
 1. Start with #!/bin/bash
 2. Back up old files to /tmp/calparse-old.dir/TIMESTAMP.dir
-3. cd /Users/wiggins/gd/local/seiton/python/
+3. cd ${GCAL_INVITE_DIR}
 4. Clear /tmp/calparse.urls and /tmp/calparse.err
 5. Run gcal-invite-advanced for each event, appending to .urls and .err
 6. Echo what was created after each event

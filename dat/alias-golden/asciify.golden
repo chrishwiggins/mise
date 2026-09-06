@@ -1,2 +1,0 @@
-$ asciify
-/usr/bin/perl -pe 's/[^[:ascii:]]/+/g'

@@ -1,2 +1,0 @@
-$ rmold
-find . -type f -mtime +100 -exec rm {} +

@@ -1,4 +1,0 @@
-$ http
-open http://
-$ http ARG1 ARG2
-open http://ARG1 ARG2

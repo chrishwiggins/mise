@@ -35,8 +35,17 @@ import unittest
 
 MISE = os.path.expanduser('~/mise')
 HARNESS = os.path.join(MISE, 'test/alias-golden.py')
-GOLDEN_DIR = os.path.join(MISE, 'dat/alias-golden')
 ALIASES = os.path.join(MISE, 'sh/aliases-public.sh')
+
+# The captures are fixtures describing one person's aliases, so they are kept
+# outside this repo and located by $ALIAS_GOLDEN_DIR. This repo must still
+# test green without them: the two gate tests skip when they are absent, while
+# every expansion test below runs regardless, since those assert csh semantics
+# and need no fixture at all.
+GOLDEN_DIR = (os.environ.get('ALIAS_GOLDEN_DIR')
+              or os.path.join(MISE, 'dat/alias-golden'))
+HAVE_CAPTURES = os.path.isdir(GOLDEN_DIR)
+NO_CAPTURES = f'no captures at {GOLDEN_DIR}; set $ALIAS_GOLDEN_DIR'
 
 # alias-golden.py has no .py-importable name on disk, so load it by path.
 _loader = importlib.machinery.SourceFileLoader('alias_golden', HARNESS)
@@ -48,6 +57,7 @@ _loader.exec_module(ag)
 class TestGate(unittest.TestCase):
     """The gate itself: stored captures must still match the alias file."""
 
+    @unittest.skipUnless(HAVE_CAPTURES, NO_CAPTURES)
     def test_check_reports_no_differences(self):
         r = subprocess.run([sys.executable, HARNESS, '--check'],
                            capture_output=True, text=True)
@@ -55,6 +65,7 @@ class TestGate(unittest.TestCase):
             r.returncode, 0,
             'alias captures are stale or an alias changed:\n' + r.stdout)
 
+    @unittest.skipUnless(HAVE_CAPTURES, NO_CAPTURES)
     def test_every_live_alias_has_a_capture(self):
         names = {n for n, _ in ag.read_aliases(ALIASES)}
         stored = {f[:-7] for f in os.listdir(GOLDEN_DIR)
@@ -103,6 +114,10 @@ class TestPinnedBehaviors(unittest.TestCase):
     """Specific captures whose shape the migration must not lose."""
 
     def capture(self, name):
+        # Two different reasons to skip, and conflating them hides a real
+        # failure: an absent fixture dir is not evidence an alias was retired.
+        if not HAVE_CAPTURES:
+            self.skipTest(NO_CAPTURES)
         p = os.path.join(GOLDEN_DIR, ag.safe_filename(name) + '.golden')
         if not os.path.exists(p):
             self.skipTest(f'{name} is no longer defined')

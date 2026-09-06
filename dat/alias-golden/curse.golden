@@ -1,2 +1,0 @@
-$ curse
-grep -v -e '^#' ~/mise/doc/curses.txt | sed -e 's/^- //' | /opt/homebrew/bin/shuf | head -1| tr '\\' '\n'

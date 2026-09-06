@@ -1,4 +1,0 @@
-$ skindle
-open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ 
-$ skindle ARG1 ARG2
-open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ ARG1 ARG2

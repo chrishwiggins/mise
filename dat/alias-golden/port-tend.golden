@@ -1,2 +1,0 @@
-$ port-tend
-sudo port selfupdate;sudo port upgrade outdated

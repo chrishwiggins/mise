@@ -30,7 +30,7 @@ def download_transcript(video_id, out_template):
     and glob for the result, which also covers not knowing which of the
     requested language tags the video actually turned out to have.
     """
-    # YouTube 403 workaround (2026-08-20), matching seiton/bash/yt-dlp-w: the
+    # YouTube 403 workaround (2026-08-20), matching the private yt-dlp wrapper: the
     # default android_vr player client now yields URLs YouTube rejects, and the
     # clients that replace it require a GVS PO Token we do not have.
     command = [

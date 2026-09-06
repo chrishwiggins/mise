@@ -1,2 +1,0 @@
-$ pblat
-pbpaste >! /tmp/$$.tex ; wc -w /tmp/$$.tex; pdflatex /tmp/$$.tex; open $$.pdf
