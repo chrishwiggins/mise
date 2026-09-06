@@ -1,0 +1,2 @@
+$ memsave
+killall ControlCenter NotificationCenter Dock; echo "daemons restarted. run: sudo purge  (if still sluggish)"

@@ -1,0 +1,2 @@
+$ sql
+mysql.server start;mysql -uroot;mysql.server stop

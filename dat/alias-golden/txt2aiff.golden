@@ -1,0 +1,4 @@
+$ txt2aiff
+Bad ! arg selector.
+$ txt2aiff ARG1 ARG2
+say -v Jamie -r 200 -f ARG1 -o ARG1.aiff

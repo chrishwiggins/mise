@@ -1,0 +1,2 @@
+$ linter
+pylint -d W0311 -d R0913 -d C0116 -d W0621 -d C0103

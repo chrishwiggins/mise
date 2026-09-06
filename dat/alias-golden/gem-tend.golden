@@ -1,0 +1,2 @@
+$ gem-tend
+gem cleanup;gem update

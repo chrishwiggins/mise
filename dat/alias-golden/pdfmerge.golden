@@ -1,0 +1,4 @@
+$ pdfmerge
+gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=pdfmerge-out.pdf 
+$ pdfmerge ARG1 ARG2
+gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=pdfmerge-out.pdf ARG1 ARG2

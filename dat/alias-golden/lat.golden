@@ -1,0 +1,4 @@
+$ lat
+latex :r ; bibtex :r ; latex :r ; latex :r ; grep Citation :r.log;dvipdf \:*:r.dvi 
+$ lat ARG1 ARG2
+latex ARG1 ARG2:r ; bibtex ARG1 ARG2:r ; latex ARG1 ARG2:r ; latex ARG1 ARG2:r ; grep Citation ARG1 ARG2:r.log;dvipdf \:*:r.dvi

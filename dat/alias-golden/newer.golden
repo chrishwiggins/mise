@@ -1,0 +1,4 @@
+$ newer
+Bad ! arg selector.
+$ newer ARG1 ARG2
+find . -type f -newermt "ARG1"

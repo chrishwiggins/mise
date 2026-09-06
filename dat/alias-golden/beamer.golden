@@ -1,0 +1,4 @@
+$ beamer
+Bad ! arg selector.
+$ beamer ARG1 ARG2
+grep -v ^%%% ARG1 >! /tmp/pandoc_tmp_$$ ; pandoc --slide-level 2 -i -t beamer --number-sections /tmp/pandoc_tmp_$$ -o ARG1.pdf

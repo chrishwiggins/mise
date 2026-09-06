@@ -1,0 +1,2 @@
+$ gift
+pbcopy < $mise/aux/gift.txt

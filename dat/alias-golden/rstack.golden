@@ -1,0 +1,2 @@
+$ rstack
+open 'http://stats.stackexchange.com/search?q=%5Br%5D+'

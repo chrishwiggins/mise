@@ -1,0 +1,2 @@
+$ openjpgs
+find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open

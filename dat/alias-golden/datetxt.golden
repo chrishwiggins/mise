@@ -1,0 +1,2 @@
+$ datetxt
+date "+%a, %Y-%m-%d, %H:%M"

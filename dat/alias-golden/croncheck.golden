@@ -1,0 +1,2 @@
+$ croncheck
+cat /tmp/cron_test.log;grep CRON /var/log/syslog

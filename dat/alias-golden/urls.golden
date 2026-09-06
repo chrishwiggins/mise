@@ -1,0 +1,2 @@
+$ urls
+asciify| fix | tr '{};<>[]()\ ' '\n' | grep -i 'http'

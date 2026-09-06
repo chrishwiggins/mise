@@ -1,0 +1,2 @@
+$ cabal-tend
+cabal update

@@ -1,0 +1,4 @@
+$ sty-install
+sudo tlmgr update --self;sudo tlmgr install :t:r
+$ sty-install ARG1 ARG2
+sudo tlmgr update --self;sudo tlmgr install ARG1 ARG2:t:r

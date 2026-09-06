@@ -1,0 +1,2 @@
+$ pbmpl
+pbpaste >! /tmp/$$.mpl ; wc -w /tmp/$$.mpl ; maple  /tmp/$$.mpl

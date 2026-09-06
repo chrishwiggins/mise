@@ -1,0 +1,4 @@
+$ palias
+echo "alias " >> $paliases ; learn 
+$ palias ARG1 ARG2
+echo "alias ARG1 ARG2" >> $paliases ; learn

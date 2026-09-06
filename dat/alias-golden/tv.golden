@@ -1,0 +1,2 @@
+$ tv
+setv; echo % `datetxt` >$vstr ; vi +16 -c startinsert $vstr; echo vstr:;echo $vstr

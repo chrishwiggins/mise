@@ -1,0 +1,2 @@
+$ mtg-no
+grep -v '^%' ~/mise/aux/rp-decline.asc| pbcopy

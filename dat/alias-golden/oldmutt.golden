@@ -1,0 +1,2 @@
+$ oldmutt
+brew unlink mutt;brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/0e1d197da9d9a1d4cc321e91149a2f3431e39d8c/Formula/mutt.rb;brew link mutt

@@ -1,0 +1,2 @@
+$ eng
+grep -w -f /usr/share/dict/words

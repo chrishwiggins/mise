@@ -1,0 +1,4 @@
+$ wiktionary
+open "https://en.wiktionary.org/wiki/"
+$ wiktionary ARG1 ARG2
+open "https://en.wiktionary.org/wiki/ARG1 ARG2"

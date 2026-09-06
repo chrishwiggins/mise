@@ -1,0 +1,2 @@
+$ gitlog
+echo 'write a human-readable commit message of sufficient detail that future developers will understand what was changed and updated and the current state of the repo' | pbcopy

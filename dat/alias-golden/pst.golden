@@ -1,0 +1,2 @@
+$ pst
+env TZ=':America/Los_Angeles' date

@@ -1,0 +1,2 @@
+$ vi-null
+vi -c 'set nonumber' -c 'set list!' -c 'Copilot disable'

@@ -1,0 +1,2 @@
+$ reline
+tr '\n' ' ' | tr '+' '\n' | fix
