@@ -1,0 +1,4 @@
+#!/bin/bash
+# `oct` is shorthand for `ocr`. Was a tcsh alias; translated in batch 4a of
+# doc/plan-tcsh2bash.md so it works from bash and zsh too, not only tcsh.
+exec ocr "$@"
