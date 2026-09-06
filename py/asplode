@@ -143,16 +143,22 @@ def move_window(wid, target, verbose=False):
     return False, f"did not land (still on space {landed})"
 
 
-def destroy_empty_spaces(dry_run, verbose):
+def destroy_empty_spaces(dry_run, verbose, planned=()):
     """
     Remove spaces with no windows, highest index first.
 
     Descending order matters: destroying space 4 renumbers everything above it,
     so a low-to-high pass would delete the wrong desktops.
+
+    `planned` holds spaces a dry run said it would move windows into. A real run
+    does not need them: the moves have already happened, so those spaces are no
+    longer empty when this re-queries. A dry run moved nothing, so without them
+    it reads its own unchanged state and claims it would destroy the very spaces
+    it just claimed to fill.
     """
     spaces = query("spaces") or []
     windows = real_windows()
-    live = {w["space"] for w in windows}
+    live = {w["space"] for w in windows} | set(planned)
 
     empties = [s["index"] for s in spaces
                if s["index"] not in live
@@ -217,6 +223,7 @@ def main():
                      "  Fix with: sudo yabai --load-sa")
 
     moved = 0
+    planned = []               # dry-run targets, so the sweep below spares them
     for w in surplus:
         label = f"{w['app']}: {w.get('title', '')[:40]}"
         if vacant:
@@ -227,6 +234,8 @@ def main():
             action = "new space"
 
         if args.dry_run:
+            if target is not None:
+                planned.append(target)
             print(f"  would move [{label}] -> {action}")
             continue
 
@@ -250,7 +259,7 @@ def main():
         print(f"  moved {moved} of {len(surplus)} window(s)")
 
     print("closing empty desktops")
-    removed = destroy_empty_spaces(args.dry_run, args.verbose)
+    removed = destroy_empty_spaces(args.dry_run, args.verbose, planned)
     verb = "would remove" if args.dry_run else "removed"
     print(f"  {verb} {removed} empty desktop(s)")
 
