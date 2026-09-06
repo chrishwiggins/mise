@@ -47,14 +47,15 @@ alias cd-mise cd $mise
 alias datestr    date +%Y-%m-%dT%Hh%Mm%Ss
 alias datetxt 'date "+%a, %Y-%m-%d, %H:%M"'
 alias datecp "datestr|pbcopy"
-alias dstr datestr
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias dstr datestr
 alias pbdate 'datestr| pbcopy'
 alias dstr 'setenv dstr `datestr`'
 
 
 alias dump 'pbpaste > `datestr`'
 alias mdump 'set _ds=`datestr`; pbpaste > $_ds.eml; pbmunpack; mv mail-dump $_ds-files'
-alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Resources/jsc
+# DEAD 2026-09-05 (jsc binary removed from macOS): alias jsc /System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Resources/jsc
+unalias jsc
 alias dusort "learn;date;du | sort -nr >! dusort_`date +%yy%mm%dd_%Hh%Mm%Ss`;date"
 alias rstudio open /Applications/RStudio.app/
 alias permute "perl -MList::Util=shuffle -e 'print shuffle <>'"
@@ -64,7 +65,7 @@ alias fox "open "
 alias inpr "open http://www.npr.org/infiniteplayer/"
 
 # google-fu
-alias drive "open /Applications/Google\ Drive.app/"
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias drive "open /Applications/Google\ Drive.app/"
 alias filter "open 'https://mail.google.com/mail/u/0/#settings/filters'"
 alias dsnyc "open -a safari https://plus.google.com/u/0/communities/102074015406128769868"
 alias star "open 'https://mail.google.com/mail/u/0/?tab=mm#starred'"
@@ -133,7 +134,8 @@ alias v 'setv; vi $vstr; echo vstr:;echo $vstr'
 alias tv 'setv; echo % `datetxt` >$vstr ; vi +16 -c startinsert $vstr; echo vstr:;echo $vstr'
 alias d 'setd; date +"%a %b %d, week %U of %Y" >>! $dstr; vi $dstr; echo dstr:;echo $dstr'
 alias sv 'source $vstr'
-alias gv 'smail $vstr'
+# DEAD 2026-09-05 (smail is gone): alias gv 'smail $vstr'
+unalias gv
 # v & b (quicknotes+longnotes)
 alias pv 'pbcopy < $vstr'
 alias pb 'pbcopy < $bstr'
@@ -155,7 +157,8 @@ alias http "open http://\!*"
 alias clean-browser 'open /Applications/Camino.app \!*'
 alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
 alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
-alias json-grep jgrep
+# DEAD 2026-09-05 (jgrep is gone): alias json-grep jgrep
+unalias json-grep
 alias g gsearch
 #alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 #alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force;mas upgrade"
@@ -188,20 +191,22 @@ alias pip3-tend "pip3 install --upgrade distribute; pip3 install --upgrade pip3;
 #alias hask-tend "cabal update;  ghc-pkg check --simple-output"
 alias hask-tend "cabal new-update;  ghc-pkg check --simple-output"
 #alias conda-tend "/sw/anaconda/bin/conda update conda;conda update --prefix /sw/anaconda anaconda"
-alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda;conda clean -tipsy"
+# DEAD 2026-09-05 (conda is not installed): alias conda-tend "conda update conda;conda update --prefix /anaconda anaconda;conda clean -tipsy"
+unalias conda-tend
 alias cabal-tend "cabal update"
 #alias ogit "open 'https://github.com/chrishwiggins?tab=repositories'"
 alias normalize "sed -f $mise/sed/normalize "
 alias openjpgs "find . | grep -i -e 'jpg' -e 'jpeg' | normalize | xargs open"
 alias cdc "pwd | normalize | pbcopy"
-alias pwstore /opt/homebrew/bin/pass
+# DEAD 2026-09-05 (/opt/homebrew/bin/pass is gone): alias pwstore /opt/homebrew/bin/pass
+unalias pwstore
 setenv PASSWORD_STORE_CLIP_TIME 28800
 alias cdp 'cd `pbpaste`'
 alias mise "open https://github.com/chrishwiggins/mise"
 alias citibike open http://www.citibikenyc.com/stations
 
 # spelling while typing is hard
-alias plan plat
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias plan plat
 alias opne open
 alias docus focus
 alias aalais aalias
@@ -228,7 +233,8 @@ alias onion echo "try mindful breathing instead. go ahead"
 
 alias appstore "open /Applications/App\ Store.app/"
 alias st 'open /Applications/Sublime\ Text\ 2.app/'
-alias st2 '/Applications/Sublime\ Text\ 2.app/Contents/SharedSupport/bin/subl'
+# DEAD 2026-09-05 (Sublime Text 2 is gone): alias st2 '/Applications/Sublime\ Text\ 2.app/Contents/SharedSupport/bin/subl'
+unalias st2
 
 alias get git clone
 
@@ -250,7 +256,7 @@ alias urls "asciify| fix | tr '{};<>[]()\ ' '\n' | grep -i 'http'"
   #2. Use a character class with the octal:
   #If that doesn't work cleanly in your tcsh quoting context, you could also try hex (\x60) depending on your tr version, but octal is the most portable.
 alias pbmunpack "mkdir mail-dump ;pbpaste | munpack -t -f -C mail-dump"
-alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias deck "open /Applications/TweetDeck.app/;awk '/Keyboard shortcuts/,/   Related articles:/' < $cwhome/Documents/Help/TweetDeck/20170322.txt"
 alias deck onion
 #alias otb fox http://www.onetimebox.org/
 alias sql "mysql.server start;mysql -uroot;mysql.server stop"
@@ -278,7 +284,8 @@ alias manel "pbcopy < $mise/aux/manel.txt"
 alias yeats "pbcopy < $mise/aux/yeats.txt"
 alias takeout "open 'https://takeout.google.com/settings/takeout'"
 alias oct ocr
-alias profile py3 -m cProfile
+# DEAD 2026-09-05 (chained to py3, retired above with anaconda3): alias profile py3 -m cProfile
+unalias profile
 alias atom open /Applications/Atom.app/
 alias eee "echo 'Do you know your estimated time of arrival?'|pbcopy"
 alias zork echo back to work, you.
@@ -292,13 +299,14 @@ alias skindle "open -a /Applications/Send\ to\ Kindle/Send\ to\ Kindle.app/ \!:*
 alias mute-fix sudo killall coreaudiod
 alias bs "curl -silent http://www.wisdomofchopra.com/iframe.php | grep 'og:description' | cut -d\' -f2"
 #alias muttf "cat /dev/null | mutt -H \!:*"
-alias omail "open mailto:\!*"
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias omail "open mailto:\!*"
 #alias mail "mutt \!*"
 alias pb2gist gist -o -P
 
 alias pocket "pbpaste | m send add@getpocket.com -s '\!:* @`date +%yy%mm%dd_%Hh%Mm%Ss`'"
 alias ttweather "lynx -nolist -width=1000 -dump 'http://www.freeweather.com/cgi-bin/weather/weather.cgi?daysonly=0&maxdays=11&zipcode=10027' | asciify | fix | awk '/^Daily/,/^Sunset/'"
-alias omail open /Applications/Mail.app/
+# DEAD 2026-09-05 (Mail.app now lives in /System/Applications, not /Applications): alias omail open /Applications/Mail.app/
+unalias omail
 alias olede open https://github.com/ledeprogram/courses/tree/master/algorithms
 #alias mypy /usr/bin/python
 #alias mbo "skype; boxes ; voice ; ichat; focus;telegram;slack;DECK"
@@ -363,7 +371,7 @@ alias refine open /Applications/OpenRefine.app/
 # aliases for PPF class
 alias des "echo Alain Desrosières"
 alias pbdes "echo Desrosières|pbcopy"
-alias ppf-server open http://104.196.215.242:8000
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias ppf-server open http://104.196.215.242:8000
 alias ppf-server open http://data-ppf.dsi.columbia.edu:8000
 
 # misc google fu
@@ -377,7 +385,8 @@ alias pdfmerge "gs -dBATCH -dNOPAUSE -q -sDEVICE=pdfwrite -sOutputFile=pdfmerge-
 #alias fmail 'setenv fmail `lynxx -nolist -dump https://maildrop.cc/ | grep @maildrop.cc`;echo $fmail|pbcopy'
 #alias fmail-open 'open https://maildrop.cc/inbox/`echo $fmail|cut -d@ -f1`'
 
-alias drive "open /Applications/Backup\ and\ Sync.app/"
+# DEAD 2026-09-05 (Backup and Sync.app was discontinued by Google): alias drive "open /Applications/Backup\ and\ Sync.app/"
+unalias drive
 alias mlok mlook
 alias toro open -a /Applications/TorBrowser.app/
 alias prand "python3 -c 'import random;print(random.randint(0,99))'"
@@ -396,22 +405,24 @@ alias txt2aiff-quick 'say -v Jamie -r 270 -f \!:1 -o \!:1.aiff'
 alias txt2aiff 'say -v Jamie -r 200 -f \!:1 -o \!:1.aiff'
 alias txt2m4a 'say -v Jamie -r 200 -f \!:1 -o \!:1:r.m4a'
 alias txt2m4a-quick 'say -v Jamie -r 270 -f \!:1 -o \!:1:r.m4a'
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias remkae make
 alias remkae make
-alias remkae make
-alias weahter weather
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias weahter weather
 alias weahter weather
 alias porfa sudo
 alias pcbopy pbcopy
-alias aaias alias
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias aaias alias
 alias aaias aalias
 alias doccs docs
 #alias books gbook
 #alias ogit-here open `grep github.com .git/config | sed -e 's/\:/\//' -e 's/url = git@/http:\/\//' -e 's/\.git[ ]*$//'`
 
 # things using gm which i changed to gg 20180708
-alias att gg has:attachment
+# DEAD 2026-09-05 (gg is gone): alias att gg has:attachment
+unalias att
 #alias frm "gg from:\!*" # 20260319 moved to private aliases, uses m now
-alias to "gg to:\!*"
+# DEAD 2026-09-05 (gg is gone): alias to "gg to:\!*"
+unalias to
 
 # cu library
 #alias clio "open 'http://www.columbia.edu/cgi-bin/cul/resolve?AMS3996'"
@@ -423,7 +434,7 @@ alias juice open /System/Library/PreferencePanes/EnergySaver.prefPane/
 alias sbe 'cat /dev/null | mutt \!:1 -a \!:2 -s \!:3'
 alias pdf2pdf 'gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dQUIET -dBATCH -sOutputFile=output.pdf '
 alias outline 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-sections /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
-alias toc 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-sections --table-of-contents /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias toc 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --number-sections --table-of-contents /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias toc 'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc -V colorlinks=true -V linkcolor=blue -V urlcolor=red -V toccolor=gray --number-sections --table-of-contents /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias beamer  'grep -v ^%%% \!:1 >! /tmp/pandoc_tmp_$$ ; pandoc --slide-level 2 -i -t beamer --number-sections /tmp/pandoc_tmp_$$ -o \!:1:r.pdf'
 alias stash   "mkdir stash_`date +%Y-%m-%dT%Hh%Mm`;mv -i * stash_`date +%Y-%m-%dT%Hh%Mm`"
@@ -455,26 +466,28 @@ alias tft "curl --silent 'http://itsthisforthat.com/api.php?text';echo"
 alias fiddle "echo GG ; play -q  -n synth 1 sin 196.00; echo DD ; play -q  -n synth 1 sin 293.66; echo AA ; play -q  -n synth 1 sin 440.00; echo EE ; play -q  -n synth 1 sin 659.26"
 alias fleas "play -q  -n synth 1 sin 783.99; play -q  -n synth 1 sin 523.25; play -q  -n synth 1 sin 659.25; play -q  -n synth 1 sin 880.00"
 alias oldmutt "brew unlink mutt;brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/0e1d197da9d9a1d4cc321e91149a2f3431e39d8c/Formula/mutt.rb;brew link mutt"
-alias vs "open /Applications/Visual\ Studio\ Code.app/"
-alias py3 ~/anaconda3/bin/python3
-alias gpy3 google python3
-alias gpy3 g python3
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias vs "open /Applications/Visual\ Studio\ Code.app/"
+# DEAD 2026-09-05 (~/anaconda3 is gone): alias py3 ~/anaconda3/bin/python3
+unalias py3
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias gpy3 google python3
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias gpy3 g python3
 alias gpy3 g +python 3+
 alias gvs g +visual studio+ OR vscode
 
 #alias nytrss "curl http://www.nytimes.com/services/xml/rss/nyt/GlobalHome.xml | grep -A 1 title"
 alias nytrss "curl --silent https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml | grep -A 1 title"
 #alias g0 py3 /usr/local/bin/googler
-alias g0 googler
+# DEAD 2026-09-05 (googler is gone): alias g0 googler
+unalias g0
 alias g1 "open https://www.google.com/imghp?sout=1"
 alias linter pylint -d W0311 -d R0913 -d C0116 -d W0621 -d C0103
 alias irl-text "echo 'Meeting in person preferred; if not convenient, we could meet via Google Hangouts; if also not convenient, we could talk by phone. Please do let me know!'|pbcopy"
 alias gift "pbcopy < $mise/aux/gift.txt"
 
 alias vin "vi -c 'set nonumber'"
-alias oopen open
-alias kdir mkdir
-alias spotify open /Applications/Spotify.app/
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias oopen open
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias kdir mkdir
+# SHADOWED 2026-09-05 (a later line redefines this name; tcsh kept the last): alias spotify open /Applications/Spotify.app/
 alias uppu upup
 alias rmdur rmdir
 alias blue-off blueutil -p 0
@@ -514,7 +527,8 @@ alias leads lds
 alias forward "echo 'Great! Could you write a forwardable intro email ( cf., e.g., https://www.entrepreneur.com/article/247692 ) to get things started?' | pbcopy"
 alias dephone "open 'https://support.google.com/websearch/troubleshooter/9685456'"
 alias table "echo '(╯°□°)╯︵ ┻━┻'|pbcopy"
-alias wifis "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s; echo 'lower (more negative) value indicates a weaker signal and a higher (less negative) value indicates a stronger signal'"
+# DEAD 2026-09-05 (the airport binary was removed by Apple): alias wifis "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s; echo 'lower (more negative) value indicates a weaker signal and a higher (less negative) value indicates a stronger signal'"
+unalias wifis
 alias d20 "shuf -i 1-20 -n 1"
 alias pst "env TZ=':America/Los_Angeles' date"
 
