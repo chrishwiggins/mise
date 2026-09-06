@@ -1,3 +1,4 @@
+#!/bin/bash
 # i suggest that before you fix you sometimes asciify, i.e.,
 # /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' \
 #

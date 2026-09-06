@@ -79,6 +79,17 @@ full table in `doc/alias-census.md`.
 
 256 + 36 + 16 + 16 + 11 = 335, so every alias line is classified exactly once.
 
+RETIREMENT DONE 2026-09-05. The DEAD and SHADOWED rows have been retired in
+place as `# DEAD 2026-09-05: <original>` / `# SHADOWED 2026-09-05: <original>`
+comments plus `unalias`. The census now reads LIVE 254, CHAIN 35, SHELL-ONLY
+16, over 305 alias lines, with DEAD and SHADOWED both empty. 14 alias names
+stopped registering, verified by diffing the full registered set before and
+after; nothing was added. Two retirements were judgment calls where the
+SHADOWED line worked and the LIVE line was broken (`drive`, `omail`); Chris
+chose to retire both halves and leave those names undefined. `profile`
+cascaded, having chained to the retired `py3`. Details in
+`doc/alias-census.md`.
+
 Three findings change the plan:
 
 1. TRUE SHELL-ONLY IS 23, NOT 11. The earlier grep counted only aliases whose
@@ -309,7 +320,31 @@ Each batch is one commit, and therefore one `git revert` unit.
 | 4h | tcsh/csh scripts, real translation, excluding `tcsh/ocr` | 40 | medium |
 | 4i | `tcsh/ocr` (281 lines, by itself) | 1 | high |
 
-Batch 4f is the cheapest win in the whole project and should go first, ahead
+BATCH 4F IS DONE (2026-09-05), but on 10 files, not 12. Two of the twelve
+turned out NOT to be portable, and `bash -n` did not catch either, because
+both parse fine under bash and simply mean something else:
+
+  tcsh/unspace-mvs  uses csh `>!`. Bash parses that as a redirect into a file
+                    literally named `!`, then treats the intended filename as
+                    an argument. Verified: `echo second >! /tmp/gt3.txt` under
+                    bash creates `/tmp/!` and never writes gt3.txt. Adding a
+                    bash shebang would make this script rename files off a
+                    stale list. It needs `>!` rewritten to `>`, which is a
+                    translation, so it belongs in batch 4h.
+  tcsh/unzoom       calls `mi`, which is an ALIAS (mv -i), not a command. A
+                    script cannot see the caller's aliases at all. Needs `mi`
+                    replaced with `mv -i`, also a translation.
+
+The lesson generalizes to every later batch: `bash -n` proves a file PARSES,
+never that it MEANS the same thing. Batches 4g through 4i need behavioral
+checks, not syntax checks.
+
+The other ten got `#!/bin/bash` and were verified behaviorally, not just
+syntactically: the four stdin filters (fix, reply, words, werds) produce
+byte-identical output under bash and under tcsh, `ffix` still dedupes through
+its sibling `fix`, and `lgit` still prints the right GitHub URL.
+
+Batch 4f was the cheapest win in the whole project and went first, ahead
 of even 4a: 12 files, no translation, one line added to each, and the result
 is strictly more correct than today because those scripts currently depend on
 the caller's shell. Batch 4g is nearly as cheap.

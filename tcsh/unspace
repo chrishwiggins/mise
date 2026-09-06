@@ -1,3 +1,4 @@
+#!/bin/bash
 #/bin/tcsh -f -X -V
 
 # replace contents of clipboard with something in ascii w/o spaces
