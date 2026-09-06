@@ -1,6 +1,18 @@
 # Plan: migrate `~/mise` tcsh/csh aliases and scripts to bash
 
-Status: draft, awaiting annotation. Nothing has been executed.
+Status: partly executed, 2026-09-05. Steps 1 and 2 are done and shipped, as
+is batch 4f and the retirement the census made possible. Steps 3, 4a through
+4e, 4g through 4j, and 5 remain. Each completed step carries a DONE marker
+with its commit.
+
+  step 1  golden harness              DONE  dcb76da
+  step 2  dead-alias census           DONE  783ff1e
+  retire  DEAD and SHADOWED aliases   DONE  d2d0918
+  4f      shebangs, 10 of 12 files    DONE  d2d0918
+  step 3  per-alias decisions         open, and 7 shell-only rows block batch 4
+  4a-4e   the alias translation tiers  open, unblocked by step 1
+  4g-4i   the remaining script tiers   open
+  step 5  regression test              open
 
 ## Goal
 
@@ -21,7 +33,7 @@ not evidence of interpreter here; the first line of each file is.
 Verify: a golden-output differential harness (step 1) that captures each
 alias's and each script's observable behavior before the change and asserts it
 unchanged after. Plus two negative checks: `grep -c '^alias '
-sh/aliases-public.sh` falls from 335 toward the shell-only remainder (319 live aliases, minus what the census retires), and
+sh/aliases-public.sh` falls from 335 toward the shell-only remainder (305 live aliases as of the 2026-09-05 retirement, of which 23 are shell-only and stay), and
 
     head -1 sh/* csh/* tcsh/* | grep -c tcsh
 
@@ -169,7 +181,7 @@ in `test/`.
 
 Four ideas carry the whole plan.
 
-1. Classify before translating. The expensive mistake is translating 319
+1. Classify before translating. The expensive mistake is translating 305
 aliases when maybe half are dead. So the first deliverable is not a
 translation, it is a census: a deterministic checker that resolves each
 alias's target and reports live / dead / shell-only. Translation effort then
@@ -177,7 +189,7 @@ goes only where it pays.
 
 2. Golden-output differential testing, captured BEFORE any edit. For each
 alias we record what it actually does today in a real tcsh, then assert the
-bash script produces the same thing. This is the only way to make 319
+bash script produces the same thing. This is the only way to make 305
 translations trustworthy, and it must run first: once an alias is edited its
 original behavior is unrecoverable except from git.
 
@@ -195,7 +207,7 @@ batches build confidence in the harness before it is trusted on hard cases.
 
 - Automated tcsh-to-bash transpiler. Rejected: csh grammar is genuinely
   irregular (`\!:1` history substitution, `:r`/`:t` modifiers, its own
-  quoting), and a transpiler that is 90% right on 319 aliases leaves about 32
+  quoting), and a transpiler that is 90% right on 305 aliases leaves about 30
   silent breakages, exactly the failure mode that started today's session.
   Machine assistance for the trivial tier, human judgment for the rest.
 - Big-bang rewrite of `aliases-public.sh`. Rejected: unreviewable, and one bad
@@ -211,24 +223,73 @@ batches build confidence in the harness before it is trusted on hard cases.
 
 ## Steps
 
-### 1. Build the golden-output harness, BEFORE any edit
+### 1. The golden-output harness (DONE 2026-09-05, commit dcb76da)
 
-- Files: `test/alias-golden.py` (runner), `dat/alias-golden/` (captures)
-- Covers both populations: the 319 live aliases and the 57 scripts. For a script,
-  capture `<script> --help`, `<script>` with no arguments, and where the
-  script's own text makes an obvious safe invocation available, that too.
-- What: for each of the 319 live aliases, run it in a real
-  `tcsh -c 'source sh/aliases-public.sh; <alias>'` under a dry-run sandbox:
-  `PATH` shadowed by stub executables that echo `CMD:<argv>` instead of doing
-  anything. Record stdout/stderr/exit per alias to
-  `dat/alias-golden/<name>.golden`. Aliases whose target is a browser or GUI
-  opener resolve to a stub, so nothing actually launches.
-- Why a stub PATH: many aliases open browsers, send things, or mutate state.
-  We want to capture the command line they construct, not its effects.
-- Verify: the harness re-run twice in a row produces byte-identical captures
-  (deterministic); spot-check 10 captures by hand against the alias text.
-- Gate: do not proceed to any translation until captures exist and are
-  committed.
+- Files: `test/alias-golden.py` (runner), `dat/alias-golden/` (305 captures,
+  21524 bytes).
+- What it records: the command line each alias EXPANDS TO, with no arguments
+  and, when the body takes arguments, with the fixed probe arguments ARG1 and
+  ARG2. One capture per alias, all 305, no skips and no refusals.
+- IT PARSES. IT DOES NOT EXECUTE. This is the load-bearing design decision and
+  the reason the section below exists.
+- Verify: `./test/alias-golden.py --check` re-expands and diffs against what is
+  stored. Three consecutive runs reported 0 differing. Ten captures were
+  hand-checked against the source (spotify, gcals, palias, htm2png, pbdate,
+  txt2m4a, dusort, code, vs, l), chosen to include the redirection and
+  absolute-path cases.
+- Gate: SATISFIED. Batches 4a through 4e may proceed.
+
+Substitution rules were verified against tcsh rather than assumed. `\!*` and
+`\!:*` take the whole argument list, `\!:N` takes one, and the `:r`, `:t` and
+`:e` word modifiers chain left to right. With NO arguments the two forms
+differ, and that difference is why the empty case is captured at all: `\!*`
+expands to nothing and the command still runs, while `\!:1` fails with
+`Bad ! arg selector.` 18 captures record that error, and each one marks an
+alias whose bash translation must REJECT a missing argument rather than
+silently pass an empty string. That is the silent-failure class that started
+this project.
+
+Chains are deliberately not resolved. `pbdate` records `datestr| pbcopy`
+rather than whatever `datestr` bottoms out in, because the unresolved form
+names the thing that still has to be translated.
+
+#### Do not rebuild the executing version
+
+The first version of this harness did what the original draft of this step
+prescribed: run each alias in a real tcsh under a stubbed `PATH`. That design
+is recorded here because it looks reasonable on paper and is not.
+
+- `palias` is `echo "alias \!*" >> $paliases`, and `login-public.sh` sets
+  `$paliases` to `aliases-public.sh` itself. Running it APPENDED SIX LINES TO
+  THE ALIAS FILE BEING CAPTURED. Recovered with `git checkout`, and only
+  because the file happened to be committed minutes earlier.
+- `pip3-tend` chains to `pip3s` in the PRIVATE alias file, which writes
+  `$cwaux/pip3-<timestamp>.asc`. One run left 29 junk files in
+  `~/gd/local/seiton/aux`. A guard that inspects the invoked alias body cannot
+  see a redirect two aliases away.
+- `htm2pdf` and `htm2png` invoke Chrome by ABSOLUTE PATH, which no stub `PATH`
+  can intercept. Real headless Chrome ran and left `screenshot.png` and
+  `output.pdf` in the repo root.
+- Sandboxing `HOME` to contain those writes broke the login chain: only 1128
+  of 3109 aliases registered, and 226 of 305 captures came back "Command not
+  found". A baseline full of failures that still looked valid.
+- 46 alias names also appear as words inside other alias bodies, so a stub
+  named after an alias SHADOWED it, and `spotify` captured `CMD spotify`
+  instead of `open /Applications/Spotify.app/`.
+
+The measured difference between the two designs:
+
+| | executing | parsing |
+|---|---|---|
+| runtime | 4m47s | 0.076s |
+| determinism | 3 aliases unstable | 0 differing over 3 runs |
+| "Command not found" | 226 of 305 | 0 |
+| refused to capture | 36 | 0 |
+| files written | the alias file, 29 in aux, 2 in repo | none |
+
+Answering "what does this alias run" needs the alias body with its history
+markers substituted, which is a text transformation. Nothing needs to run, and
+when nothing runs, none of the five failures above is possible.
 
 ### 2. Deterministic dead-alias census (DONE 2026-09-05)
 
@@ -426,7 +487,7 @@ not add anything that re-sources aliases into running shells.
   in because a pathspec commit ignores the index. For every batch commit here:
   check `git diff` for foreign hunks, stage with `git apply --cached`, and
   commit with no pathspec so the index is what lands.
-- Scope. 319 live aliases plus 57 scripts (1828 lines of script) is genuinely
+- Scope. 305 live aliases plus 57 scripts (1828 lines of script) is genuinely
   large. If the census shows most are dead, this shrinks a lot. If it shows
   most are live, this is a multi-session project and should be run batch by
   batch, not in one sitting. Note that 14 of the 57 scripts (the 12 portable
