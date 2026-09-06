@@ -44,7 +44,7 @@ project.
 | 34 | `ll` | LIVE | /bin/ls | |
 | 35 | `mi` | LIVE | /bin/mv | |
 | 36 | `up` | SHELL-ONLY | cd acts on the calling shell | |
-| 37 | `please` | LIVE | /usr/bin/sudo | |
+| 37 | `please` | LIVE | /usr/bin/sudo | KEEP as alias: bare sudo; a script wrapper interposes a process between the terminal and the password prompt |
 | 40 | `cd-mise` | SHELL-ONLY | cd acts on the calling shell | |
 | 47 | `datestr` | LIVE | /bin/date | |
 | 48 | `datetxt` | LIVE | /bin/date | |
@@ -53,7 +53,7 @@ project.
 | 52 | `dstr` | SHELL-ONLY | setenv acts on the calling shell | |
 | 55 | `dump` | LIVE | /usr/bin/pbpaste | |
 | 56 | `mdump` | SHELL-ONLY | set acts on the calling shell | |
-| 59 | `dusort` | CHAIN | source /Users/wiggins/mise//sh/aliases-public.sh;s | |
+| 59 | `dusort` | CHAIN | source /Users/wiggins/mise//sh/aliases-public.sh;s | KEEP as alias: writes a file with `>!` and chains to `learn`, which does not resolve today |
 | 60 | `rstudio` | LIVE | /Users/wiggins/mise/bash/open | |
 | 61 | `permute` | LIVE | /usr/bin/perl | |
 | 62 | `hai` | LIVE | /Users/wiggins/mise/bash/open | |
@@ -76,8 +76,8 @@ project.
 | 111 | `gugc` | LIVE | echo: shell built-in command. | |
 | 112 | `gugm` | LIVE | /usr/bin/git | |
 | 113 | `gbgb` | LIVE | /usr/bin/git | |
-| 114 | `miseup` | CHAIN | cd /Users/wiggins/mise/ | |
-| 116 | `remise` | CHAIN | cd /Users/wiggins/mise/ | |
+| 114 | `miseup` | CHAIN | cd /Users/wiggins/mise/ | TRANSLATE: `cd-mise;gugm;cd -` returns to the starting directory, so net cd is zero |
+| 116 | `remise` | CHAIN | cd /Users/wiggins/mise/ | TRANSLATE: `cd-mise;git pull;cd -` returns to the starting directory, so net cd is zero |
 | 121 | `estrip` | LIVE | /Users/wiggins/mise/sh/fix | |
 | 125 | `avail` | LIVE | /usr/bin/vi | |
 | 130 | `setv` | SHELL-ONLY | setenv acts on the calling shell | |
@@ -85,7 +85,7 @@ project.
 | 132 | `vv` | SHELL-ONLY | setv acts on the calling shell | |
 | 133 | `v` | SHELL-ONLY | setv acts on the calling shell | |
 | 134 | `tv` | SHELL-ONLY | setv acts on the calling shell | |
-| 135 | `d` | CHAIN | setenv dstr $ndir/cwnote_`date +%Y_%m_%d`.md | |
+| 135 | `d` | CHAIN | setenv dstr $ndir/cwnote_`date +%Y_%m_%d`.md | KEEP as shell function: `setd` setenvs $dstr and the body echoes it for the caller |
 | 136 | `sv` | SHELL-ONLY | source acts on the calling shell | |
 | 140 | `pv` | LIVE | /usr/bin/pbcopy | |
 | 141 | `pb` | LIVE | /usr/bin/pbcopy | |
@@ -100,7 +100,7 @@ project.
 | 157 | `clean-browser` | LIVE | /Users/wiggins/mise/bash/open | |
 | 158 | `disp` | LIVE | /Users/wiggins/mise/bash/open | |
 | 159 | `print` | LIVE | /Users/wiggins/mise/bash/open | |
-| 162 | `g` | LIVE | /Users/wiggins/mise/tcsh/gsearch | |
+| 162 | `g` | LIVE | /Users/wiggins/mise/tcsh/gsearch | TRANSLATE in 4a: calls gsearch, a real script already on PATH |
 | 170 | `tend` | LIVE | /usr/bin/clear | |
 | 174 | `qtend` | CHAIN | brew upgrade \| tee /tmp/brew_upgrade_2026-09-05T21 | |
 | 175 | `qqtend` | CHAIN | brew update;brew doctor;brew cleanup;brew link ope | |
@@ -119,25 +119,25 @@ project.
 | 204 | `cdp` | SHELL-ONLY | cd acts on the calling shell | |
 | 205 | `mise` | LIVE | /Users/wiggins/mise/bash/open | |
 | 206 | `citibike` | LIVE | /Users/wiggins/mise/bash/open | |
-| 210 | `opne` | LIVE | /Users/wiggins/mise/bash/open | |
-| 211 | `docus` | CHAIN | vi /Users/wiggins/gd//n//outline.md | |
-| 212 | `aalais` | CHAIN | echo "alias !*" >> $cwaliases ; learn | |
-| 213 | `gcmop` | CHAIN | open https://mail.google.com/mail/u/0/#compose/!* | |
-| 214 | `mdkdir` | LIVE | /bin/mkdir | |
-| 215 | `duff` | LIVE | /usr/bin/diff | |
-| 216 | `mdkir` | LIVE | /bin/mkdir | |
-| 217 | `mkddir` | LIVE | /bin/mkdir | |
-| 218 | `oepn` | LIVE | /Users/wiggins/mise/bash/open | |
-| 219 | `fidn` | LIVE | /usr/bin/find | |
-| 220 | `gttp` | CHAIN | open http://!* | |
-| 221 | `alais` | SHELL-ONLY | alias acts on the calling shell | |
-| 222 | `moer` | LIVE | /usr/bin/more | |
-| 223 | `mroe` | LIVE | /usr/bin/more | |
+| 210 | `opne` | LIVE | /Users/wiggins/mise/bash/open | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 211 | `docus` | CHAIN | vi /Users/wiggins/gd//n//outline.md | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 212 | `aalais` | CHAIN | echo "alias !*" >> $cwaliases ; learn | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 213 | `gcmop` | CHAIN | open https://mail.google.com/mail/u/0/#compose/!* | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 214 | `mdkdir` | LIVE | /bin/mkdir | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 215 | `duff` | LIVE | /usr/bin/diff | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 216 | `mdkir` | LIVE | /bin/mkdir | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 217 | `mkddir` | LIVE | /bin/mkdir | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 218 | `oepn` | LIVE | /Users/wiggins/mise/bash/open | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 219 | `fidn` | LIVE | /usr/bin/find | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 220 | `gttp` | CHAIN | open http://!* | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 221 | `alais` | SHELL-ONLY | alias acts on the calling shell | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 222 | `moer` | LIVE | /usr/bin/more | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 223 | `mroe` | LIVE | /usr/bin/more | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
 | 224 | `pbvx` | LIVE | /usr/bin/pbpaste | |
 | 225 | `pbcx` | LIVE | /usr/bin/pbcopy | |
-| 226 | `mor` | LIVE | /usr/bin/more | |
-| 227 | `poen` | LIVE | /Users/wiggins/mise/bash/open | |
-| 228 | `pu` | CHAIN | cd .. | |
+| 226 | `mor` | LIVE | /usr/bin/more | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 227 | `poen` | LIVE | /Users/wiggins/mise/bash/open | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 228 | `pu` | CHAIN | cd .. | KEEP as shell function: chains to `up`, which is `cd ..`; leaves the caller elsewhere |
 | 232 | `onion` | LIVE | echo: shell built-in command. | |
 | 234 | `appstore` | LIVE | /Users/wiggins/mise/bash/open | |
 | 235 | `st` | LIVE | /Users/wiggins/mise/bash/open | |
@@ -149,7 +149,7 @@ project.
 | 247 | `rstack` | LIVE | /Users/wiggins/mise/bash/open | |
 | 252 | `urls` | CHAIN | /usr/bin/perl -pe 's/[^[:ascii:]]/+/g' | |
 | 258 | `pbmunpack` | LIVE | /bin/mkdir | |
-| 260 | `deck` | CHAIN | echo try mindful breathing instead. go ahead | |
+| 260 | `deck` | CHAIN | echo try mindful breathing instead. go ahead | CHAIN: translate `onion` first, then this |
 | 262 | `sql` | LIVE | /opt/homebrew/bin/mysql.server | |
 | 264 | `sheet` | LIVE | /Users/wiggins/mise/bash/open | |
 | 267 | `call` | LIVE | echo: shell built-in command. | |
@@ -166,7 +166,7 @@ project.
 | 283 | `manel` | LIVE | /usr/bin/pbcopy | |
 | 284 | `yeats` | LIVE | /usr/bin/pbcopy | |
 | 285 | `takeout` | LIVE | /Users/wiggins/mise/bash/open | |
-| 286 | `oct` | LIVE | /Users/wiggins/mise/tcsh/ocr | |
+| 286 | `oct` | LIVE | /Users/wiggins/mise/tcsh/ocr | TRANSLATE in 4a: calls ocr, a real script already on PATH |
 | 289 | `atom` | LIVE | /Users/wiggins/mise/bash/open | |
 | 290 | `eee` | LIVE | echo: shell built-in command. | |
 | 291 | `zork` | LIVE | echo: shell built-in command. | |
@@ -187,7 +187,7 @@ project.
 | 318 | `md2htm` | LIVE | /opt/homebrew/bin/pandoc | |
 | 322 | `roi` | LIVE | /Users/wiggins/mise/bash/open | |
 | 323 | `beet` | LIVE | /Users/wiggins/mise/bash/open | |
-| 324 | `pbpate` | LIVE | /usr/bin/pbpaste | |
+| 324 | `pbpate` | LIVE | /usr/bin/pbpaste | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
 | 326 | `acal` | LIVE | /Users/wiggins/mise/bash/open | |
 | 333 | `rest` | LIVE | /usr/bin/pmset | |
 | 335 | `oed` | CHAIN | p 1 | |
@@ -215,7 +215,7 @@ project.
 | 382 | `smile` | LIVE | /Users/wiggins/mise/bash/open | |
 | 383 | `unxml` | LIVE | /usr/bin/plutil | |
 | 384 | `pdfmerge` | LIVE | /usr/local/bin/gs | |
-| 390 | `mlok` | LIVE | /Users/wiggins/gd/local/seiton/csh/mlook | |
+| 390 | `mlok` | LIVE | /Users/wiggins/gd/local/seiton/csh/mlook | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
 | 391 | `toro` | LIVE | /Users/wiggins/mise/bash/open | |
 | 392 | `prand` | CHAIN | py3 | |
 | 393 | `conda-nav` | LIVE | /Users/wiggins/mise/bash/open | |
@@ -231,12 +231,12 @@ project.
 | 405 | `txt2aiff` | LIVE | /usr/bin/say | |
 | 406 | `txt2m4a` | LIVE | /usr/bin/say | |
 | 407 | `txt2m4a-quick` | LIVE | /usr/bin/say | |
-| 409 | `remkae` | LIVE | /usr/bin/make | |
-| 411 | `weahter` | LIVE | /Users/wiggins/mise/py/weather | |
-| 412 | `porfa` | LIVE | /usr/bin/sudo | |
-| 413 | `pcbopy` | LIVE | /usr/bin/pbcopy | |
-| 415 | `aaias` | CHAIN | echo "alias !*" >> $cwaliases ; learn | |
-| 416 | `doccs` | LIVE | /Users/wiggins/mise/tcsh/docs | |
+| 409 | `remkae` | LIVE | /usr/bin/make | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 411 | `weahter` | LIVE | /Users/wiggins/mise/py/weather | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 412 | `porfa` | LIVE | /usr/bin/sudo | KEEP as alias: bare sudo; same terminal-prompt reason as please |
+| 413 | `pcbopy` | LIVE | /usr/bin/pbcopy | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 415 | `aaias` | CHAIN | echo "alias !*" >> $cwaliases ; learn | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 416 | `doccs` | LIVE | /Users/wiggins/mise/tcsh/docs | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
 | 431 | `amzn` | LIVE | /Users/wiggins/mise/tcsh/gsearch | |
 | 432 | `amazon` | LIVE | /Users/wiggins/mise/tcsh/gsearch | |
 | 433 | `juice` | LIVE | /Users/wiggins/mise/bash/open | |
@@ -251,7 +251,7 @@ project.
 | 445 | `hamming` | LIVE | /usr/bin/pbcopy | |
 | 446 | `teams` | LIVE | /usr/bin/pbcopy | |
 | 450 | `logo` | LIVE | /Users/wiggins/mise/bash/open | |
-| 451 | `basic` | LIVE | /opt/homebrew/bin/cbmbasic | |
+| 451 | `basic` | LIVE | /opt/homebrew/bin/cbmbasic | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
 | 453 | `shrug` | LIVE | echo: shell built-in command. | |
 | 454 | `thus` | LIVE | echo: shell built-in command. | |
 | 455 | `tm` | LIVE | echo: shell built-in command. | |
@@ -274,14 +274,14 @@ project.
 | 484 | `irl-text` | LIVE | echo: shell built-in command. | |
 | 485 | `gift` | LIVE | /usr/bin/pbcopy | |
 | 487 | `vin` | LIVE | /usr/bin/vi | |
-| 491 | `uppu` | CHAIN | cd ../../ | |
-| 492 | `rmdur` | LIVE | /bin/rmdir | |
+| 491 | `uppu` | CHAIN | cd ../../ | KEEP as shell function: chains to `upup`; leaves the caller elsewhere |
+| 492 | `rmdur` | LIVE | /bin/rmdir | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
 | 493 | `blue-off` | LIVE | /opt/homebrew/bin/blueutil | |
 | 494 | `blue-on` | LIVE | /opt/homebrew/bin/blueutil | |
 | 495 | `ft` | LIVE | /Users/wiggins/mise/bash/open | |
-| 496 | `spot` | CHAIN | open /Applications/Spotify.app/ | |
-| 497 | `oopen` | LIVE | /Users/wiggins/mise/bash/open | |
-| 498 | `kdir` | LIVE | /bin/mkdir | |
+| 496 | `spot` | CHAIN | open /Applications/Spotify.app/ | CHAIN: translate `spotify` first, then this |
+| 497 | `oopen` | LIVE | /Users/wiggins/mise/bash/open | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
+| 498 | `kdir` | LIVE | /bin/mkdir | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
 | 499 | `spotify` | LIVE | /Users/wiggins/mise/bash/open | |
 | 500 | `docxdump` | LIVE | /bin/cp | |
 | 501 | `docxdump-o` | LIVE | /bin/cp | |
@@ -297,7 +297,7 @@ project.
 | 514 | `prp` | LIVE | /usr/bin/pbpaste | |
 | 517 | `curse` | LIVE | /usr/bin/grep | |
 | 524 | `cu-covid` | LIVE | /Users/wiggins/mise/bash/open | |
-| 526 | `leads` | CHAIN | tmutt -s '[DSG-dir_leads]: ' anna.coenen@nytimes.c | |
+| 526 | `leads` | CHAIN | tmutt -s '[DSG-dir_leads]: ' anna.coenen@nytimes.c | KEEP as alias: the name is a misspelling of its target, so this is a keyboard correction; as a script a typo would fork instead of correcting |
 | 527 | `forward` | LIVE | echo: shell built-in command. | |
 | 528 | `dephone` | LIVE | /Users/wiggins/mise/bash/open | |
 | 529 | `table` | LIVE | echo: shell built-in command. | |
@@ -318,7 +318,7 @@ project.
 | 550 | `newer` | LIVE | /usr/bin/find | |
 | 552 | `plan` | LIVE | echo: shell built-in command. | |
 | 554 | `embiggen` | LIVE | /usr/bin/osascript | |
-| 555 | `cd-f` | CHAIN | cd `dirname !:1` | |
+| 555 | `cd-f` | CHAIN | cd `dirname !:1` | KEEP as shell function: chains to `cd-parent`; leaves the caller elsewhere |
 | 556 | `md5` | LIVE | echo: shell built-in command. | |
 | 559 | `code` | LIVE | /Users/wiggins/mise/bash/open | |
 | 560 | `vs` | CHAIN | open -a "Visual Studio Code" !* | |

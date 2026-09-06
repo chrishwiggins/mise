@@ -371,7 +371,7 @@ Each batch is one commit, and therefore one `git revert` unit.
 
 | batch | contents | approx n | risk |
 |---|---|---|---|
-| 4a | trivial one-word targets, no args | 50 | low |
+| 4a | trivial one-word targets, no args | 2 | low |
 | 4b | multi-command (`;`), no args | 69 | low-med |
 | 4c | arg-taking `\!*` and `\!:*` (whole arglist to `"$@"`) | 23 | medium |
 | 4d | arg-taking `\!:1` (positional to `"$1"`, arity checks) | 18 | high |
@@ -404,6 +404,34 @@ The other ten got `#!/bin/bash` and were verified behaviorally, not just
 syntactically: the four stdin filters (fix, reply, words, werds) produce
 byte-identical output under bash and under tcsh, `ffix` still dedupes through
 its sibling `fix`, and `lgit` still prints the right GitHub URL.
+
+BATCH 4A IS ESSENTIALLY EMPTY, and the reason generalizes. Recomputed against
+the current 305-line file it holds 37 candidates rather than the 50 estimated
+from the pre-retirement count. Of those:
+
+  29  TYPO CATCHERS. opne, oepn, poen and oopen for `open`; mdkdir, mdkir,
+      mkddir and kdir for `mkdir`; fidn, duff, moer, mroe, mor, gttp, pcbopy,
+      pbpate, remkae and the rest. THESE MUST STAY ALIASES. A typo alias works
+      precisely because the shell resolves it before anything else; as a
+      script in bash/ a mistyped command would fork a subprocess instead of
+      correcting to the intended one, which is slower and changes what the
+      typo means. They are a KEEP tier, not a translate tier.
+   2  ALREADY MARKED SHELL-ONLY. pu and cd-f, plus uppu which the typo
+      heuristic also flagged; all three are recorded KEEP in the census
+      because they leave the caller in a different directory.
+   2  sudo WRAPPERS. `please` and `porfa` are both bare `sudo`. Wrapping sudo
+      in a script interposes a process between the terminal and the password
+      prompt, so these stay aliases too.
+   2  CHAIN TO ANOTHER ALIAS. `deck` calls `onion`, `spot` calls `spotify`.
+      They cannot become scripts before their targets do, which is the
+      dependency ordering the CHAIN class exists to enforce.
+   2  GENUINELY TRANSLATABLE. `g` calls `gsearch` and `oct` calls `ocr`, both
+      of which are real scripts already on PATH.
+
+The rule this establishes, which applies to every later batch: an alias whose
+NAME is a misspelling of its own TARGET is a keyboard correction, not an
+abbreviation, and translating it is a category error. The same goes for
+anything wrapping sudo or a program that reads from the terminal.
 
 Batch 4f was the cheapest win in the whole project and went first, ahead
 of even 4a: 12 files, no translation, one line added to each, and the result

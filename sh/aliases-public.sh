@@ -159,7 +159,8 @@ alias disp 'open /System/Library/PreferencePanes/Displays.prefPane/'
 alias print 'open /System/Library/PreferencePanes/PrintAndScan.prefPane/'
 # DEAD 2026-09-05 (jgrep is gone): alias json-grep jgrep
 unalias json-grep
-alias g gsearch
+# TRANSLATED 2026-09-05 to mise/bash/g (batch 4a): alias g gsearch
+unalias g
 #alias tend "backup-tantanmen&;supdate&;sweep&;open /Applications/App\ Store.app/;brew-tend;pip-tend;conda-tend;cd ~;dusort"
 #alias tend "supdate&;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force;mas upgrade"
 #alias tend "date;sweep&;open /Applications/App\ Store.app/;qtend;cd ~;dusort;brew link openssl --force;date"
@@ -283,7 +284,8 @@ alias pdff pdflatex -interaction=nonstopmode
 alias manel "pbcopy < $mise/aux/manel.txt"
 alias yeats "pbcopy < $mise/aux/yeats.txt"
 alias takeout "open 'https://takeout.google.com/settings/takeout'"
-alias oct ocr
+# TRANSLATED 2026-09-05 to mise/bash/oct (batch 4a): alias oct ocr
+unalias oct
 # DEAD 2026-09-05 (chained to py3, retired above with anaconda3): alias profile py3 -m cProfile
 unalias profile
 alias atom open /Applications/Atom.app/
