@@ -1099,6 +1099,15 @@ _attachment_prompt() {
 
     local -n _atts="$arr_name"
 
+    # Zero-attachment fast path: nothing to review, so don't block on the
+    # [a]dd/[d]elete/[e]dit prompt; treat it as an implicit "send". The
+    # prompt exists so Chris can vet the attachment list before it goes out
+    # (2026-05-03), and with an empty list there is nothing to vet. The
+    # has-attachments case below is unchanged.
+    if (( ${#_atts[@]} == 0 )); then
+        return 0
+    fi
+
     while true; do
         echo >&2
         if [[ -n "$context" ]]; then
@@ -1236,7 +1245,15 @@ _sent_clip() {
     local _email="${EMAILS[$_acct]:-}"
     local clip="/sent $_path sent via $_acct${_email:+ $_email} at $(date '+%Y-%m-%dT%H:%M:%S')"
     printf '%s' "$clip" | pbcopy
-    echo "Copied to clipboard: $clip" >&2
+    # The fenced block echoes byte-for-byte what pbcopy just received, so the
+    # line Chris reads and the line on the clipboard cannot drift. Both come
+    # from the single $clip variable built above.
+    {
+        echo "copied to clipboard:"
+        echo '```'
+        echo "$clip"
+        echo '```'
+    } >&2
 }
 
 direct_send() {
@@ -1416,8 +1433,9 @@ direct_send() {
                     echo "$abspath FAILED (exit $send_rc)" >&2
                     return $send_rc
                 fi
-                (( dry_run )) || echo "$abspath sent"
-
+                # The old "<abspath> sent" line is gone: _sent_clip now prints
+                # the fenced clipboard block, whose /sent line already reports
+                # the same path and doubles as the success signal.
                 (( dry_run )) || _sent_clip "$abspath" "${account:-default}"
 
                 # Clipboard first, THEN watch for a bounce: the /sent command is
