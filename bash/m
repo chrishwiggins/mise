@@ -2323,6 +2323,10 @@ EOF
 # After the loop, the action router (case "$action") consumes `rest`.
 web=0; dry_run=0; no_cache=0; important_filter=0; spam_mail_flag=0; all_mail_flag=0
 action=""; account=""; rest=()
+# Every --long flag this loop recognizes. Used ONLY to turn a dropped-dash typo
+# (`-urls-tag`) into a "did you mean --urls-tag?" error; keep in sync when
+# adding a flag branch below.
+KNOWN_LONG_FLAGS="--web --dry-run --urls --urls-tag --urls-slug --pdf --cal --no-cache --important --all --spam --quiet --help --version --outbox --after"
 # raw_action_token remembers the LITERAL verb the user typed for the action,
 # captured before any normalization. We need it to tell `m out` apart from
 # `m sent`: both resolve to the internal action `sent`, but the literal `sent`
@@ -2479,6 +2483,25 @@ while (( i < ${#args[@]} )); do
         multi_account_index=$i
     elif [[ -z "$account" ]] && [[ -n "${ACCTS[$arg]:-}" ]]; then
         account="$arg"
+    elif [[ "$arg" == -[a-zA-Z]*[a-zA-Z0-9]* ]] && [[ "$arg" != --* ]] && (( ${#arg} > 2 )) && [[ "$arg" != *:* ]]; then
+        # Single-dash MULTI-character token, e.g. `-urls-tag` for `--urls-tag`.
+        # Neither m nor the gmail-api-rw backend defines any such flag (every
+        # real short flag is one letter: -w -i -N -q -e -S -t -x -a -A -c -Q -n
+        # -j -v -p), so this spelling is always a dropped-dash typo. Without
+        # this branch it fell through to the catch-all `rest+=` below and was
+        # handed to the python backend, which died with an argparse "unrecognized
+        # arguments" usage dump naming gmail-api-rw rather than m -- and the
+        # error scrolled past looking like the command had simply done nothing.
+        # Fail here instead, naming the likely intended flag.
+        _guess="-${arg}"
+        if [[ " $KNOWN_LONG_FLAGS " == *" $_guess "* ]]; then
+            log_error "unknown flag '$arg' -- did you mean '$_guess'?"
+        else
+            log_error "unknown flag '$arg' (single-dash multi-letter flags do not exist; long flags take two dashes)"
+            echo "Known flags: $KNOWN_LONG_FLAGS" >&2
+        fi
+        unset _guess
+        exit 2
     else
         rest+=("$arg")
     fi
