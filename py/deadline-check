@@ -67,6 +67,30 @@ def month_num(word):
     return None
 
 
+def filename_date(line, match):
+    """True when this ISO date sits inside a filename rather than in prose.
+
+    A filename date labels a document; it does not set a deadline. Detected by
+    what surrounds the match: a path separator or word character immediately
+    before, or a slug-and-extension pattern immediately after.
+    """
+    before = line[:match.start()]
+    after = line[match.end():]
+    # ".../2026-09-06-thing.md" or "doc/2026-09-06-thing"
+    if before and before[-1] in "/_":
+        return True
+    # "2026-09-06-some-slug.md" or "2026-09-06-some-slug.eml"
+    if re.match(r"^-[A-Za-z][\w-]*\.(md|eml|txt|pdf|csv|tsv|html|json|py)\b", after):
+        return True
+    # "2026-09-06-some-slug" used bare as a file stem, with no space before the
+    # extension-less name ending the token.
+    if re.match(r"^-[A-Za-z][\w-]{3,}\b", after) and not after.lstrip("-")[:1].isspace():
+        stem = re.match(r"^-([A-Za-z][\w-]*)", after)
+        if stem and "-" in stem.group(1):
+            return True
+    return False
+
+
 def dates_in(line, today):
     """Every date this line refers to, resolved against `today`."""
     out = []
@@ -75,6 +99,13 @@ def dates_in(line, today):
     # silently hides the deadline behind whatever date happens to be
     # mentioned earlier in the sentence.
     for m in DATE_PATTERNS[0][0].finditer(line):
+        # A date inside a FILENAME is a label, never a deadline. Citing
+        # doc/2026-09-06-offsite.md used to report as due that day, which
+        # false-stopped the ritual on a file reference. The rule "do not cite
+        # dated filenames" has been in the ciao skill since 2026-08-15 and was
+        # broken again on 2026-09-07, so it is enforced here instead.
+        if filename_date(line, m):
+            continue
         try:
             out.append(dt.date(int(m[1]), int(m[2]), int(m[3])))
         except ValueError:

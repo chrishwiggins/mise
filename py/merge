@@ -108,8 +108,10 @@ stdout, stderr = execute_command(f"head -1 {data}")
 print(stdout)
 
 if data.endswith(".tsv"):
-    # If the data file is already a .tsv, just copy it.
-    copy_file(data, "mdata.tsv")
+    # If the data file is already a .tsv, filter comment lines before copying.
+    execute_command(
+        f"grep -v '^#' < {data} > mdata.tsv"
+    )
 else:
     # Otherwise, convert the data file to a .tsv format.
     execute_command(
