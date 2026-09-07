@@ -1216,6 +1216,29 @@ _attachment_prompt() {
 # direct_send calls neomutt directly (no wrapper), so it needs its own copy.
 M_NEOMUTT_EDITOR="set editor=\"vim -c 'call cursor(10,1)' -c startinsert\""
 
+# ========================================================================
+# § SENT CLIP: after a real send, hand Claude the /sent command
+# ========================================================================
+# Every successful non-dry-run send puts ONE line on the clipboard:
+#
+#   /sent <abspath> sent via <alias> <email> at <YYYY-MM-DDTHH:MM:SS>
+#
+# The /sent skill (~/.claude/commands/sent.md) reads the trailing metadata:
+# "via" names the sending account so verification searches THAT sent
+# archive instead of re-deriving the account from thread headers, and "at"
+# pins the send time. Until 2026-09-07 this was gated on -d/--done, and a
+# send without -d copied nothing, which read as m being broken; it is now
+# unconditional and -d is accepted as a no-op. All three send paths
+# (direct_send, the API-only compose path, and the -H/attachments branch
+# in the action router) call this, so keep format changes here only.
+_sent_clip() {
+    local _path="$1" _acct="${2:-default}"
+    local _email="${EMAILS[$_acct]:-}"
+    local clip="/sent $_path sent via $_acct${_email:+ $_email} at $(date '+%Y-%m-%dT%H:%M:%S')"
+    printf '%s' "$clip" | pbcopy
+    echo "Copied to clipboard: $clip" >&2
+}
+
 direct_send() {
     local -a send_args=("$@")
 
@@ -1395,11 +1418,7 @@ direct_send() {
                 fi
                 (( dry_run )) || echo "$abspath sent"
 
-                if (( done_flag )); then
-                    local clip="/sent $abspath"
-                    printf '%s' "$clip" | pbcopy
-                    echo "Copied to clipboard: $clip" >&2
-                fi
+                (( dry_run )) || _sent_clip "$abspath" "${account:-default}"
 
                 # Clipboard first, THEN watch for a bounce: the /sent command is
                 # on the clipboard before this blocks, so Ctrl-C never costs it.
@@ -1559,8 +1578,9 @@ direct_send() {
                 return 0
             fi
             echo "m: ${account:-default} via gmail API" >&2
-            gmail-api-rw ${account:+-e "$account"} send --via-send -H "$eml_path" "${attach_args[@]+"${attach_args[@]}"}"
-            return $?
+            gmail-api-rw ${account:+-e "$account"} send --via-send -H "$eml_path" "${attach_args[@]+"${attach_args[@]}"}" || return $?
+            _sent_clip "$(realpath "$eml_path")" "${account:-default}"
+            return 0
         fi
 
         # SMTP-only path below. Guard against a muttrc with no smtp_url, which
@@ -3690,9 +3710,20 @@ case "$action" in
                     echo "DRY-RUN: gmail-api-rw ${gmail_acct[*]+${gmail_acct[*]}} send --via-send ${fixed_args[*]+${fixed_args[*]}}"
                     exit 0
                 fi
-                # Execute gmail-api-rw with fixed arguments
-                # exec replaces current process (no return to m script)
-                exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" send --via-send "${fixed_args[@]+"${fixed_args[@]}"}"
+                # Run gmail-api-rw with fixed arguments. This used to `exec`,
+                # which replaced the m process and so skipped the /sent
+                # clipboard line for every -H send (2026-09-07). Now the backend
+                # runs as a child; on success the .eml path is pulled back out
+                # of fixed_args and handed to _sent_clip. --draft is not a send.
+                gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" send --via-send "${fixed_args[@]+"${fixed_args[@]}"}" || exit $?
+                if [[ " ${fixed_args[*]+${fixed_args[*]}} " != *" --draft "* ]]; then
+                    _adv_eml=""
+                    for (( _ci=0; _ci<${#fixed_args[@]}-1; _ci++ )); do
+                        [[ "${fixed_args[_ci]}" == -H ]] && { _adv_eml="${fixed_args[_ci+1]}"; break; }
+                    done
+                    [[ -n "$_adv_eml" ]] && _sent_clip "$(realpath "$_adv_eml")" "${gmail_flag:-default}"
+                fi
+                exit 0
             else
                 # ====================================================
                 # SIMPLE SEND PATH: Direct routing (no external script)

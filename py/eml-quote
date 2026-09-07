@@ -150,6 +150,13 @@ def main():
     ap.add_argument("--out", help="write here instead of stdout")
     ap.add_argument("--max-lines", type=int, default=MAX_QUOTE_LINES)
     ap.add_argument(
+        "--keep-history",
+        action="store_true",
+        help="keep the message's own nested quoted history instead of cutting at the "
+        "first attribution line, for a reply that should carry the whole chain. "
+        "Raise --max-lines to match; the default truncates long chains.",
+    )
+    ap.add_argument(
         "--expect-from",
         help="substring that MUST appear in the fetched From header. Mailbox indexes shift "
         "when new mail arrives, so pass the sender you believe you are quoting.",
@@ -180,7 +187,12 @@ def main():
     if not body.strip():
         die("fetched message has an empty body; refusing to emit a quote")
 
-    lines = strip_quoted_history(body)
+    if args.keep_history:
+        lines = body.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+    else:
+        lines = strip_quoted_history(body)
     if not lines:
         die("nothing left after trimming quoted history; refusing to emit a quote")
 
