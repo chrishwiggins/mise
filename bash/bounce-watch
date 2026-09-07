@@ -1,0 +1,80 @@
+#!/opt/homebrew/bin/bash
+#
+# bounce-watch -- after sending, poll briefly for a delivery failure.
+#
+# The motivating case: 2026-09-07, a message went to sem2196@columbia.ed
+# (missing the "u"). It reported sent, and the NXDOMAIN bounce landed in the
+# same minute, but nothing surfaced it, so the send looked fine for hours.
+# Hard-failure bounces (bad domain, no such user) come back in seconds;
+# soft failures can take hours and are NOT what this catches.
+#
+# Usage:
+#   bounce-watch [-e ACCOUNT] [-s SECONDS] [-r RECIPIENT]
+#
+#   -e ACCOUNT    account alias to check, as `m` spells it (default: h)
+#   -s SECONDS    how long to keep looking (default: 45)
+#   -r RECIPIENT  only report a bounce naming this address
+#
+# Prints "checking bounce..." first so it is obvious what is happening and
+# obvious what Ctrl-C kills. Interrupting is safe: the message is already
+# sent, this only watches.
+#
+# Exit: 0 no bounce seen, 1 bounce found, 130 interrupted.
+
+set -uo pipefail
+
+ACCOUNT="h"
+WINDOW=45
+RECIPIENT=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -e) ACCOUNT="$2"; shift 2 ;;
+        -s) WINDOW="$2"; shift 2 ;;
+        -r) RECIPIENT="$2"; shift 2 ;;
+        -h|--help) sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "bounce-watch: unknown arg $1" >&2; exit 64 ;;
+    esac
+done
+
+GMAILS="$HOME/mise/py/gmails"
+[[ -x "$GMAILS" ]] || { echo "bounce-watch: no gmails at $GMAILS" >&2; exit 1; }
+
+# Anything already in the mailbox predates this send and must not be reported.
+BASELINE=$("$GMAILS" -e "$ACCOUNT" -q "newer_than:1d from:mailer-daemon" 2>/dev/null \
+           | grep -cE '^ *[0-9]+\.' || true)
+
+cleanup() { printf '\n  (bounce check stopped; the message was still sent)\n' >&2; exit 130; }
+trap cleanup INT
+
+printf 'checking bounce' >&2
+
+DEADLINE=$(( $(date +%s) + WINDOW ))
+while (( $(date +%s) < DEADLINE )); do
+    printf '.' >&2
+    sleep 3
+
+    NOW=$("$GMAILS" -e "$ACCOUNT" -q "newer_than:1d from:mailer-daemon" 2>/dev/null \
+          | grep -cE '^ *[0-9]+\.' || true)
+
+    if (( NOW > BASELINE )); then
+        BODY=$("$GMAILS" -e "$ACCOUNT" -q "newer_than:1d from:mailer-daemon" 1 -t 2>/dev/null)
+
+        # With -r, only a bounce naming that address counts; another thread's
+        # failure arriving in the same window is not this send's problem.
+        if [[ -n "$RECIPIENT" ]] && ! grep -qiF -- "$RECIPIENT" <<<"$BODY"; then
+            BASELINE="$NOW"
+            continue
+        fi
+
+        printf '\n\n  BOUNCED\n\n' >&2
+        grep -iE 'wasn.t delivered|Address not found|couldn.t be found|DNS Error|550|No such user|does not exist' \
+             <<<"$BODY" | head -4 | sed 's/^/  /' >&2
+        printf '\n  read it: m %s q mailer-daemon 1\n' "$ACCOUNT" >&2
+        exit 1
+    fi
+done
+
+printf ' none in %ss\n' "$WINDOW" >&2
+printf '  (hard failures arrive in seconds; a soft one can still come later)\n' >&2
+exit 0

@@ -1400,6 +1400,20 @@ direct_send() {
                     printf '%s' "$clip" | pbcopy
                     echo "Copied to clipboard: $clip" >&2
                 fi
+
+                # Clipboard first, THEN watch for a bounce: the /sent command is
+                # on the clipboard before this blocks, so Ctrl-C never costs it.
+                # Motivating case 2026-09-07: a message to sem2196@columbia.ed
+                # (missing "u") reported sent, and the NXDOMAIN bounce arrived in
+                # the same minute with nothing surfacing it. Set M_NO_BOUNCE_WATCH=1
+                # to skip, or just Ctrl-C; the message is already gone either way.
+                if (( ! dry_run )) && [[ -z "${M_NO_BOUNCE_WATCH:-}" ]] \
+                   && [[ -t 2 ]] && command -v bounce-watch >/dev/null 2>&1; then
+                    local _bw_to
+                    _bw_to=$(grep -im1 '^To:' "$abspath" 2>/dev/null \
+                             | grep -oE '[[:alnum:]._%+-]+@[[:alnum:].-]+' | head -1)
+                    bounce-watch -e "${account:-h}" ${_bw_to:+-r "$_bw_to"} || true
+                fi
             fi
         done
     else
