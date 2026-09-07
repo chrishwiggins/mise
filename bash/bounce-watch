@@ -12,8 +12,14 @@
 #   bounce-watch [-e ACCOUNT] [-s SECONDS] [-r RECIPIENT]
 #
 #   -e ACCOUNT    account alias to check, as `m` spells it (default: h)
-#   -s SECONDS    how long to keep looking (default: 45)
+#   -s SECONDS    how long to keep looking (default: 20)
 #   -r RECIPIENT  only report a bounce naming this address
+#
+# NOTE ON WALL CLOCK: -s is a budget for the LOOP, not for your wait. Each
+# poll shells out to gmails, which costs several seconds, so -s 45 runs
+# closer to a couple of minutes. Measured 2026-09-07: -s 3 took 21s. The
+# first poll happens within a few seconds, which is what catches an NXDOMAIN,
+# so Ctrl-C early loses very little.
 #
 # Prints "checking bounce..." first so it is obvious what is happening and
 # obvious what Ctrl-C kills. Interrupting is safe: the message is already
@@ -24,7 +30,7 @@
 set -uo pipefail
 
 ACCOUNT="h"
-WINDOW=45
+WINDOW=20   # loop budget; real wall clock is longer, see header note
 RECIPIENT=""
 
 while [[ $# -gt 0 ]]; do
