@@ -76,22 +76,78 @@ def real_windows():
     return keep
 
 
-def check_scripting_addition():
+def pinned_spaces():
     """
-    Verify the scripting addition is live.
+    Spaces that hold a window we will not move but must not delete either.
 
-    yabai reports a clear error for space creation, so probe with that: create a
-    space and immediately destroy it. Returns (ok, message).
+    real_windows() drops minimized and sticky windows because neither should be
+    redistributed. Deleting the space underneath them is a different question:
+    macOS still keeps a minimized window on its space, so a space holding only a
+    minimized window is NOT empty. Treating it as empty made asplode destroy a
+    live desktop and dump the window onto space 1.
+    """
+    pinned = set()
+    for w in query("windows") or []:
+        if w.get("app") in IGNORED_APPS:
+            continue
+        if w.get("is-sticky"):
+            continue          # genuinely on every space; pins nothing
+        if w.get("is-minimized"):
+            pinned.add(w["space"])
+    return pinned
+
+
+def dismiss_mission_control(verbose=False):
+    """
+    Press Escape to close Mission Control.
+
+    There is no reliable way to ASK whether Mission Control is open: while it is
+    up the Dock process reports zero UI groups, so its accessibility tree cannot
+    be inspected. So do not try to detect it -- clear it when yabai says it is in
+    the way, and let yabai's own error text be the source of truth.
+    """
+    subprocess.run(["osascript", "-e",
+                    'tell application "System Events" to key code 53'],
+                   capture_output=True, text=True)
+    time.sleep(0.6)
+    if verbose:
+        print("  sent Escape to dismiss Mission Control")
+
+
+def is_mission_control_error(err):
+    """yabai refuses space edits while Mission Control is on screen."""
+    low = (err or "").lower()
+    return "mission-control" in low or "mission control" in low
+
+
+def check_scripting_addition(verbose=False):
+    """
+    Verify yabai can actually create spaces.
+
+    This used to create and destroy a probe space unconditionally. That was both
+    destructive and self-defeating: the probe could leave Mission Control on
+    screen, and the NEXT run would read yabai's "mission-control is active"
+    refusal as a missing scripting addition and abort -- stranding every empty
+    desktop it was supposed to close. Now a Mission Control refusal is treated as
+    the transient it is: clear it and retry once.
     """
     spaces_before = query("spaces") or []
     code, _, err = yabai("space", "--create")
+
+    if code != 0 and is_mission_control_error(err):
+        dismiss_mission_control(verbose)
+        spaces_before = query("spaces") or []
+        code, _, err = yabai("space", "--create")
+
     if code != 0:
         return False, err or "space --create failed"
+
     spaces_after = query("spaces") or []
     if len(spaces_after) <= len(spaces_before):
         return False, "space --create reported success but no space appeared"
-    # Clean up the probe space.
-    yabai("space", str(len(spaces_after)), "--destroy")
+
+    # Clean up the probe space. It is the newest one, so it is last.
+    yabai("space", str(spaces_after[-1]["index"]), "--destroy")
     return True, "ok"
 
 
@@ -119,7 +175,10 @@ def plan(windows, spaces):
         surplus.extend(wins[1:])
 
     # Spaces with no movable window are landing pads for surplus windows.
-    occupied = {sp for sp, _ in stay} | fullscreen_spaces
+    # A space holding a minimized window is not a landing pad: it is occupied by
+    # something we chose not to move, and stacking onto it recreates the very
+    # pile-up asplode exists to undo.
+    occupied = {sp for sp, _ in stay} | fullscreen_spaces | pinned_spaces()
     vacant = [s["index"] for s in spaces
               if s["index"] not in occupied and not s.get("is-native-fullscreen")]
 
@@ -158,7 +217,7 @@ def destroy_empty_spaces(dry_run, verbose, planned=()):
     """
     spaces = query("spaces") or []
     windows = real_windows()
-    live = {w["space"] for w in windows} | set(planned)
+    live = {w["space"] for w in windows} | set(planned) | pinned_spaces()
 
     empties = [s["index"] for s in spaces
                if s["index"] not in live
@@ -215,12 +274,19 @@ def main():
         print(f"  {len(surplus)} window(s) need a desktop of their own")
 
     if not args.dry_run and surplus:
-        ok, msg = check_scripting_addition()
+        ok, msg = check_scripting_addition(args.verbose)
         if not ok:
-            sys.exit("asplode: yabai scripting addition is not working "
-                     f"({msg}).\n"
-                     "  Spaces cannot be created and window moves fail silently.\n"
-                     "  Fix with: sudo yabai --load-sa")
+            # Redistribution needs the scripting addition, but closing empty
+            # desktops does not. Bailing out entirely here was what left empty
+            # desktops behind on every failed run, so skip the moves and still
+            # run the sweep below.
+            print("asplode: cannot redistribute windows "
+                  f"({msg}).\n"
+                  "  Spaces cannot be created and window moves fail silently.\n"
+                  "  Fix with: sudo yabai --load-sa\n"
+                  "  Continuing to close empty desktops anyway.",
+                  file=sys.stderr)
+            surplus = []
 
     moved = 0
     planned = []               # dry-run targets, so the sweep below spares them
@@ -241,6 +307,11 @@ def main():
 
         if target is None:
             code, _, err = yabai("space", "--create")
+            if code != 0 and is_mission_control_error(err):
+                # Mission Control can open mid-run (a probe, a stray hot corner).
+                # Clear it and retry rather than abandoning the remaining moves.
+                dismiss_mission_control(args.verbose)
+                code, _, err = yabai("space", "--create")
             if code != 0:
                 print(f"  could not create space: {err}", file=sys.stderr)
                 break
