@@ -737,6 +737,109 @@ See also: tc saved, tc similar <color>, tc palette <keyword>
 DISCUSS
     ;;
 
+  hanabi)
+    # tc hanabi - give every tab in a window its own distinct color
+    # tc hanabi <win>  - target a specific window number (default: this one)
+    # tc hanabi all    - every tab of every window
+    # Hues are spread evenly around the wheel (with a random offset) so
+    # neighbouring tabs never land on near-identical colors, which plain
+    # random RGB does often enough to be useless.
+    scope="$2"
+
+    if [[ "$scope" == "all" ]]; then
+      win_filter=""
+    elif [[ "$scope" =~ ^[0-9]+$ ]]; then
+      win_filter="$scope"
+    elif [[ -n "$scope" ]]; then
+      echo "Usage: tc hanabi [<window-number>|all]" >&2
+      exit 1
+    else
+      # Default: the window this shell lives in, found by matching our tty.
+      # Falls back to iTerm2's front window when there is no tty (e.g. a
+      # script or an agent shell), since that is the window on screen.
+      my_tty=$(tty 2>/dev/null)
+      if [[ "$my_tty" == /dev/* ]]; then
+        win_filter=$(osascript -e "
+        tell application \"iTerm2\"
+          set winIdx to 1
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                if (tty of s) is \"$my_tty\" then return winIdx
+              end repeat
+            end repeat
+            set winIdx to winIdx + 1
+          end repeat
+          return \"\"
+        end tell" 2>/dev/null)
+      fi
+      if [[ -z "$win_filter" ]]; then
+        win_filter=$(osascript -e 'tell application "iTerm2" to return index of current window' 2>/dev/null)
+      fi
+      if [[ -z "$win_filter" ]]; then
+        echo "Error: cannot tell which iTerm2 window to color (try: tc hanabi <win>)" >&2
+        exit 1
+      fi
+    fi
+
+    # Enumerate sessions as "win.tab<TAB>tty"
+    sessions=$(osascript -e '
+    tell application "iTerm2"
+      set out to ""
+      set winIdx to 1
+      repeat with w in windows
+        set tabIdx to 1
+        repeat with t in tabs of w
+          repeat with s in sessions of t
+            set out to out & winIdx & "." & tabIdx & " " & (tty of s) & linefeed
+          end repeat
+          set tabIdx to tabIdx + 1
+        end repeat
+        set winIdx to winIdx + 1
+      end repeat
+      return out
+    end tell' 2>/dev/null)
+
+    if [[ -n "$win_filter" ]]; then
+      sessions=$(echo "$sessions" | grep "^${win_filter}\.")
+    fi
+    sessions=$(echo "$sessions" | grep -v '^[[:space:]]*$')
+
+    n=$(echo "$sessions" | grep -c .)
+    if [[ "$n" -eq 0 ]]; then
+      echo "No tabs found${win_filter:+ in window $win_filter}." >&2
+      exit 1
+    fi
+
+    # Evenly spaced hues, random starting point, jittered saturation/value
+    # so the set looks like fireworks rather than a color wheel chart.
+    rgbs=$(python3 -c '
+import colorsys, random, sys
+n = int(sys.argv[1])
+off = random.random()
+for i in range(n):
+    h = (off + i / n) % 1.0
+    s = random.uniform(0.55, 0.95)
+    v = random.uniform(0.65, 0.95)
+    r, g, b = colorsys.hsv_to_rgb(h, s, v)
+    print(int(r * 255), int(g * 255), int(b * 255))
+' "$n")
+
+    i=1
+    while read -r spec ttypath; do
+      [[ -z "$ttypath" ]] && continue
+      read -r _r _g _b <<< "$(echo "$rgbs" | sed -n "${i}p")"
+      if [[ -w "$ttypath" ]]; then
+        printf '%s' "$(make_seq "$_r" "$_g" "$_b")" > "$ttypath"
+        printf "  %-6s %-14s rgb(%3d,%3d,%3d)  #%s\n" \
+          "$spec" "$ttypath" "$_r" "$_g" "$_b" "$(rgb_to_hex "$_r" "$_g" "$_b")" >&2
+      else
+        printf "  %-6s %-14s (not writable, skipped)\n" "$spec" "$ttypath" >&2
+      fi
+      i=$((i + 1))
+    done <<< "$sessions"
+    ;;
+
   help|-h|--help|"")
     cat <<'EOF'
 tc - iTerm2 titlebar color and window control
@@ -751,6 +854,7 @@ Usage: tc <color>                 # current window
        tc title <text>            # set window title
        tc focus <win.tab>         # bring window to front
        tc join <w.t> <w.t> [...]  # tile windows side by side
+       tc hanabi [<win>|all]      # random distinct color per tab
        tc rgb <r> <g> <b>         # custom RGB (0-255)
        tc set <name> <r> <g> <b>     # save a custom color
        tc saved                      # list saved custom colors
@@ -772,6 +876,8 @@ Examples:
   tc sage               # nice muted green
   tc join 3.1 8.1       # tile two windows left/right
   tc join 1.1 3.1 5.1   # tile three windows in thirds
+  tc hanabi             # fireworks: every tab in this window a different color
+  tc hanabi all         # every tab of every window
 
 # blingbling (Color Name API - api.color.pizza)
   tc search <keyword>              # find color by name, apply best match, save it
