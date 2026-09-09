@@ -2702,27 +2702,46 @@ if [[ -z "$account" ]]; then
 fi
 
 # pagination
-# index_after_page records whether a bare index token appeared AFTER the ppN
-# token in the original argv. Ordering carries intent under !!-recall:
+# index_after_page records whether a READ-INTENT token (a bare index, a
+# peek/read flag, or a read action word) appeared AFTER the LAST ppN token in
+# the original argv. Ordering carries intent under !!-recall:
 # `... 1 pp2` (page appended last) means "list page 2", while
-# `... 1 pp2 18` (index appended last) means "read message 18". The
-# page-vs-index arbitration in the i|q handler keys off this flag.
+# `... 1 pp2 18` (index appended last) means "read message 18".
+#
+# The tracker RESETS on every new ppN, so only tokens after the *final* page
+# token count. That is what lets a trailing ppN win over an earlier
+# index+read: `pp5 47 -p pp6` sees 47 and -p after pp5, but pp6 clears the
+# flag and nothing follows it, so this collapses to a bare page-6 listing
+# (index dropped, peek dropped) rather than re-peeking 47. `pp5 47 -p` (no
+# trailing ppN) keeps index_after_page=1 and still peeks 47 on page 5.
+# The page-vs-index arbitration in the i|q handler keys off this flag.
+# Read-intent flags recognized here: -p/--peek, -x/--headers, -A and the
+# attachment savers, -S/--save; read action words: the compose/read verbs.
+_pg_read_flags=" -p --peek -x --headers -A --save-attachments-only --open-attachments -S --save -t --text "
+_pg_read_actions=" reply reply-all fwd forward draft open trash archive thread read unread sfwd sreply sreply-all urls pdf grep peek "
 page_offset=""; page_size=10; filtered_rest=(); index_after_page=0; _seen_pp=0
 for r in "${rest[@]+"${rest[@]}"}"; do
     if [[ "$r" =~ ^pp([0-9]+)$ ]]; then
         _seen_pp=1
+        index_after_page=0    # a new page token re-scopes; forget earlier read intent
         page_num="${BASH_REMATCH[1]}"
         if (( page_num > 1 )); then
             page_offset="$((( page_num - 1 ) * page_size))"
+        else
+            page_offset=""    # ppN can page BACK to 1; drop any earlier offset
         fi
     else
-        if (( _seen_pp )) && [[ "$r" == [0-9] || "$r" == [0-9][0-9] || "$r" == [0-9][0-9][0-9] ]]; then
-            index_after_page=1
+        if (( _seen_pp )); then
+            if [[ "$r" == [0-9] || "$r" == [0-9][0-9] || "$r" == [0-9][0-9][0-9] ]] \
+               || [[ "$_pg_read_flags" == *" $r "* ]] \
+               || [[ "$_pg_read_actions" == *" $r "* ]]; then
+                index_after_page=1
+            fi
         fi
         filtered_rest+=("$r")
     fi
 done
-unset _seen_pp
+unset _seen_pp _pg_read_flags _pg_read_actions
 rest=("${filtered_rest[@]+"${filtered_rest[@]}"}")
 
 # look up account
@@ -3019,16 +3038,21 @@ case "$action" in
                 fi
             fi
 
-            # Page-vs-index arbitration: the LAST-typed token wins (matches the
-            # !!-recall habit). A trailing ppN means "give me a LISTING page",
-            # so bare indices typed before it are dropped (with a warning). But
-            # a bare index typed AFTER ppN (e.g. `... 1 pp2 18`) means "read
-            # message 18 from that page": keep the indices and fall through to
-            # READ MODE, which already fetches enough rows for the page and
-            # treats indices as global. Ranges (e.g. "45-67 pp2") still list on
-            # the range path below, and read-intent flags (-x/-p/-S/-A/...) are
-            # honored above, so leave those alone: only strip when EVERY token
-            # is a bare single integer and none followed the page token.
+            # Page-vs-index arbitration: the LAST-typed page token wins (matches
+            # the !!-recall habit). A trailing ppN means "give me a LISTING
+            # page", so a bare index AND any peek/read intent typed before it
+            # are dropped (with a warning) and we fall through to the plain
+            # page listing. This is what makes `pp5 47 -p pp6` collapse to
+            # `pp6` (list page 6, no peek): index_after_page was reset to 0 by
+            # pp6 and nothing read-flavored followed it. But a bare index typed
+            # AFTER the last ppN (e.g. `... 1 pp2 18`) sets index_after_page=1
+            # and means "read message 18 from that page": keep the indices and
+            # fall through to READ MODE, which already fetches enough rows for
+            # the page and treats indices as global. Likewise `pp5 47 -p` (no
+            # trailing ppN) keeps index_after_page=1 and still peeks 47.
+            # Ranges (e.g. "45-67 pp2") still list on the range path below.
+            # Only strip when EVERY message token is a bare single integer and
+            # no read intent followed the final page token.
             if [[ -n "$page_offset" && ${#message_numbers[@]} -gt 0 && "$index_after_page" == "0" ]]; then
                 _pg_all_bare_single=1
                 for _mn in "${message_numbers[@]}"; do
@@ -3041,6 +3065,10 @@ case "$action" in
                     page_num=$(( page_offset / page_size + 1 ))
                     log_warn "page 'pp$page_num' requested; ignoring index '${message_numbers[*]}' and listing the page"
                     message_numbers=()
+                    # A trailing ppN re-scopes to a plain listing: any peek/read
+                    # intent that preceded it is discarded too, so we don't
+                    # re-peek the dropped index (the `pp5 47 -p pp6` bug).
+                    peek_flag=0
                 fi
             fi
 
