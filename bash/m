@@ -2824,6 +2824,30 @@ case "$action" in
             filtered_args=()
             action_word="$PA_ACTION_WORD"
 
+            # Trailing-ppN re-scope over an ACTION WORD (i|q handler path, where
+            # the action word follows a query/index, e.g. `m q taizo fwd 3 pp6`).
+            # A trailing ppN means "give me a LISTING page" and must win over the
+            # action, matching the peek/index arbitration below. The pagination
+            # loop above already computed page_offset and index_after_page:
+            # index_after_page==0 means NOTHING read-flavored (no bare index, no
+            # read flag, no read action word) followed the FINAL ppN. So
+            # `m q taizo fwd 3 pp6` -> list page 6 of the query (fwd/3 dropped),
+            # while `m q taizo pp6 fwd 3` keeps index_after_page==1 and still
+            # forwards. We re-exec the bare page listing in the SAME scope
+            # (`m [acct] <i|q> [query] ppN`), which is byte-identical to what the
+            # user would have typed; this only ever REMOVES an action and NEVER
+            # causes a send/compose.
+            if [[ -n "$action_word" && -n "$page_offset" && "$index_after_page" == "0" ]]; then
+                page_num=$(( page_offset / page_size + 1 ))
+                log_warn "page 'pp$page_num' requested; ignoring action '$action_word' and listing the page"
+                _rescope=("$0")
+                [[ -n "$account" ]] && _rescope+=("$account")
+                _rescope+=("$action")
+                [[ -n "$query_string" ]] && _rescope+=("$query_string")
+                _rescope+=("pp$page_num")
+                exec "${_rescope[@]}"
+            fi
+
             # If we found an action word, route to gmail-api-rw immediately
             if [[ -n "$action_word" ]]; then
                 # Special handling for grep action
@@ -3790,6 +3814,22 @@ case "$action" in
         fi
         ;;
     draft|reply|reply-all|fwd|open|trash|archive|thread|read|unread|sfwd|sreply|sreply-all)
+        # Trailing-ppN re-scope over an ACTION WORD (account-word-first path,
+        # e.g. `m u fwd 3 pp6`). A trailing ppN means "give me a LISTING page"
+        # and must win over the action, matching the peek/index arbitration in
+        # the i|q handler. The pagination loop above already computed
+        # page_offset and index_after_page: index_after_page==0 means NOTHING
+        # read-flavored (no bare index, no read flag, no read action word)
+        # followed the FINAL ppN. So `m u fwd 3 pp6` -> list page 6 (fwd and
+        # index 3 dropped), while `m u pp2 fwd 3` keeps index_after_page==1 and
+        # still forwards. We re-exec the bare page listing (`m <acct> ppN`),
+        # which is byte-identical to what the user would have typed; this only
+        # ever REMOVES an action and NEVER causes a send/compose.
+        if [[ -n "$page_offset" && "$index_after_page" == "0" ]]; then
+            page_num=$(( page_offset / page_size + 1 ))
+            log_warn "page 'pp$page_num' requested; ignoring action '$action' and listing the page"
+            exec "$0" "$account" "pp$page_num"
+        fi
         # Pass-through to gmail-api-rw
         # Last-index-wins for !!-augmented compose actions: `m 1 4 reply-all`
         # is `m 1 4` recalled with !! plus the action appended, so the target
