@@ -25,13 +25,31 @@ MAIN=$(/bin/ps ax -o command= \
        | /usr/bin/grep -v "^/bin/")
 
 HEADLESS=$(echo "$MAIN" | /usr/bin/grep -c -- "--headless")
-AUTOMATED=$(echo "$MAIN" | /usr/bin/grep -c -- "--disable-field-trial-config\|--remote-debugging-port\|--enable-automation")
 
-# A headed instance is a main process that is neither headless nor automation-flagged.
+# The dedicated automation profile counts as automation even with no flags on its command
+# line. chrome-profile-open launches "Profile 31" as an ordinary Chrome, so it carries
+# neither --enable-automation nor a debugging port, and a flags-only test misreads it as
+# one of Chris's own windows.
+#
+# Caught 2026-09-12: this script reported "headed Chrome instances: 2" and blocked /surf,
+# but Mission Control across eight desktops showed no such window. Of the two instances,
+# pid 2780 was "Profile 31 about:blank", the /cic profile. Blocking on it is a false
+# positive that sends every /surf to a fallback for no reason, and it also hid the real
+# question, which was why the extension reported a tab nobody could see.
+AUTO_PROFILE="--profile-directory=Profile 31"
+
+AUTOMATED=$(echo "$MAIN" | /usr/bin/grep -c -e "--disable-field-trial-config" \
+                                         -e "--remote-debugging-port" \
+                                         -e "--enable-automation" \
+                                         -e "$AUTO_PROFILE")
+
+# A headed instance is a main process that is neither headless, nor automation-flagged,
+# nor the automation profile.
 HEADED=$(echo "$MAIN" | /usr/bin/grep -v -- "--headless" \
                       | /usr/bin/grep -v -- "--disable-field-trial-config" \
                       | /usr/bin/grep -v -- "--remote-debugging-port" \
                       | /usr/bin/grep -v -- "--enable-automation" \
+                      | /usr/bin/grep -v -F -- "$AUTO_PROFILE" \
                       | /usr/bin/grep -c "MacOS/Google Chrome")
 
 if [ "$QUIET" -eq 0 ]; then
