@@ -68,11 +68,10 @@ def download(acct: str, q: str):
     return Path(m.group(1)) if m else None
 
 
-def eml_body(path: Path) -> str:
-    msg = email.message_from_bytes(path.read_bytes(), policy=email.policy.default)
-    part = msg.get_body(preferencelist=("plain",))
-    text = part.get_content() if part else ""
-    # drop quoted history and trailing signature noise
+def strip_history(text: str) -> str:
+    """Cut at the first quoted line or attribution line. Applied to BOTH the
+    draft and the sent copy, so a reply's quoted block never shows up as a
+    bogus diff (caught 2026-09-13: a verbatim send diffed as 40 deleted lines)."""
     kept = []
     for line in text.splitlines():
         if line.startswith(">") or re.match(r"^On .* wrote:$", line.strip()):
@@ -81,8 +80,33 @@ def eml_body(path: Path) -> str:
     return "\n".join(kept)
 
 
+def eml_body(path: Path) -> str:
+    msg = email.message_from_bytes(path.read_bytes(), policy=email.policy.default)
+    part = msg.get_body(preferencelist=("plain",))
+    return strip_history(part.get_content() if part else "")
+
+
+def eml_attachments(path: Path):
+    """Names and sizes of the attachment parts in the sent copy.
+
+    Added 2026-09-13 after a message promising an exam PDF went out as
+    single-part text (the -a flag was lost to a wrapped command line) and the
+    gap was only noticed by hand-inspecting the MIME structure afterward."""
+    msg = email.message_from_bytes(path.read_bytes(), policy=email.policy.default)
+    out = []
+    for part in msg.walk():
+        name = part.get_filename()
+        if name:
+            payload = part.get_payload(decode=True) or b""
+            out.append((name, part.get_content_type(), len(payload)))
+    return out
+
+
+PROMISE_WORDS = re.compile(r"\battach(ed|ing|ment|ments)?\b|\benclosed\b", re.I)
+
+
 def norm(s: str):
-    return [l.strip() for l in s.splitlines() if l.strip()]
+    return [l.strip() for l in strip_history(s).splitlines() if l.strip()]
 
 
 def main():
@@ -126,6 +150,14 @@ def main():
             print("\n".join(d))
         else:
             print("body IDENTICAL to draft")
+        atts = eml_attachments(saved)
+        if atts:
+            print("attachments: " + "; ".join(f"{n} ({t}, {s} bytes)" for n, t, s in atts))
+        else:
+            print("attachments: none")
+            if PROMISE_WORDS.search(strip_history(draft_body)):
+                print("WARNING: the draft body mentions an attachment and the sent copy has none;"
+                      " the -a flag was probably lost. Send the file in a follow-up.")
         return 0
     print("NOT FOUND in the accounts above within the window; do not mark as sent.")
     return 1
