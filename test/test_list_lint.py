@@ -75,6 +75,18 @@ expect_flagged(
     "The deadlines are April 15, June 15 and September 15 this year.",
     "date-series")
 
+# --- 2026-09-08: a date written with commas is an appositive, not a series --
+
+expect_clean(
+    "date appositive with commas (blocked two speaker drafts 2026-09-08)",
+    "I'm in a bind for Monday, September 14, and apologize for the short notice.\n"
+    "Could you give the talk that day?")
+
+expect_flagged(
+    "date appositive does not mask a real series in the same sentence",
+    "On Monday, September 14, bring the slides, the code, and the data.",
+    "comma-series")
+
 expect_flagged(
     "classic X, Y, and Z noun series",
     "I need the statements, the voucher, and the signature page.",
@@ -149,6 +161,37 @@ try:
 finally:
     os.unlink(path)
 
+
+# --- rule 4: colon then a series with no conjunction -----------------------
+# Added 2026-09-09. Rule 3 requires an "and"/"or" join, so a list whose items
+# are simply run together sailed past it. Chris bulleted this by hand in a
+# sent advising message after list-lint had reported the draft clean.
+
+expect_flagged(
+    "colon series of course codes, no conjunction",
+    "The degree table treats the third physics course as one requirement\n"
+    "with three names, depending on which sequence you are on: PHYS UN1403\n"
+    "on sequence 1, PHYS UN2601 on sequence 2, PHYS UN3081 on sequence 3.\n",
+    rule="colon-series")
+
+expect_flagged(
+    "colon series of room numbers, no conjunction",
+    "The sections meet in three rooms: Mudd 233, Pupin 301, Uris 140.\n",
+    rule="colon-series")
+
+# Two items after a colon is not a list; it is a sentence.
+expect_clean(
+    "colon with only two items",
+    "There are two routes here: the appeal tool, or a note to the "
+    "coordinator.\n")
+
+# The bulleted form Chris rewrote it into must pass.
+expect_clean(
+    "colon series already bulleted",
+    "The third physics course has three names, by sequence:\n"
+    "- PHYS UN1403 on sequence 1,\n"
+    "- PHYS UN2601 on sequence 2,\n"
+    "- PHYS UN3081 on sequence 3.\n")
 
 # --- report ---------------------------------------------------------------
 

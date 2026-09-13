@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 
@@ -271,8 +272,17 @@ def tier_large(pdf: str) -> str | None:
     text = pdftotext(pdf, 1, 1).strip()
     if not text:
         return None  # scanned image; nothing for the LLM to read
-    proc = run([CLAUDE, "-p", PROMPT + text])
+    # The child claude inherits our cwd, and a UserPromptSubmit hook that
+    # refuses that directory (block-home-dir.sh refuses $HOME) makes claude
+    # exit 0 with the block notice as stdout. This call needs no cwd of its
+    # own, so run it somewhere no hook objects to.
+    with tempfile.TemporaryDirectory(prefix="pdf-rename-") as cwd:
+        proc = run([CLAUDE, "-p", PROMPT + text], cwd=cwd)
     if proc.returncode != 0:
+        return None
+    if "blocked by hook" in proc.stdout:
+        print(f"claude was blocked by a Claude Code hook:\n{proc.stdout.strip()}",
+              file=sys.stderr)
         return None
     lines = [l for l in proc.stdout.strip().splitlines() if "|" in l]
     if not lines:

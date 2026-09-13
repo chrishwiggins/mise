@@ -96,13 +96,42 @@ def findings_for(text):
     # Rule 3: the classic "X, Y, and Z" series of noun phrases. Require the
     # Oxford-or-not "and"/"or" join plus at least two preceding commas, so
     # ordinary two-item sentences and appositives do not trip it.
+    # A date written with commas ("Monday, September 14, and ...") is an
+    # appositive, not a series; its commas are dropped before matching.
+    # Caught 2026-09-08: two guest-speaker drafts were blocked on exactly
+    # that shape and had to be rewritten as "Monday September 14 (one week
+    # out)" to get past the hook.
+    series_text = re.sub(
+        r"\b((?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day),\s+"
+        r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2})(?:,\s*(\d{4}))?,",
+        lambda d: " ".join(x for x in d.groups() if x),
+        text)
     m = re.search(
         r"(\b[\w$][\w\s$,./-]{2,40},\s+[\w$][\w\s$./-]{2,40},"
-        r"\s+(?:and|or)\s+[\w$][\w\s$./-]{2,40})", text)
+        r"\s+(?:and|or)\s+[\w$][\w\s$./-]{2,40})", series_text)
     if m:
         span = m.group(1).strip()
         if span.count(",") >= 2:
             out.append(("comma-series", '"%s"' % span[:90]))
+
+    # Rule 4: a COLON followed by three or more comma-separated items and NO
+    # conjunction. Rule 3 requires an "and"/"or" join, so it sails past a
+    # list whose items are simply run together, which is exactly the shape
+    # course codes take. Caught 2026-09-08: "depending on which sequence you
+    # are on: PHYS UN1403 on sequence 1, PHYS UN2601 on sequence 2, PHYS
+    # UN3081 on sequence 3" passed clean here and Chris bulleted it by hand.
+    # Kept narrow deliberately: the colon is required, and so are three or
+    # more items, so ordinary appositives and two-part sentences do not trip.
+    tail = text.split(":", 1)
+    if len(tail) == 2:
+        after = tail[1].strip().rstrip(".")
+        parts = [p.strip() for p in after.split(",")]
+        if (len(parts) >= 3
+                and all(2 < len(p) < 60 for p in parts)
+                and not re.search(r"\b(?:and|or)\b", after)):
+            out.append(("colon-series",
+                        "%d items after a colon, no conjunction: %s"
+                        % (len(parts), '"%s"' % after[:80])))
 
     return out
 
