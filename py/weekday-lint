@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Flag sentences whose weekday word disagrees with the calendar date they name.
+
+Usage: weekday-lint FILE [FILE...]    (exit 1 if any mismatch, 0 otherwise)
+       weekday-lint --year 2026 FILE
+
+Catches "September 12 ... That's a Monday" when Sep 12 is a Saturday. Written
+2026-09-07 after two guest-speaker emails went out naming a Saturday as a
+Monday; m runs it on every .eml before sending and warns (does not block).
+Only sentences with exactly one weekday and exactly one month-day date are
+checked; anything more complex is left alone rather than guessed at.
+"""
+import argparse
+import datetime as dt
+import re
+import sys
+
+DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+# Full day names, or the conventional abbreviations with an optional trailing
+# dot. The trailing [a-z]* this used to carry made "mon" match MONTH, so a
+# sentence like "You asked on April 7 and I need a month to decide" was read as
+# claiming April 7 was a Monday and warned on every send (caught 2026-09-13 on
+# an ONR budget email). "wed" likewise matched WEDDING, "sat" SATISFIES.
+DAY_RE = re.compile(
+    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    r"|mon|tues?|weds?|thurs?|thu|fri|sat|sun)\.?\b", re.I)
+MONTHS = {m: i + 1 for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+DATE_RE = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?"
+    r"(?:,?\s+(\d{4}))?\b", re.I)
+DAY_KEY = {"mon": 0, "tue": 1, "tues": 1, "wed": 2, "weds": 2, "thu": 3, "thur": 3,
+           "thurs": 3, "fri": 4, "sat": 5, "sun": 6}
+DAY_KEY.update({name: i for i, name in enumerate(DAYS)})
+
+
+def body_of(text):
+    """Skip mail headers (up to first blank line) and quoted lines."""
+    if re.match(r"^[A-Za-z-]+:", text):
+        parts = text.split("\n\n", 1)
+        text = parts[1] if len(parts) > 1 else text
+    return "\n".join(l for l in text.splitlines() if not l.lstrip().startswith(">"))
+
+
+def check(text, year):
+    problems = []
+    body = body_of(text)
+    # Check sentences, then whole paragraphs: "plan for September 12? That's a
+    # Monday." puts the date and the weekday in adjacent sentences.
+    units = re.split(r"(?<=[.!?])\s+|\n\s*\n", body) + re.split(r"\n\s*\n", body)
+    seen = set()
+    for sent in units:
+        days = DAY_RE.findall(sent)
+        dates = DATE_RE.findall(sent)
+        if len(days) != 1 or len(dates) != 1:
+            continue
+        mon, day, yr = dates[0]
+        try:
+            d = dt.date(int(yr) if yr else year, MONTHS[mon.lower()[:3]], int(day))
+        except ValueError:
+            continue
+        said = DAY_KEY[days[0].lower()]
+        if d.weekday() != said and (d, said) not in seen:
+            seen.add((d, said))
+            problems.append(f"{d.isoformat()} is a {DAYS[d.weekday()].title()}, not "
+                            f"{DAYS[said].title()}: {' '.join(sent.split())[:110]}")
+    return problems
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("files", nargs="+")
+    ap.add_argument("--year", type=int, default=dt.date.today().year)
+    a = ap.parse_args()
+    rc = 0
+    for f in a.files:
+        with open(f, errors="replace") as fh:
+            for p in check(fh.read(), a.year):
+                print(f"{f}: {p}")
+                rc = 1
+    sys.exit(rc)
+
+
+if __name__ == "__main__":
+    main()
