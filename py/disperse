@@ -108,7 +108,9 @@ def main():
         r = yabai_cmd("space", "--create")
         if r.returncode != 0:
             print(f"Could not create space {n_spaces + 1} "
-                  f"(yabai scripting addition may not be loaded).")
+                  f"(yabai scripting addition may not be loaded; it dies when\n"
+                  "  Dock restarts). Fix: sudo /opt/homebrew/bin/yabai --load-sa\n"
+                  "  Diagnose: ~/gd/local/seiton/tooling/yabai/yabai-sa-doctor")
             break
         n_spaces += 1
         created += 1

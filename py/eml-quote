@@ -51,7 +51,9 @@ def fetch_via_m(account, index, sent):
     """
     cmd = [M, account]
     if sent:
-        cmd.append("sent")
+        # "out" is the current name; the old "sent" spelling now hard-errors
+        # with "use `m out`" (caught 2026-09-08, --sent failed on every call).
+        cmd.append("out")
     cmd.append(str(index))
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=90)

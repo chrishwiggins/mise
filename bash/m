@@ -1400,6 +1400,15 @@ direct_send() {
 
                 local abspath="$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")"
 
+                # Weekday/date sanity: warn (never block) when the body calls a
+                # date by the wrong weekday. 2026-09-07: two guest-speaker
+                # emails went out saying "September 12 ... a Monday" (a
+                # Saturday). Checker is py/weekday-lint; skipped if absent.
+                if command -v weekday-lint >/dev/null 2>&1; then
+                    _wl_out=$(weekday-lint "$abspath" 2>/dev/null) || log_warn "weekday check: $_wl_out"
+                    unset _wl_out
+                fi
+
                 local send_rc=0
                 if (( ! dry_run )); then
                     local _transport="SMTP"
@@ -1924,7 +1933,7 @@ parse_action_args() {
             # "argument -q/--query: expected one argument". Gmail negation
             # terms (-from:x, -label:foo, -word) are not in these lists, so
             # they still read as queries.
-            local _pa_skip_novalue=" -v --verbose -p --peek --meta -x --headers -j --summary -c -Q --draft --all -N --verify-account -A --save-attachments-only --open-attachments --raw -t --text -h --help "
+            local _pa_skip_novalue=" -v --verbose -p --peek --meta -x --headers -j --json --summary -c -Q --draft --all -N --verify-account -A --save-attachments-only --open-attachments --raw -t --text -h --help "
             local _pa_skip_value=" -n --count -a --attach -e -F --outbox "
             local _qj=0
             while (( _qj < ${#PA_REMAINING[@]} )); do
@@ -3339,6 +3348,7 @@ case "$action" in
             # Parse remaining arguments to find peek flags, verbose flags, meta flag, and message numbers
             verbose_flag=0
             meta_flag=0
+            json_flag=0
             headers_flag=0
             save_attachments_only_flag=0
             open_attachments_flag=0
@@ -3354,6 +3364,9 @@ case "$action" in
                         ;;
                     --meta)
                         meta_flag=1
+                        ;;
+                    -j|--json)
+                        json_flag=1
                         ;;
                     -x|--headers)
                         headers_flag=1
@@ -3568,6 +3581,17 @@ case "$action" in
 
                 if (( meta_flag )); then
                     gmail_cmd+=(--meta)
+                fi
+                # -j emits one JSON array; -t is the human table. They are
+                # mutually exclusive, and the pagination path below slices
+                # output with sed by LINE, which would shred single-line JSON.
+                # So -j takes the whole fetch and skips the slicer.
+                if (( json_flag )); then
+                    gmail_cmd+=(-j)
+                    if ! "${gmail_cmd[@]}"; then
+                        exit 1
+                    fi
+                    exit 0
                 fi
                 gmail_cmd+=(-t)
 

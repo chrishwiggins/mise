@@ -202,6 +202,11 @@ def move_window(wid, target, verbose=False):
     return False, f"did not land (still on space {landed})"
 
 
+# Filled by destroy_empty_spaces so a caller (trim) can exit nonzero when the
+# sweep failed; the return value stays the count of desktops removed.
+LAST_DESTROY_FAILURES = []
+
+
 def destroy_empty_spaces(dry_run, verbose, planned=()):
     """
     Remove spaces with no windows, highest index first.
@@ -243,6 +248,16 @@ def destroy_empty_spaces(dry_run, verbose, planned=()):
                 print(f"  destroyed empty space {idx}")
         else:
             print(f"  could not destroy space {idx}: {err}", file=sys.stderr)
+            LAST_DESTROY_FAILURES.append((idx, err))
+    if any("scripting-addition" in err for _, err in LAST_DESTROY_FAILURES):
+        # 2026-09-07: six of these in a row from trim, twelve minutes after a
+        # clean Dock restart, with every other yabai check green.
+            print("  the scripting addition is not loaded. It lives inside Dock.app\n"
+                  "  and dies when Dock restarts; yabai does not reload it unless\n"
+                  "  ~/.yabairc registers the dock_did_restart signal.\n"
+                  "  Fix now:  sudo /opt/homebrew/bin/yabai --load-sa\n"
+                  "  Diagnose: ~/gd/local/seiton/tooling/yabai/yabai-sa-doctor",
+                  file=sys.stderr)
     return removed
 
 
@@ -284,6 +299,8 @@ def main():
                   f"({msg}).\n"
                   "  Spaces cannot be created and window moves fail silently.\n"
                   "  Fix with: sudo yabai --load-sa\n"
+                  "  (the addition dies with Dock unless ~/.yabairc registers the\n"
+                  "  dock_did_restart signal; yabai-sa-doctor checks the chain)\n"
                   "  Continuing to close empty desktops anyway.",
                   file=sys.stderr)
             surplus = []

@@ -178,13 +178,19 @@ tmp_out=$(mktemp /tmp/pbcal-out-XXXXXX)
 tmp_err=$(mktemp /tmp/pbcal-err-XXXXXX)
 printf '%s' "$prompt" > "$tmp_prompt"
 
+# The child claude inherits our cwd, and a UserPromptSubmit hook that refuses
+# that directory (block-home-dir.sh refuses $HOME) makes claude exit 0 with the
+# block notice as its stdout. This is a pure text transformation with --tools "",
+# so no cwd is meaningful: run it from a scratch dir no hook objects to.
+claude_cwd=$(mktemp -d /tmp/pbcal-cwd-XXXXXX)
+
 run_claude() {
-    timeout 45 "${HOME}/.local/bin/claude" --print \
+    (cd "$claude_cwd" && timeout 45 "${HOME}/.local/bin/claude" --print \
         --no-session-persistence \
         --tools "" \
         --model haiku \
         --system-prompt "You are a calendar event parser. Output ONLY what is requested. No preamble." \
-        < "$tmp_prompt" > "$tmp_out" 2>"$tmp_err"
+        < "$tmp_prompt" > "$tmp_out" 2>"$tmp_err")
 }
 
 # Try up to 2 times (handles transient API failures and CLI hangs)
@@ -206,11 +212,19 @@ for attempt in 1 2; do
     fi
 done
 rm -f "$tmp_prompt" "$tmp_out" "$tmp_err"
+rmdir "$claude_cwd" 2>/dev/null
 
 # Extract the bash script between delimiters, strip any markdown code fences
 script=$(echo "$raw_output" | awk '/<<<CALPARSE_START>>>/{found=1; next} /<<<CALPARSE_END>>>/{found=0} found' | grep -v '^```')
 
 if [ -z "$script" ]; then
+    # A blocking hook makes claude exit 0 and print its refusal, which otherwise
+    # reads as a parsing failure. Name the real cause instead.
+    if echo "$raw_output" | grep -q 'blocked by hook'; then
+        echo "Error: the child claude was blocked by a Claude Code hook" >&2
+        echo "$raw_output" | grep -m2 -A1 'blocked by hook' >&2
+        exit 1
+    fi
     echo "Error: Failed to generate script" >&2
     if [ -n "$raw_output" ]; then
         echo "Raw output (no delimiters found):" >&2
