@@ -104,6 +104,26 @@ def eml_attachments(path: Path):
 
 PROMISE_WORDS = re.compile(r"\battach(ed|ing|ment|ments)?\b|\benclosed\b", re.I)
 
+# A promise to attach is FIRST PERSON. "the detail you attached" and "the form
+# she attached" refer to someone ELSE's file and must not warn. Caught
+# 2026-09-13: a reply acknowledging Shania Lu's own attachment ("I have
+# reviewed the salary and expense detail you attached") warned that the -a flag
+# had probably been lost, on a message that was never meant to carry one.
+# strip_history() already drops the quoted original, so this only has to handle
+# new text.
+OTHERS_ATTACHMENT = re.compile(
+    r"\b(you|your|she|her|he|his|they|their)\s+(\w+\s+){0,2}attach(ed|ing|es)?\b"
+    r"|\battach(ed|ment|ments)?\b[^.\n]{0,40}\b(you|she|he|they)\s+sent\b",
+    re.I)
+
+
+def promises_attachment(text: str) -> bool:
+    """True only where the writer says THEY are attaching something."""
+    for line in text.splitlines():
+        if PROMISE_WORDS.search(line) and not OTHERS_ATTACHMENT.search(line):
+            return True
+    return False
+
 
 def norm(s: str):
     return [l.strip() for l in strip_history(s).splitlines() if l.strip()]
@@ -155,7 +175,7 @@ def main():
             print("attachments: " + "; ".join(f"{n} ({t}, {s} bytes)" for n, t, s in atts))
         else:
             print("attachments: none")
-            if PROMISE_WORDS.search(strip_history(draft_body)):
+            if promises_attachment(strip_history(draft_body)):
                 print("WARNING: the draft body mentions an attachment and the sent copy has none;"
                       " the -a flag was probably lost. Send the file in a follow-up.")
         return 0
