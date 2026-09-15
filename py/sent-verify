@@ -168,6 +168,26 @@ def main():
         if d:
             print("body differs (draft -> sent):")
             print("\n".join(d))
+            # A large diff on a standing thread usually means the subject matched a
+            # DIFFERENT message, not that this draft went out and was edited.
+            # Verified 2026-09-13: two drafts on threads whose subject never changes
+            # ("Re: In Paris late March", "Re: Institute member") each matched an
+            # older scheduling message, printing a convincing diff for a draft that
+            # had never been sent. Subject equality is not identity.
+            # Compare CONTENT, not line counts: greetings and sign-offs survive any
+            # match and inflate the "kept" side, so a wholesale body replacement can
+            # still show more context lines than removed ones.
+            gone = sum(len(x) - 1 for x in d
+                       if x.startswith("-") and not x.startswith("---"))
+            stayed = sum(len(x) - 1 for x in d if x.startswith(" "))
+            if gone > max(stayed, 40):
+                print()
+                print("WARNING: most of the draft body is absent from the matched message.")
+                print("On a thread whose subject never changes, that usually means the "
+                      "subject matched a DIFFERENT message rather than an edited send.")
+                print("Confirm by recipient and date before trusting this:")
+                print(f'  gmails -e {acct} out -q "to:{to} after:YYYY/MM/DD"')
+                print("then read the hit bodies for a distinctive phrase from this draft.")
         else:
             print("body IDENTICAL to draft")
         atts = eml_attachments(saved)
