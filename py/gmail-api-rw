@@ -2879,8 +2879,146 @@ def do_trash(service, indices, count, query, account=None):
 # Archive mode
 # ---------------------------------------------------------------------------
 
-def do_archive(service, indices, count, query, account=None):
-    """Archive one or more messages (remove from inbox, keep in All Mail)."""
+# ---------------------------------------------------------------------------
+# Standing auto-archive filters (archive ... --always) -- PURE HELPERS ONLY
+# ---------------------------------------------------------------------------
+#
+# `--always` archives the indexed message NOW (unchanged do_archive behavior)
+# and ALSO creates a Gmail filter that skips the inbox for all FUTURE mail from
+# that message's sender. It does NOT bulk-archive the existing backlog: only the
+# one indexed message is touched now; the filter governs future mail only. The
+# sender match is the full email ADDRESS from the From header (never the display
+# name, never a bare domain), which is the precise, non-over-catching default.
+#
+# Only the PURE, network-free construction/dedupe helpers live here. The code
+# that acquires the gmail.settings.basic OAuth scope and actually creates the
+# filter is intentionally NOT wired yet (see report): adding credential-scope
+# acquisition + standing-rule creation is a persistence-class change gated by
+# the permission system.
+
+# The Gmail filter action for "Skip the Inbox (Archive it)".
+_ARCHIVE_FILTER_ACTION = {"removeLabelIds": ["INBOX"]}
+
+
+def build_archive_filter(from_header):
+    """Build the Gmail filter dict that auto-archives future mail from a sender.
+
+    Pure: no network, no service. Takes a raw From header, returns a filter
+    body {criteria:{from:<addr>}, action:{removeLabelIds:[INBOX]}} keyed on the
+    full email ADDRESS extracted via parseaddr. Returns None when no usable
+    address can be extracted (e.g. a display-name-only or malformed From), so
+    the caller declines to create a garbage domain-less filter rather than
+    guessing.
+    """
+    if not from_header:
+        return None
+    _, addr = parseaddr(from_header)
+    addr = (addr or "").strip()
+    # A usable address has a local part and a dotted domain. parseaddr happily
+    # returns a bare token (a display name with no <addr>) as addr, which would
+    # make a filter matching nothing useful; reject it.
+    if "@" not in addr:
+        return None
+    local, _, domain = addr.partition("@")
+    if not local or "." not in domain:
+        return None
+    return {
+        "criteria": {"from": addr},
+        "action": dict(_ARCHIVE_FILTER_ACTION),
+    }
+
+
+def _filter_matches(existing, want):
+    """True if an existing Gmail filter is equivalent to `want`.
+
+    Compares the from: criterion (case-insensitive on the address) and the
+    skip-inbox action, so a duplicate is detected regardless of any other
+    fields Gmail attaches to the stored filter.
+    """
+    ecrit = existing.get("criteria", {}) or {}
+    eaction = existing.get("action", {}) or {}
+    wcrit = want["criteria"]
+    if (ecrit.get("from", "") or "").strip().lower() != wcrit["from"].strip().lower():
+        return False
+    if "INBOX" not in (eaction.get("removeLabelIds") or []):
+        return False
+    return True
+
+
+def do_archive(service, indices, count, query, account=None,
+               always=False, dry_run=False):
+    """Archive one or more messages (remove from inbox, keep in All Mail).
+
+    With always=True, ALSO surface a standing auto-archive filter for the
+    sender of the LAST message archived in this call (the one the user named);
+    only that sender, and only FUTURE mail (the existing backlog is untouched).
+    dry_run previews that filter and makes no settings API call.
+
+    NOTE: live filter creation (the gmail.settings.basic scope + filters().create
+    call) is NOT yet wired -- it is a persistence-class change gated by the
+    permission system. always=True currently ALWAYS runs the dry-run-style
+    preview path via build_archive_filter (pure, no API call) so the plumbing,
+    sender extraction, and the exact filter body are all exercised and visible.
+    """
+    last_from = None
+    for index in indices:
+        msg_id = _resolve_batch_id(service, index, indices, count, query, account=account)
+        if msg_id is None:
+            break
+
+        meta = service.users().messages().get(
+            userId="me", id=msg_id, format="metadata",
+            metadataHeaders=["From", "Subject"],
+        ).execute()
+        headers = meta.get("payload", {}).get("headers", [])
+        from_header = get_header(headers, "From")
+        sender = parse_sender(from_header)
+        subject = get_header(headers, "Subject") or "(no subject)"
+
+        service.users().messages().modify(
+            userId="me", id=msg_id,
+            body={"removeLabelIds": ["INBOX"]},
+        ).execute()
+        print(f"Archived: From={sender} Subject={subject}", file=sys.stderr)
+        last_from = from_header
+
+    _cache_path(account).unlink(missing_ok=True)
+
+    if always:
+        want = build_archive_filter(last_from)
+        if want is None:
+            print(f"⚠️  --always: could not extract a sender address from From: "
+                  f"{last_from!r}; no filter would be created.", file=sys.stderr)
+            return
+        addr = want["criteria"]["from"]
+        # Preview only. Live creation is intentionally not wired (see docstring).
+        prefix = "[DRY RUN] " if dry_run else "[PREVIEW] "
+        print(f"{prefix}--always filter for future mail from this sender:",
+              file=sys.stderr)
+        print(f"           criteria: from={addr}", file=sys.stderr)
+        print(f"           action:   removeLabelIds=['INBOX'] "
+              f"(Skip the Inbox / Archive)", file=sys.stderr)
+        print(f"           (future mail only; no backlog archived, no API call made)",
+              file=sys.stderr)
+        if not dry_run:
+            print(f"           NOTE: live filter creation is not yet wired; "
+                  f"run again once the settings scope is enabled.", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Unarchive mode -- the inverse of archive (put a message back in the inbox)
+# ---------------------------------------------------------------------------
+
+def do_unarchive(service, indices, count, query, account=None):
+    """Un-archive one or more messages: add INBOX back (inverse of do_archive).
+
+    Mirrors do_archive's list-and-loop shape and runs under the same
+    modify-capable scope, but adds the INBOX label instead of removing it. The
+    indices resolve against `query`; the caller lists ARCHIVED mail (-in:inbox)
+    by default, since a just-archived message is no longer in the inbox and
+    would otherwise be unaddressable. There is no --always analogue: restoring a
+    message to the inbox creates no standing rule.
+    """
     for index in indices:
         msg_id = _resolve_batch_id(service, index, indices, count, query, account=account)
         if msg_id is None:
@@ -2896,9 +3034,9 @@ def do_archive(service, indices, count, query, account=None):
 
         service.users().messages().modify(
             userId="me", id=msg_id,
-            body={"removeLabelIds": ["INBOX"]},
+            body={"addLabelIds": ["INBOX"]},
         ).execute()
-        print(f"Archived: From={sender} Subject={subject}", file=sys.stderr)
+        print(f"Unarchived: From={sender} Subject={subject}", file=sys.stderr)
 
     _cache_path(account).unlink(missing_ok=True)
 
@@ -4360,6 +4498,14 @@ def parse_list_get_args(argv):
                         help="Bypass the warm-listing cache; force a fresh fetch")
     parser.add_argument("--verify-account", action="store_true",
                         help="Force a getProfile() account-identity check (skips the cached verification)")
+    # archive-only: also create a standing Gmail filter auto-archiving all FUTURE
+    # mail from this message's sender. Reachable ONLY via `archive ... --always`;
+    # bare archive never sees it. --dry-run previews the filter without any
+    # settings API call. Both are inert for every other mode.
+    parser.add_argument("--always", action="store_true",
+                        help="archive: also create a Gmail filter auto-archiving future mail from this sender")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="archive --always: print the filter that would be created; make no API call")
     return parser.parse_args(argv)
 
 
@@ -4385,6 +4531,8 @@ Commands:
   gmail-api-rw fwd INDEX RECIPIENT --draft    Save forward as draft
   gmail-api-rw trash INDEX [INDEX ...]        Move message(s) to trash
   gmail-api-rw archive INDEX [INDEX ...]      Archive (remove from inbox)
+  gmail-api-rw archive INDEX --always         Archive + auto-archive future mail from sender (single index)
+  gmail-api-rw unarchive INDEX [INDEX ...]    Un-archive (add back to inbox; indexes archived mail)
   gmail-api-rw read INDEX [INDEX ...]         Mark message(s) as read
   gmail-api-rw unread INDEX [INDEX ...]       Mark message(s) as unread
   gmail-api-rw open INDEX                     Open a message in Gmail web UI
@@ -4462,6 +4610,8 @@ Manage messages:
   gmail-api-rw trash 1 3 5                    Trash multiple (space-separated)
   gmail-api-rw archive 3                      Archive message #3 (remove from inbox)
   gmail-api-rw archive 1-3                    Archive a range
+  gmail-api-rw archive 3 --always            Archive #3 + filter future mail from its sender
+  gmail-api-rw unarchive 1                    Un-archive #1 of archived mail (add back to inbox)
   gmail-api-rw read 3                         Mark message #3 as read
   gmail-api-rw unread 3                       Mark message #3 as unread
   gmail-api-rw -q "from:spam" trash 1         Trash a search result
@@ -4540,7 +4690,7 @@ Authentication:
   Uses OAuth via google_auth.py. Tokens are cached per scope in ~/.config/google-tokens/.
   List/download uses gmail-readonly scope. Send/draft uses gmail-compose scope.
   Reply/fwd uses gmail-send scope (readonly + compose combined).
-  Trash/archive/read/unread use gmail-modify scope (labels and trash need it).
+  Trash/archive/unarchive/read/unread use gmail-modify scope (labels and trash need it).
   First use of send/draft/reply/trash will open a browser for OAuth consent.
 
 Multi-account (-F and -e):
@@ -5036,7 +5186,7 @@ def main():
         if arg in ("-F", "--config", "-e", "--email", "-n", "--count", "-q", "--query"):
             skip_next = True  # next arg is the flag's value
             continue
-        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "open", "thread", "read", "unread", "inbox", "urls", "meets", "pdf"):
+        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "unarchive", "open", "thread", "read", "unread", "inbox", "urls", "meets", "pdf"):
             mode = arg
             mode_index = i
             break
@@ -5169,7 +5319,7 @@ def main():
         service, login_hint = _authenticated_service(args, "gmail-readonly", handle_show_account=False)
         do_inbox(service, team, args.days, args.output, dry_run=args.dry_run,
                  account=login_hint, resume=args.resume)
-    elif mode in ("trash", "archive", "open", "thread", "read", "unread"):
+    elif mode in ("trash", "archive", "unarchive", "open", "thread", "read", "unread"):
         mode_rest = [a for a in rest if a != mode]
         indices, filtered_rest = collect_indices(mode_rest)
         args = parse_list_get_args(filtered_rest)
@@ -5181,19 +5331,41 @@ def main():
             print(f"{mode} only works with a single message, got "
                   f"{len(indices)} indices: {indices}", file=sys.stderr)
             sys.exit(1)
-        # trash/archive/read/unread need write access; open and thread only need read
-        scope = "gmail-modify" if mode in ("trash", "archive", "read", "unread") else "gmail-readonly"
+        # --always creates a per-sender standing filter, which targets ONE
+        # sender, so it must target exactly one message. Refuse any multi-index
+        # or range and make NO archive and NO filter. Plain archive (no --always)
+        # keeps taking multi-index lists unchanged. Guarded to the archive mode
+        # so nothing else is affected.
+        if mode == "archive" and getattr(args, "always", False) and len(indices) != 1:
+            print("🛑 --always creates a per-sender filter and targets one "
+                  "message; give a single index (e.g. `m j 2 e --always`), "
+                  f"not {indices}.", file=sys.stderr)
+            sys.exit(1)
+        # trash/archive/unarchive/read/unread need write access; open and thread
+        # only need read
+        scope = ("gmail-modify"
+                 if mode in ("trash", "archive", "unarchive", "read", "unread")
+                 else "gmail-readonly")
         service, login_hint = _authenticated_service(args, scope)
         # Apply same query defaults as listing, so cache keys match
         query = args.query
         if sent_mode:
             query = f"in:sent {query}" if query else "in:sent"
+        elif mode == "unarchive" and not query:
+            # A just-archived message is no longer in:inbox, so resolving indices
+            # against the inbox would miss it. Default unarchive to ARCHIVED mail
+            # (everything not in the inbox), so index N = Nth archived message.
+            query = "-in:inbox"
         elif not query:
             query = "in:inbox"
         if mode == "trash":
             do_trash(service, indices, args.count, query, account=login_hint)
         elif mode == "archive":
-            do_archive(service, indices, args.count, query, account=login_hint)
+            do_archive(service, indices, args.count, query, account=login_hint,
+                       always=getattr(args, "always", False),
+                       dry_run=getattr(args, "dry_run", False))
+        elif mode == "unarchive":
+            do_unarchive(service, indices, args.count, query, account=login_hint)
         elif mode == "read":
             do_mark_read(service, indices, args.count, query, account=login_hint)
         elif mode == "unread":
