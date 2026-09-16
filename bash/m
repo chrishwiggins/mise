@@ -2078,7 +2078,12 @@ parse_action_args() {
 
 ACTIONS_SHORT="i out sent q d x urls meets scheduled"
 ACTIONS_SEND="send c"
-ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive thread read unread sfwd sreply sreply-all pdf"
+# `e` is a bare ALIAS for `archive`, matching Gmail's keyboard shortcut (e =
+# archive). It is only RECOGNIZED here (and in the i|q handler's action_words);
+# it is normalized to the canonical `archive` at each capture point below, so
+# every downstream path (the dispatch case, the multi-account guard, the ppN
+# pagination guards, help text) only ever sees `archive` and needs no change.
+ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive e thread read unread sfwd sreply sreply-all pdf"
 
 usage() {
     local topic="${1:-basic}"
@@ -2512,6 +2517,12 @@ while (( i < ${#args[@]} )); do
     elif [[ -z "$action" ]] && [[ " $ACTIONS_SHORT $ACTIONS_SEND $ACTIONS_PASSTHRU " == *" $arg "* ]]; then
         action="$arg"
         raw_action_token="$arg"
+        # `e` -> `archive` (Gmail's archive shortcut). Normalize here, at the
+        # single top-level capture point, so the dispatch case, the
+        # multi-account guard, and the ppN pagination guards all key off the
+        # canonical `archive`. raw_action_token keeps the literal `e` (it only
+        # special-cases the retired `sent` spelling, never `archive`).
+        [[ "$action" == "e" ]] && action="archive"
     elif [[ "$arg" == "m" ]] && [[ -z "$action" ]]; then
         action="archive"
     elif [[ -z "$account" ]] && [[ "$arg" == *,* ]] && [[ -n "${ACCTS[${arg%%,*}]:-}" ]]; then
@@ -2804,9 +2815,12 @@ case "$action" in
             done
 
             # If we have -A open, remove 'open' from the action words list
-            action_words="reply reply-all fwd draft open trash archive thread read unread sfwd sreply sreply-all urls pdf grep"
+            # `e` is included as the archive alias; it is normalized to
+            # `archive` right after parse_action_args returns (see below), so
+            # nothing downstream of that point sees the bare `e`.
+            action_words="reply reply-all fwd draft open trash archive e thread read unread sfwd sreply sreply-all urls pdf grep"
             if [[ "$has_trailing_open" == "1" ]]; then
-                action_words="reply reply-all fwd draft trash archive thread read unread sfwd sreply sreply-all urls pdf grep"
+                action_words="reply reply-all fwd draft trash archive e thread read unread sfwd sreply sreply-all urls pdf grep"
             fi
 
             # Delegate arg parsing to the shared helper; q-action treats rest[0] as query.
@@ -2832,6 +2846,10 @@ case "$action" in
             message_numbers=("${PA_MESSAGE_NUMBERS[@]+"${PA_MESSAGE_NUMBERS[@]}"}")
             filtered_args=()
             action_word="$PA_ACTION_WORD"
+            # `e` -> `archive` (Gmail's archive shortcut). Only fires when
+            # parse_action_args actually SELECTED e as the action word; a query
+            # term "e" (`m u q e 3`) leaves PA_ACTION_WORD empty and is untouched.
+            [[ "$action_word" == "e" ]] && action_word="archive"
 
             # Trailing-ppN re-scope over an ACTION WORD (i|q handler path, where
             # the action word follows a query/index, e.g. `m q taizo fwd 3 pp6`).
