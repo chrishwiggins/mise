@@ -2083,7 +2083,7 @@ ACTIONS_SEND="send c"
 # it is normalized to the canonical `archive` at each capture point below, so
 # every downstream path (the dispatch case, the multi-account guard, the ppN
 # pagination guards, help text) only ever sees `archive` and needs no change.
-ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive e thread read unread sfwd sreply sreply-all pdf"
+ACTIONS_PASSTHRU="draft reply reply-all fwd open trash archive unarchive e thread read unread sfwd sreply sreply-all pdf"
 
 usage() {
     local topic="${1:-basic}"
@@ -2183,6 +2183,8 @@ MESSAGE ACTIONS
     open INDEX                      Open in Gmail web UI
     trash INDEX                     Move to trash
     archive INDEX                   Archive message (removes from inbox)
+    archive INDEX --always          Archive + auto-archive future mail from sender (single index)
+    unarchive INDEX                 Un-archive: add back to inbox (indexes archived mail)
     m INDEX                         Archive message (short syntax)
     read/unread INDEX               Mark read/unread
 
@@ -2324,6 +2326,8 @@ REPLYING & FORWARDING
 MANAGING MESSAGES
     m 3 trash                             Move message #3 to trash
     m 1-5 archive                         Archive messages 1-5
+    m 2 e --always                        Archive #2 + auto-archive future mail from its sender
+    m 1 unarchive                         Un-archive #1 of archived mail (put back in inbox)
     m m 3                                 Archive message #3 (shorthand)
     m 3 read                              Mark message #3 as read
     m 1-10 unread                         Mark messages 1-10 as unread
@@ -2683,7 +2687,7 @@ if (( ${#multi_accounts[@]} > 0 )); then
     # reply, or trash fired at every account because the user habitually
     # types a multi-account alias), not a feature. Read-only actions are fine.
     case "$action" in
-        send|c|draft|reply|reply-all|fwd|sfwd|sreply|sreply-all|trash|archive|read|unread)
+        send|c|draft|reply|reply-all|fwd|sfwd|sreply|sreply-all|trash|archive|unarchive|read|unread)
             log_error "multi-account (${multi_accounts[*]}) is for read-only actions."
             echo "  '$action' mutates/sends mail; run it once per account instead." >&2
             exit 1
@@ -2738,7 +2742,7 @@ fi
 # Read-intent flags recognized here: -p/--peek, -x/--headers, -A and the
 # attachment savers, -S/--save; read action words: the compose/read verbs.
 _pg_read_flags=" -p --peek -x --headers -A --save-attachments-only --open-attachments -S --save -t --text "
-_pg_read_actions=" reply reply-all fwd forward draft open trash archive thread read unread sfwd sreply sreply-all urls pdf grep peek "
+_pg_read_actions=" reply reply-all fwd forward draft open trash archive unarchive thread read unread sfwd sreply sreply-all urls pdf grep peek "
 page_offset=""; page_size=10; filtered_rest=(); index_after_page=0; _seen_pp=0
 for r in "${rest[@]+"${rest[@]}"}"; do
     if [[ "$r" =~ ^pp([0-9]+)$ ]]; then
@@ -2818,9 +2822,9 @@ case "$action" in
             # `e` is included as the archive alias; it is normalized to
             # `archive` right after parse_action_args returns (see below), so
             # nothing downstream of that point sees the bare `e`.
-            action_words="reply reply-all fwd draft open trash archive e thread read unread sfwd sreply sreply-all urls pdf grep"
+            action_words="reply reply-all fwd draft open trash archive unarchive e thread read unread sfwd sreply sreply-all urls pdf grep"
             if [[ "$has_trailing_open" == "1" ]]; then
-                action_words="reply reply-all fwd draft trash archive e thread read unread sfwd sreply sreply-all urls pdf grep"
+                action_words="reply reply-all fwd draft trash archive unarchive e thread read unread sfwd sreply sreply-all urls pdf grep"
             fi
 
             # Delegate arg parsing to the shared helper; q-action treats rest[0] as query.
@@ -2894,6 +2898,15 @@ case "$action" in
                     exit $?
                 fi
 
+                # `archive --always --dry-run` via the i|q handler: --dry-run was
+                # consumed into the dry_run flag at top level (send-preview flag)
+                # and is not in PA_TRAILING_ARGS. Re-inject it for the archive
+                # action ONLY, so the backend previews the auto-archive filter
+                # (no settings API call). The backend ignores --dry-run for
+                # archive unless --always is also present.
+                if [[ "$action_word" == "archive" ]] && (( dry_run )); then
+                    PA_TRAILING_ARGS+=("--dry-run")
+                fi
                 exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
             fi
 
@@ -3682,7 +3695,7 @@ case "$action" in
         done
         if (( ${#rest[@]} >= _sg + 2 )) \
            && [[ "${rest[_sg]}" =~ ^[0-9]+$ ]] \
-           && [[ " reply reply-all fwd forward draft open trash archive thread read unread urls " == *" ${rest[_sg+1]} "* ]]; then
+           && [[ " reply reply-all fwd forward draft open trash archive unarchive thread read unread urls " == *" ${rest[_sg+1]} "* ]]; then
             _idx="${rest[_sg]}"; _act="${rest[_sg+1]}"; _tail=("${rest[@]:_sg+2}")
             case "$_act" in
                 fwd|forward) _suggest="m out ${_idx} fwd ${_tail[*]}  (or: m sfwd ${_idx} ${_tail[*]})" ;;
@@ -3855,7 +3868,7 @@ case "$action" in
             fi
         fi
         ;;
-    draft|reply|reply-all|fwd|open|trash|archive|thread|read|unread|sfwd|sreply|sreply-all)
+    draft|reply|reply-all|fwd|open|trash|archive|unarchive|thread|read|unread|sfwd|sreply|sreply-all)
         # Trailing-ppN re-scope over an ACTION WORD (account-word-first path,
         # e.g. `m u fwd 3 pp6`). A trailing ppN means "give me a LISTING page"
         # and must win over the action, matching the peek/index arbitration in
@@ -3902,6 +3915,15 @@ case "$action" in
         if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all|draft)$ ]]; then
             _rewrite_bare_text_flags "${rest[@]+"${rest[@]}"}"
             rest=("${RBT_OUT[@]+"${RBT_OUT[@]}"}")
+        fi
+        # `archive --always --dry-run`: the top-level parser consumes --dry-run
+        # into the dry_run flag (it is the send-preview flag), so it never rides
+        # in rest to the backend. Re-inject it for the archive path ONLY, where
+        # the backend uses it to PREVIEW the auto-archive filter it would create
+        # (no settings API call). Harmless for archive without --always: the
+        # backend only reads --dry-run when --always is also present.
+        if [[ "$action" == "archive" ]] && (( dry_run )); then
+            rest+=("--dry-run")
         fi
         # Special handling for reply/fwd actions: default to message #1 if no index provided
         if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all)$ ]] && [[ ${#rest[@]} -eq 0 ]]; then
