@@ -63,7 +63,12 @@ def units(path):
     for i, line in enumerate(raw[start:], start=start + 1):
         stripped = line.strip()
         is_item = bool(re.match(r"^(?:[-*+•]|\d+[.)])\s", stripped))
-        if stripped.startswith(">") or not stripped or is_item:
+        # An attribution line introducing quoted reply text ("On <date>, <name>
+        # <addr> wrote:") is generated verbatim by eml-quote and cannot be
+        # reworded without breaking quote provenance. Its timestamp (22:46:17)
+        # otherwise trips the colon-series check. Caught 2026-09-17 in AIGaO.
+        is_attribution = bool(re.match(r"^On\b.*\bwrote:$", stripped))
+        if stripped.startswith(">") or not stripped or is_item or is_attribution:
             if buf:
                 yield buf_lineno, " ".join(buf)
                 buf, buf_lineno = [], None

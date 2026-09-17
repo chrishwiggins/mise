@@ -193,6 +193,24 @@ expect_clean(
     "- PHYS UN2601 on sequence 2,\n"
     "- PHYS UN3081 on sequence 3.\n")
 
+# The attribution line that eml-quote generates above quoted reply text is not
+# Chris's prose; it is verbatim and cannot be reworded without breaking quote
+# provenance. Its timestamp (22:46:17) reads as a colon-series to the checker.
+# Caught 2026-09-17 in AIGaO on a reply to Noemie Elhadad.
+expect_clean(
+    "eml-quote attribution line with a timestamp",
+    "Thanks, that is useful.\n"
+    "\n"
+    'On Thu, 17 Sep 2026 22:46:17 +0000, "Elhadad, Noemie" '
+    "<ne60@cumc.columbia.edu> wrote:\n"
+    "> Alejandra has two organizations interested.\n")
+
+# Guard the narrowness of that skip: a real colon-series in ordinary prose must
+# still flag, so the exemption cannot be widened into a loophole.
+expect_flagged(
+    "colon series in prose is still caught",
+    "We need three things for this: apples, oranges, and pears.\n")
+
 # --- report ---------------------------------------------------------------
 
 if FAILURES:
