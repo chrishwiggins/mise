@@ -115,12 +115,62 @@ else
     PROFILE_DIRECTORY="$(_resolve_profile slug "$ARG")" || exit 1
 fi
 
+# Chrome saves a window_placement per profile and does not always clamp it on
+# restore, so a window stranded once (dragged, or left behind by a display
+# change) reopens offscreen forever. Profile 39 had left=1240 on a 1280-wide
+# screen: 40 points visible. Pull the new window back onto the work area.
+_clamp_onscreen() {
+    osascript <<'AS' >/dev/null 2>&1
+tell application "Google Chrome"
+    if (count of windows) is 0 then return
+    set b to bounds of front window
+    set l to item 1 of b
+    set t to item 2 of b
+    set w to (item 3 of b) - l
+    set h to (item 4 of b) - t
+
+    -- Zooming fits the window to the screen, which is the one reliable way to
+    -- learn the usable area: it accounts for the menu bar, the Dock, display
+    -- scaling and whichever display the window is on.
+    set zoomed of front window to true
+    delay 0.3
+    set z to bounds of front window
+    set zoomed of front window to false
+    delay 0.2
+    set waL to item 1 of z
+    set waT to item 2 of z
+    set waR to item 3 of z
+    set waB to item 4 of z
+
+    -- Shrink an oversized window to fit, then slide it back onscreen. A window
+    -- already fully visible keeps its exact position and size.
+    if w > (waR - waL) then set w to waR - waL
+    if h > (waB - waT) then set h to waB - waT
+    if l < waL then set l to waL
+    if t < waT then set t to waT
+    if (l + w) > waR then set l to waR - w
+    if (t + h) > waB then set t to waB - h
+
+    set bounds of front window to {l, t, l + w, t + h}
+end tell
+AS
+}
+
 # Setup logging
 LOG_DIR="/tmp/chrome-log"
 mkdir -p "$LOG_DIR"
 
 # Launch Chrome in background
-exec /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
     --profile-directory="$PROFILE_DIRECTORY" \
     "$URL" \
     2>"${LOG_DIR}/$$" &
+
+# Wait for the window to appear rather than sleeping a fixed amount: an
+# existing browser session answers almost immediately, a cold start does not.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    n=$(osascript -e 'tell application "Google Chrome" to count windows' 2>/dev/null)
+    [[ "$n" =~ ^[0-9]+$ && "$n" -gt 0 ]] && break
+    sleep 0.3
+done
+_clamp_onscreen
