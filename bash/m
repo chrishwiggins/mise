@@ -40,7 +40,7 @@ fi
 #   Account aliases: g j u cu l h hNY n z (resolved via accounts.json)
 #                    Comma-list for multi-account, e.g. h,g,cu (read-only
 #                    actions only; see § MULTI-ACCOUNT)
-#   Actions:         i out q d x urls meets send c draft reply reply-all fwd
+#   Actions:         i out q d x urls unsub meets send c draft reply reply-all fwd
 #                    (out = read outgoing mail; the old name `sent` is RETIRED
 #                    and hard-blocks with a stop sign pointing at `out`)
 #                    open trash archive thread read unread sfwd sreply
@@ -2044,7 +2044,7 @@ parse_action_args() {
         # m is the user-forgiving layer: default missing index to 1 for actions that need one
         if [[ ${#PA_MESSAGE_NUMBERS[@]} -eq 0 ]]; then
             case "$PA_ACTION_WORD" in
-                reply|reply-all|fwd|sfwd|sreply|sreply-all|draft|open|thread|urls)
+                reply|reply-all|fwd|sfwd|sreply|sreply-all|draft|open|thread|urls|unsub)
                     log_warn "no index given for '$PA_ACTION_WORD'; assuming message #1"
                     PA_MESSAGE_NUMBERS=("1")
                     ;;
@@ -2076,7 +2076,7 @@ parse_action_args() {
 # smart_send() function removed - logic consolidated into direct_send()
 # This eliminates the need for the external send script
 
-ACTIONS_SHORT="i out sent q d x urls meets scheduled"
+ACTIONS_SHORT="i out sent q d x urls unsub meets scheduled"
 ACTIONS_SEND="send c"
 # `e` is a bare ALIAS for `archive`, matching Gmail's keyboard shortcut (e =
 # archive). It is only RECOGNIZED here (and in the i|q handler's action_words);
@@ -2352,6 +2352,7 @@ ADVANCED WORKFLOWS
     m 3 --urls-tag                       Same menu, each URL labelled with its HTML anchor text
     m 3 --urls-slug                      Same menu, each URL labelled with an LLM-learned short slug
     m q shapiro 7 urls 2                  Open the 2nd URL in message #7 directly (no menu)
+    m 3 unsub                            Print unsubscribe commands for message #3 (never sends/fires)
     m h meets                            Scan cached list for Zoom/Meet links, pick one to open
 EOF
             ;;
@@ -2742,7 +2743,7 @@ fi
 # Read-intent flags recognized here: -p/--peek, -x/--headers, -A and the
 # attachment savers, -S/--save; read action words: the compose/read verbs.
 _pg_read_flags=" -p --peek -x --headers -A --save-attachments-only --open-attachments -S --save -t --text "
-_pg_read_actions=" reply reply-all fwd forward draft open trash archive unarchive thread read unread sfwd sreply sreply-all urls pdf grep peek "
+_pg_read_actions=" reply reply-all fwd forward draft open trash archive unarchive thread read unread sfwd sreply sreply-all urls unsub pdf grep peek "
 page_offset=""; page_size=10; filtered_rest=(); index_after_page=0; _seen_pp=0
 for r in "${rest[@]+"${rest[@]}"}"; do
     if [[ "$r" =~ ^pp([0-9]+)$ ]]; then
@@ -2822,9 +2823,9 @@ case "$action" in
             # `e` is included as the archive alias; it is normalized to
             # `archive` right after parse_action_args returns (see below), so
             # nothing downstream of that point sees the bare `e`.
-            action_words="reply reply-all fwd draft open trash archive unarchive e thread read unread sfwd sreply sreply-all urls pdf grep"
+            action_words="reply reply-all fwd draft open trash archive unarchive e thread read unread sfwd sreply sreply-all urls unsub pdf grep"
             if [[ "$has_trailing_open" == "1" ]]; then
-                action_words="reply reply-all fwd draft trash archive unarchive e thread read unread sfwd sreply sreply-all urls pdf grep"
+                action_words="reply reply-all fwd draft trash archive unarchive e thread read unread sfwd sreply sreply-all urls unsub pdf grep"
             fi
 
             # Delegate arg parsing to the shared helper; q-action treats rest[0] as query.
@@ -3695,7 +3696,7 @@ case "$action" in
         done
         if (( ${#rest[@]} >= _sg + 2 )) \
            && [[ "${rest[_sg]}" =~ ^[0-9]+$ ]] \
-           && [[ " reply reply-all fwd forward draft open trash archive unarchive thread read unread urls " == *" ${rest[_sg+1]} "* ]]; then
+           && [[ " reply reply-all fwd forward draft open trash archive unarchive thread read unread urls unsub " == *" ${rest[_sg+1]} "* ]]; then
             _idx="${rest[_sg]}"; _act="${rest[_sg+1]}"; _tail=("${rest[@]:_sg+2}")
             case "$_act" in
                 fwd|forward) _suggest="m out ${_idx} fwd ${_tail[*]}  (or: m sfwd ${_idx} ${_tail[*]})" ;;
@@ -3935,6 +3936,12 @@ case "$action" in
         ;;
     urls)
         # Extract URLs from message
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        ;;
+    unsub)
+        # Find one message's unsubscribe options and PRINT the commands to run.
+        # Read-only: the backend parses List-Unsubscribe headers (body-link
+        # fallback) and prints a ranked menu; it never sends or fires anything.
         exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     pdf)

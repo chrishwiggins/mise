@@ -3872,6 +3872,233 @@ def _is_meeting_url(url):
     return any(host == d or host.endswith('.' + d) for d in _MEETING_URL_HOSTS)
 
 
+# Anchor words that mark a body link as an unsubscribe/opt-out affordance, used
+# only for the FALLBACK path when a message carries no List-Unsubscribe header.
+# Matched case-insensitively against both the anchor text and the URL itself.
+_UNSUB_BODY_MARKERS = ("unsubscribe", "optout", "opt-out", "opt_out",
+                       "email-preferences", "email_preferences",
+                       "emailpreferences", "manage-preferences",
+                       "manage_preferences")
+
+
+def parse_unsubscribe(headers, body_urls_with_anchors):
+    """Rank a message's unsubscribe options. PURE: no network, no send.
+
+    Inputs:
+      headers -- a case-insensitive-ish dict of header name -> value. The two
+        that matter are 'List-Unsubscribe' (RFC 2369: a comma-separated list of
+        <URI> entries, each an https: URL or a mailto: URI) and
+        'List-Unsubscribe-Post' (RFC 8058: 'List-Unsubscribe=One-Click' when the
+        https: entry supports a one-click POST). Lookups are case-insensitive.
+      body_urls_with_anchors -- [(url, anchor_or_None), ...] as returned by
+        _extract_message_urls_with_anchors. Only consulted as a FALLBACK when
+        no List-Unsubscribe header exists.
+
+    Returns a ranked list of option dicts, best channel first:
+        {"channel": "https"|"mailto"|"body", "url_or_addr": str,
+         "one_click": bool, "source": "header"|"body"}
+    Ranking: one-click https > plain https > mailto > body-link fallback. Header
+    options always outrank the body fallback (the fallback is only produced when
+    there is no header at all). Empty list when nothing is found.
+    """
+    import re
+    from email.utils import parseaddr
+
+    # Case-insensitive header lookup that tolerates a plain dict.
+    def _h(name):
+        for k, v in headers.items():
+            if k.lower() == name.lower():
+                return v
+        return None
+
+    lu = _h("List-Unsubscribe")
+    lup = _h("List-Unsubscribe-Post")
+    one_click_declared = bool(lup and "one-click" in lup.lower())
+
+    https_opts = []   # (one_click, url)
+    mailto_opts = []  # addr
+
+    if lu:
+        # Each entry is wrapped in <...>; split on commas OUTSIDE the brackets.
+        for m in re.finditer(r"<([^>]*)>", lu):
+            uri = m.group(1).strip()
+            if not uri:
+                continue
+            low = uri.lower()
+            if low.startswith("https://") or low.startswith("http://"):
+                https_opts.append([False, uri])
+            elif low.startswith("mailto:"):
+                mailto_opts.append(uri)
+        # RFC 8058: One-Click applies to the https entry. Mark every https entry
+        # one-click when the message declares it (the header does not say WHICH
+        # https URL, and in practice a One-Click message carries exactly one).
+        if one_click_declared and https_opts:
+            for opt in https_opts:
+                opt[0] = True
+
+    ranked = []
+    # 1. one-click https first, 2. plain https, 3. mailto -- all header source.
+    for one_click, url in sorted(https_opts, key=lambda o: not o[0]):
+        ranked.append({"channel": "https", "url_or_addr": url,
+                       "one_click": one_click, "source": "header"})
+    for addr in mailto_opts:
+        ranked.append({"channel": "mailto", "url_or_addr": addr,
+                       "one_click": False, "source": "header"})
+
+    # 4. FALLBACK: no List-Unsubscribe header at all -> scrape a body link whose
+    # anchor text or URL names an unsubscribe/opt-out affordance. Labeled
+    # unverified; never produced when a header path exists.
+    if not lu:
+        seen = set()
+        for url, anchor in (body_urls_with_anchors or []):
+            hay = f"{url or ''} {anchor or ''}".lower()
+            if any(mark in hay for mark in _UNSUB_BODY_MARKERS):
+                if url and url not in seen:
+                    seen.add(url)
+                    ranked.append({"channel": "body", "url_or_addr": url,
+                                   "one_click": False, "source": "body"})
+
+    return ranked
+
+
+def _mailto_to_eml(addr_uri, sender_slug):
+    """Turn a mailto: unsubscribe URI into a DRAFT .eml written to /tmp. PURE
+    except for the file write; NEVER sends. Returns (eml_path, to_addr, subject).
+
+    Parses the mailto: To address and optional subject=/body= query params
+    (RFC 6068). Subject defaults to 'unsubscribe', body defaults to empty.
+    """
+    import re
+    from urllib.parse import urlsplit, parse_qs, unquote
+
+    parts = urlsplit(addr_uri)
+    to_addr = unquote(parts.path)
+    qs = parse_qs(parts.query)
+    subject = qs.get("subject", ["unsubscribe"])[0] or "unsubscribe"
+    body = qs.get("body", [""])[0]
+
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", (sender_slug or "sender")).strip("-").lower()
+    slug = slug or "sender"
+    eml_path = f"/tmp/unsub-{slug}.eml"
+    eml = (f"To: {to_addr}\n"
+           f"Subject: {subject}\n"
+           f"\n"
+           f"{body}\n")
+    with open(eml_path, "w") as fh:
+        fh.write(eml)
+    return eml_path, to_addr, subject
+
+
+def render_unsub_commands(options, sender, eml_writer=None):
+    """Render the copy/paste command for each ranked option. PURE (apart from
+    the mailto .eml write, delegated to eml_writer). NEVER fires or sends.
+
+    options -- output of parse_unsubscribe.
+    sender  -- the message's From, for display and for the mailto .eml slug.
+    eml_writer -- callable(addr_uri, sender_slug) -> (eml_path, to, subj);
+        defaults to _mailto_to_eml. Injectable so tests can avoid the file write.
+
+    Returns a list of row dicts:
+        {"channel", "label", "command", "note": str_or_None}
+    in the same order as `options` (already ranked best-first).
+    """
+    if eml_writer is None:
+        eml_writer = _mailto_to_eml
+
+    rows = []
+    for opt in options:
+        ch = opt["channel"]
+        target = opt["url_or_addr"]
+        if ch == "https" and opt["one_click"]:
+            rows.append({
+                "channel": "one-click https",
+                "label": "one-click unsubscribe (RFC 8058)",
+                "command": (f"curl -sS -X POST -d 'List-Unsubscribe=One-Click' "
+                            f"'{target}'"),
+                "note": ("a 200 is NOT proof it worked; if unsure, open the URL "
+                         "in a browser and confirm."),
+            })
+        elif ch == "https":
+            rows.append({
+                "channel": "https",
+                "label": "unsubscribe link (finish in browser)",
+                "command": f"open '{target}'",
+                "note": None,
+            })
+        elif ch == "mailto":
+            eml_path, to_addr, subject = eml_writer(target, sender)
+            rows.append({
+                "channel": "mailto",
+                "label": f"email {to_addr} (subject: {subject})",
+                "command": f"m send {eml_path}",
+                "note": (f"draft written to {eml_path}; review it, then run the "
+                         f"command yourself (nothing is sent for you)."),
+            })
+        elif ch == "body":
+            rows.append({
+                "channel": "body link (unverified)",
+                "label": "unsubscribe link scraped from message body",
+                "command": f"open '{target}'",
+                "note": ("no List-Unsubscribe header; this link came from the "
+                         "body and may not be a real unsubscribe endpoint."),
+            })
+    return rows
+
+
+def do_unsub(service, index, count, query, account=None):
+    """Find ONE message's unsubscribe options and PRINT the commands to run.
+
+    Reads the message at `index` (same index resolution as do_get/do_urls),
+    parses List-Unsubscribe / List-Unsubscribe-Post headers (with a body-link
+    fallback), and prints a ranked menu of options each with the exact command
+    for the user to run. This tool NEVER unsubscribes, NEVER sends mail, and
+    NEVER fires a network request beyond fetching the message itself: every
+    curl/open/`m send` line is TEXT for the user to run, not executed here.
+    """
+    msg_id = _resolve_message_id(service, index, count, query, account=account)
+
+    raw_msg = _retry_api_call(lambda: service.users().messages().get(
+        userId="me", id=msg_id, format="raw"
+    ).execute())
+    raw_bytes = base64.urlsafe_b64decode(raw_msg["raw"])
+
+    msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
+    sender = msg.get("From", "(unknown sender)")
+    subject = msg.get("Subject", "(no subject)")
+
+    headers = {
+        "List-Unsubscribe": msg.get("List-Unsubscribe"),
+        "List-Unsubscribe-Post": msg.get("List-Unsubscribe-Post"),
+    }
+    # Drop absent headers so parse_unsubscribe's case-insensitive lookup only
+    # sees real values.
+    headers = {k: v for k, v in headers.items() if v is not None}
+
+    # Body fallback only matters when there is no List-Unsubscribe header, but
+    # computing it unconditionally is cheap and keeps the pure helper simple.
+    body_pairs = _extract_message_urls_with_anchors(raw_bytes)
+
+    options = parse_unsubscribe(headers, body_pairs)
+
+    print(f"From:    {sender}", file=sys.stderr)
+    print(f"Subject: {subject}", file=sys.stderr)
+
+    if not options:
+        print("No unsubscribe option found in headers or body.", file=sys.stderr)
+        return
+
+    rows = render_unsub_commands(options, sender)
+    print(f"\n{len(rows)} unsubscribe option(s), best first:\n", file=sys.stderr)
+    for n, row in enumerate(rows, 1):
+        print(f"  [{n}] {row['channel']}: {row['label']}", file=sys.stderr)
+        print(f"      {row['command']}", file=sys.stderr)
+        if row["note"]:
+            print(f"      note: {row['note']}", file=sys.stderr)
+        print("", file=sys.stderr)
+    print("Nothing was sent or fired. Run a command above yourself to act.",
+          file=sys.stderr)
+
+
 def do_meets(service, count, query, account=None):
     """Scan the most recently cached message list for Zoom/Meet links.
 
@@ -5186,7 +5413,7 @@ def main():
         if arg in ("-F", "--config", "-e", "--email", "-n", "--count", "-q", "--query"):
             skip_next = True  # next arg is the flag's value
             continue
-        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "unarchive", "open", "thread", "read", "unread", "inbox", "urls", "meets", "pdf"):
+        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "unarchive", "open", "thread", "read", "unread", "inbox", "urls", "unsub", "meets", "pdf"):
             mode = arg
             mode_index = i
             break
@@ -5451,6 +5678,23 @@ def main():
             query = "in:inbox"
         do_urls(service, msg_index, args.count, query, account=login_hint,
                 url_index=url_index, display=display_mode)
+    elif mode == "unsub":
+        # Read ONE message and PRINT its unsubscribe options. Same single-index
+        # resolution as do_get/do_urls. Never sends, never fires a request past
+        # fetching the message. `--scan` (an inbox sweep) is a SEPARATE later
+        # phase and is not implemented here; a bare `unsub` with no index
+        # defaults to message #1 rather than erroring ugly.
+        mode_rest = [a for a in rest if a != mode]
+        indices, filtered_rest = collect_indices(mode_rest)
+        args = parse_list_get_args(filtered_rest)
+        msg_index = indices[0] if indices else 1
+        service, login_hint = _authenticated_service(args, "gmail-readonly")
+        query = args.query
+        if sent_mode:
+            query = f"in:sent {query}" if query else "in:sent"
+        elif not query:
+            query = "in:inbox"
+        do_unsub(service, msg_index, args.count, query, account=login_hint)
     elif mode == "meets":
         mode_rest = [a for a in rest if a != mode]
         args = parse_list_get_args(mode_rest)
