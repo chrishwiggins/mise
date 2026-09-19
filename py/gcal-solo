@@ -3,19 +3,57 @@
 import sys
 import os
 import argparse
+from pathlib import Path
 from google_auth import get_credentials
 from googleapiclient.discovery import build
 
+TOKEN_DIR = Path("~/.config/google-tokens").expanduser()
 
-def get_authenticated_service():
-    """Get authenticated Google Calendar service"""
-    creds = get_credentials(service="calendar", scopes="calendar")
+# The bare calendar.pickle default is already authorized as this account, so -A
+# for it must reuse that token rather than open a second OAuth flow for a
+# calendar-chris-wiggins-at-gmail-com.pickle that has never existed.
+DEFAULT_TOKEN_ACCOUNT = "chris.wiggins@gmail.com"
+
+
+def token_name_for(account):
+    """Token filename stem for an account, matching gcal-invite's convention."""
+    return f"calendar-{account.replace('@', '-at-').replace('.', '-')}"
+
+
+def get_authenticated_service(account=None):
+    """Get authenticated Google Calendar service, optionally for one account"""
+    kwargs = {"service": "calendar", "scopes": "calendar"}
+    if account and account != DEFAULT_TOKEN_ACCOUNT:
+        kwargs["token_name"] = token_name_for(account)
+        kwargs["login_hint"] = account
+    creds = get_credentials(**kwargs)
     return build("calendar", "v3", credentials=creds)
 
 
-def quick_add(text):
+def list_accounts():
+    """Accounts with a calendar token already on disk."""
+    if not TOKEN_DIR.exists():
+        return []
+    accounts = set()
+    if (TOKEN_DIR / "calendar.pickle").exists():
+        accounts.add(DEFAULT_TOKEN_ACCOUNT)
+    for token_file in TOKEN_DIR.glob("calendar-*-at-*.pickle"):
+        account = token_file.stem[len("calendar-"):]
+        account = account.replace("-at-", "@").replace("-", ".")
+        if account.count("@") == 1:
+            accounts.add(account)
+    return sorted(accounts)
+
+
+def whoami(account=None):
+    """Return the calendar id this account's token actually writes to."""
+    service = get_authenticated_service(account)
+    return service.calendars().get(calendarId="primary").execute().get("id")
+
+
+def quick_add(text, account=None):
     """Create calendar event using Google Quick Add syntax"""
-    service = get_authenticated_service()
+    service = get_authenticated_service(account)
     if not service:
         return False, None
 
@@ -24,6 +62,7 @@ def quick_add(text):
 
         print("✅ Event created successfully!")
         print(f"📅 {event.get('summary', 'No title')}")
+        print(f"👤 on {event.get('organizer', {}).get('email', account or 'default calendar')}")
 
         # Format time
         start = event.get("start", {})
@@ -53,19 +92,42 @@ def quick_add(text):
 
 
 def show_usage():
+    known = list_accounts()
+    if known:
+        account_lines = "\n".join(f"  -A {a}" for a in known)
+    else:
+        account_lines = "  (no calendar tokens yet; -A <account> will run the OAuth flow)"
+
     print(
-        """
-Usage: gcal-solo [-o] "<natural language text>"
+        f"""
+Usage: gcal-solo [-A ACCOUNT] [-o] "<natural language text>"
 
 Create calendar events (no attendees) using Google's Quick Add natural language syntax.
 
+WHICH CALENDAR THE EVENT LANDS ON
+  Without -A, the event goes to the default calendar token, which is currently
+  chris.wiggins@gmail.com. Pass -A to pick a different one:
+
+    gcal-solo -A chw2@columbia.edu       "Office hours Thu 2pm"
+    gcal-solo -A chris.wiggins@gmail.com "Dinner with Aya Fri 7pm"
+    gcal-solo -A chris@hackny.org        "Board prep Mon 9am"
+
+  Each account gets its own token at ~/.config/google-tokens/calendar-<acct>.pickle.
+  The first use of a new -A account opens an OAuth browser flow; after that it is cached.
+
+Accounts with a calendar token on this machine:
+{account_lines}
+
 Options:
-  -o, --open    Open the event URL in Chrome after creation
+  -A, --account ACCOUNT   Calendar account to create the event on
+      --list-accounts     List accounts that already have a calendar token, and exit
+      --whoami            Print the calendar id -A (or the default) resolves to, and exit
+  -o, --open              Open the event URL in Chrome after creation
 
 Examples:
   gcal-solo "Lunch with Bob tomorrow at noon"
   gcal-solo --open "Team meeting Friday 2pm"
-  gcal-solo "Doctor appointment next Monday at 3:30pm"
+  gcal-solo -A chw2@columbia.edu "Doctor appointment next Monday at 3:30pm"
   gcal-solo "Conference call 10am to 11am"
   gcal-solo "Vacation Dec 23-30"
 
@@ -75,7 +137,8 @@ Google Quick Add supports:
   - All-day events: "Vacation Dec 25-30"
   - Duration: "Meeting 2pm for 2 hours"
 
-Note: Quick Add doesn't support attendees. For invites, use gcal-invite.
+Note: Quick Add doesn't support attendees. For invites, use gcal-invite,
+      which takes the same -A/--account flag.
 """
     )
 
@@ -84,6 +147,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Create calendar events using Google Quick Add syntax",
         add_help=False,
+    )
+    parser.add_argument(
+        "-A", "--account", help="Calendar account (e.g. chw2@columbia.edu)"
+    )
+    parser.add_argument(
+        "--list-accounts",
+        action="store_true",
+        help="List accounts with a calendar token and exit",
+    )
+    parser.add_argument(
+        "--whoami",
+        action="store_true",
+        help="Print the calendar id this account resolves to and exit",
     )
     parser.add_argument(
         "-o", "--open",
@@ -97,6 +173,22 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    if args.list_accounts:
+        accounts = list_accounts()
+        if accounts:
+            print("\n".join(accounts))
+        else:
+            print("No calendar tokens in ~/.config/google-tokens/")
+        sys.exit(0)
+
+    if args.whoami:
+        try:
+            print(whoami(args.account))
+            sys.exit(0)
+        except Exception as e:
+            print(f"❌ {e}")
+            sys.exit(1)
+
     if args.help or not args.text:
         show_usage()
         sys.exit(0)
@@ -104,7 +196,7 @@ if __name__ == "__main__":
     # Join all text arguments as the event text
     event_text = " ".join(args.text)
 
-    success, event_url = quick_add(event_text)
+    success, event_url = quick_add(event_text, account=args.account)
 
     if success:
         if args.open and event_url:
