@@ -1,0 +1,90 @@
+#!/usr/bin/env python3.11
+"""draft-orig: keep the text a draft had BEFORE a human edited it, and diff later.
+
+A checker that compares sent mail with the draft file on disk can never show
+what the human changed, because the human's edits are already in that file.
+The only way to see them is to have kept the draft as it was handed over.
+
+usage:
+  draft-orig save <file>     snapshot the file as it is now (call this right
+                             before opening it in an editor)
+  draft-orig diff <file>     show how the file on disk differs from the snapshot
+  draft-orig path <file>     print where the snapshot lives
+
+For .eml files the diff ignores headers and everything from the first
+"On ... wrote:" line down, so only the authored body is compared, and it
+ignores pure re-wrapping of a paragraph. Snapshots live under
+~/.cache/draft-orig/, keyed by the file's absolute path, so they survive the
+session that made them. Exit status of `diff`: 0 no edits, 1 edits, 2 no
+snapshot.
+"""
+import difflib
+import re
+import shutil
+import sys
+from pathlib import Path
+
+STORE = Path.home() / ".cache" / "draft-orig"
+
+
+def snap_path(f: Path) -> Path:
+    key = re.sub(r"[^A-Za-z0-9._-]", "-", str(f.resolve())).strip("-")
+    return STORE / key
+
+
+def authored_body(text: str, is_eml: bool) -> list[str]:
+    if is_eml:
+        _, sep, rest = text.partition("\n\n")
+        text = rest if sep else text
+        cut = re.search(r"^On .*wrote:\s*$", text, flags=re.M)
+        if cut:
+            text = text[:cut.start()]
+    # compare paragraph by paragraph with whitespace collapsed, so re-wrapping
+    # a paragraph is not reported as an edit
+    paras = re.split(r"\n\s*\n", text.strip())
+    out = []
+    for para in paras:
+        lines = para.splitlines()
+        if any(l.lstrip().startswith(("-", "*")) for l in lines):
+            out.extend(" ".join(l.split()) for l in lines if l.strip())
+        else:
+            out.append(" ".join(para.split()))
+    return [p for p in out if p]
+
+
+def main() -> int:
+    if len(sys.argv) != 3 or sys.argv[1] not in ("save", "diff", "path"):
+        print(__doc__)
+        return 2
+    cmd, f = sys.argv[1], Path(sys.argv[2])
+    snap = snap_path(f)
+    if cmd == "path":
+        print(snap)
+        return 0
+    if not f.exists():
+        print(f"draft-orig: no such file: {f}", file=sys.stderr)
+        return 2
+    if cmd == "save":
+        STORE.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, snap)
+        print(f"draft-orig: snapshot saved ({snap.stat().st_size} bytes) -> {snap}")
+        return 0
+    if not snap.exists():
+        print(f"draft-orig: NO SNAPSHOT for {f}; edits cannot be determined. "
+              f"Do not report this draft as unedited.", file=sys.stderr)
+        return 2
+    is_eml = f.suffix.lower() == ".eml"
+    a = authored_body(snap.read_text(errors="replace"), is_eml)
+    b = authored_body(f.read_text(errors="replace"), is_eml)
+    diff = [d for d in difflib.unified_diff(a, b, "as handed over", "as saved",
+                                            lineterm="", n=0)
+            if not d.startswith("@@")]
+    if len(diff) <= 2:
+        print("draft-orig: NO EDITS; the file on disk matches what was handed over")
+        return 0
+    print("\n".join(diff))
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
