@@ -1,0 +1,84 @@
+#!/usr/bin/env python3.11
+"""last-with: what was last said to and from one person, in EVERY account.
+
+A thread does not stay in one mailbox. A correspondent answers whichever
+address wrote last, so a conversation that began in the Columbia account can
+continue in the personal one, and a search of a single account then shows a
+stale message as the newest. Run this before drafting anything to a person.
+
+usage: last-with <fragment> [days]
+
+  fragment   local-part or name fragment, e.g. bt2314 or maceo (no @ needed)
+  days       how far back to look, default 7
+
+Prints, per distinct account, the inbound and outbound listings that gmails
+returns for from:<fragment> and to:<fragment>. Read-only.
+"""
+import subprocess
+import sys
+from pathlib import Path
+
+GMAILS = str(Path(__file__).resolve().parent / "gmails")
+
+
+def accounts():
+    """Distinct accounts from `gmails -E`, first alias wins per address."""
+    out = subprocess.run([GMAILS, "-E"], capture_output=True, text=True).stdout
+    seen, result = set(), []
+    for line in out.splitlines():
+        if ":" not in line:
+            continue
+        alias, _, addr = line.strip().partition(":")
+        addr = addr.strip()
+        if addr and addr not in seen:
+            seen.add(addr)
+            result.append((alias.strip(), addr))
+    return result
+
+
+def listing(alias, query, outbound):
+    cmd = [GMAILS, "-e", alias]
+    if outbound:
+        cmd.append("out")
+    cmd += ["-q", query]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    rows = [l for l in res.stdout.splitlines() if l.strip()]
+    return rows
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        return 0 if len(sys.argv) >= 2 else 2
+    frag = sys.argv[1]
+    days = sys.argv[2] if len(sys.argv) > 2 else "7"
+    accts = accounts()
+    if not accts:
+        print("last-with: gmails -E listed no accounts", file=sys.stderr)
+        return 1
+    total = 0
+    for alias, addr in accts:
+        inbound = listing(alias, f"from:{frag} newer_than:{days}d", False)
+        outbound = listing(alias, f"to:{frag} newer_than:{days}d", True)
+        hits = [r for r in inbound + outbound if "No messages found" not in r]
+        if not hits:
+            continue
+        print(f"## {alias} ({addr})")
+        if any("No messages found" not in r for r in inbound):
+            print("  FROM them:")
+            for r in inbound:
+                print("   ", r)
+        if any("No messages found" not in r for r in outbound):
+            print("  TO them:")
+            for r in outbound:
+                print("   ", r)
+        total += 1
+    if total == 0:
+        print(f"nothing to or from '{frag}' in the last {days}d, "
+              f"searched {len(accts)} accounts: "
+              + ", ".join(a for a, _ in accts))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
