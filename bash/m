@@ -1256,6 +1256,39 @@ _sent_clip() {
     } >&2
 }
 
+# True when $1 is a readable file whose header block carries a Subject: with a
+# non-empty value. Used to suppress the interactive Subject prompt on the SMTP
+# compose path when the send already names a header file that has its own
+# Subject (e.g. `m send /tmp/w`, a mutt-style draft with `Subject: wake/dep`).
+# Anchored to a real header line and requires at least one non-space char after
+# the colon, so a bare `Subject:` (empty value) still prompts. Cheap grep, no
+# body scan needed for correctness (a "Subject:" appearing later in the body is
+# a false positive, but only suppresses a prompt, never sends anything blank).
+_file_has_subject() {
+    local _f="$1"
+    [[ -f "$_f" ]] && grep -qiE '^Subject:[[:space:]]*[^[:space:]]' "$_f"
+}
+
+# True when $1 should be sent as a mutt-style header file (routed via -H), not
+# treated as a compose recipient. Two ways to qualify:
+#   1. the name ends in .eml (the historical contract; unchanged), OR
+#   2. it is an existing REGULAR file whose content looks like a mail header
+#      block -- at least one non-empty To: or From: line.
+# The `-f` gate is the critical send-path guard: a recipient like
+# user@example.com is NOT a file, so it can never be misread as a draft. An
+# `@`-containing arg that is not an existing file stays a recipient exactly as
+# before. A plain text file with no To:/From: header is NOT routed to -H, so a
+# random file handed to `m send` still composes rather than being shipped.
+# Motivating case 2026-09-18: `m send /tmp/w`, a draft with From:/To:/Subject:
+# but no .eml extension, was passed to neomutt as a positional address instead
+# of via -H, losing its headers and body.
+_is_send_file() {
+    local _f="$1"
+    [[ "$_f" == *.eml ]] && return 0
+    [[ -f "$_f" ]] || return 1
+    grep -qiE '^(To|From):[[:space:]]*[^[:space:]]' "$_f"
+}
+
 direct_send() {
     local -a send_args=("$@")
 
@@ -1379,10 +1412,12 @@ direct_send() {
         fi
     fi
 
-    # Check if we have .eml files (file mode)
+    # Check if we have a header file to send (file mode): a .eml by name, or any
+    # existing regular file whose content is a mail header block (To:/From:).
+    # See _is_send_file for the recipient-vs-file guard.
     local file_mode=0
     for arg in "${args[@]}"; do
-        if [[ "$arg" == *.eml ]]; then
+        if _is_send_file "$arg"; then
             file_mode=1
             break
         fi
@@ -1392,7 +1427,7 @@ direct_send() {
     if (( file_mode )); then
         # File send mode
         for arg in "${args[@]}"; do
-            if [[ "$arg" == *.eml ]]; then
+            if _is_send_file "$arg"; then
                 if [[ ! -f "$arg" ]]; then
                     log_error "file not found: $arg"
                     return 1
@@ -1628,9 +1663,21 @@ direct_send() {
         #   - not on dry-run
         # Empty input just falls through (neomutt's abort_nosubject still
         # applies), so hitting Return changes nothing about the old flow.
+        # Does any positional arg name a header file that already carries a
+        # non-empty Subject:? If so, neomutt reads that Subject and prompting
+        # is both redundant and a hang: 2026-09-18 `m send /tmp/w` (a mutt-style
+        # draft with `Subject: wake/dep`, no .eml extension so it never entered
+        # file_mode) sat waiting for tty input and had to be ^C'd twice.
+        local _eml_has_subject=0
+        for arg in "${args[@]}"; do
+            if _file_has_subject "$arg"; then _eml_has_subject=1; break; fi
+        done
+
         local -a subject_args=()
         if [[ -n "$subject" ]]; then
             subject_args=(-s "$subject")
+        elif (( _eml_has_subject )); then
+            : # header file supplies its own Subject; do not prompt, pass no -s
         elif (( ! dry_run )) && [[ -t 0 && -t 2 ]]; then
             local _prompt_subject=""
             read -r -e -p "Subject: " _prompt_subject </dev/tty
