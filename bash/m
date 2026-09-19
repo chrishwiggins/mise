@@ -2841,6 +2841,26 @@ if [[ -n "$gmail_flag" ]]; then
     fi
 fi
 
+# --all / --spam scope for the ACCOUNT-WORD-FIRST action paths (`m u --all N
+# urls`, `m u --all N e`, `m u --all N pdf`, and the archive/unarchive/thread/
+# read/unread/open/trash passthrough). Those branches exec the backend as
+# `gmail-api-rw <acct> <action> <rest>` with NO -q, so they resolved the index
+# against the backend's default in:inbox and --all was silently dropped: index
+# N pointed at the WRONG message (caught 2026-09-19: `m u --all 1 urls` returned
+# an in:inbox PayPal message's URLs, not all-mail #1). Chris's decision: --all
+# scopes the WHOLE command. We inject `-q "<scope>"` so index resolution happens
+# against the all-mail (or spam) listing; this only changes WHICH message N
+# resolves to, not what any action does. scope_qargs stays EMPTY unless a scope
+# flag is set, so default (inbox) behavior is untouched. Deliberately NOT applied
+# to compose/send verbs (reply/reply-all/fwd/draft/sfwd/sreply/sreply-all): the
+# task is a read-scope fix and must not touch any send/compose path.
+scope_qargs=()
+if (( all_mail_flag )); then
+    scope_qargs=(-q "in:anywhere")
+elif (( spam_mail_flag )); then
+    scope_qargs=(-q "in:spam")
+fi
+
 # ========================================================================
 # § ACTION ROUTER — dispatch on $action
 # ========================================================================
@@ -2894,6 +2914,40 @@ case "$action" in
                     query_string="in:inbox ${_vf_excludes}"
                 fi
             fi
+            # --all / --spam scope MUST be folded into query_string HERE, before
+            # the action-word dispatch (the `exec gmail-api-rw ... -q "$query_string"`
+            # a few lines below) and before the trailing-ppN re-scope. Folding it
+            # only in the listing branch further down meant `m u --all N <action>`
+            # (urls, e/archive, unarchive, pdf, open, thread, read, unread, grep)
+            # exec'd against the DEFAULT inbox scope, so index N resolved against
+            # in:inbox instead of all-mail and acted on the WRONG message
+            # (caught 2026-09-19: `m u --all 1 urls` returned a PayPal message's
+            # URLs from in:inbox, not the all-mail #1). all_mail_flag/spam_mail_flag
+            # are set by the top-level parser (--all/--spam are consumed there
+            # regardless of position), so both are already authoritative at this
+            # point. Whole-command scope is Chris's decision: --all scopes the
+            # index resolution for EVERY action path, not just listings. This only
+            # changes WHICH message index N resolves to; it does not alter what any
+            # action does, and no send/compose path passes through here.
+            # Order mirrors the (now-removed) listing-path fold: --all first, then
+            # --spam, so if BOTH are somehow given --spam ends up outermost (its
+            # documented precedence). all_mail_scope_folded guards the dead late
+            # block below from double-prefixing.
+            if (( all_mail_flag )); then
+                if [[ -n "$query_string" ]]; then
+                    query_string="in:anywhere ${query_string}"
+                else
+                    query_string="in:anywhere"
+                fi
+            fi
+            if (( spam_mail_flag )); then
+                if [[ -n "$query_string" ]]; then
+                    query_string="in:spam ${query_string}"
+                else
+                    query_string="in:spam"
+                fi
+            fi
+            all_mail_scope_folded=1
             peek_flag=0
             message_numbers=("${PA_MESSAGE_NUMBERS[@]+"${PA_MESSAGE_NUMBERS[@]}"}")
             filtered_args=()
@@ -3109,26 +3163,27 @@ case "$action" in
                 esac
             done
 
-            # --all: widen scope to everything, Spam and Trash included. Done
-            # here, after the flag scan and before any backend call, so every
-            # downstream path (peek, list, read-one, normal) inherits it.
-            if (( all_mail_flag )); then
-                if [[ -n "$query_string" ]]; then
-                    query_string="in:anywhere ${query_string}"
-                else
-                    query_string="in:anywhere"
+            # --all / --spam scope was already folded into query_string above,
+            # before the action-word dispatch and ppN re-scope, so that ACTION
+            # paths (urls/e/archive/pdf/...) resolve their index against the same
+            # scope a bare listing shows (fixed 2026-09-19). all_mail_scope_folded
+            # is set there. The rest[] scan above can (defensively) still flip
+            # all_mail_flag/spam_mail_flag, so re-fold ONLY if the early fold did
+            # not run, and never double-prefix.
+            if [[ -z "${all_mail_scope_folded:-}" ]]; then
+                if (( all_mail_flag )); then
+                    if [[ -n "$query_string" ]]; then
+                        query_string="in:anywhere ${query_string}"
+                    else
+                        query_string="in:anywhere"
+                    fi
                 fi
-            fi
-
-            # --spam: narrow scope to spam folder only. Takes precedence over
-            # --all if both are given (spam is more specific). Done here, after
-            # the flag scan and before any backend call, so every downstream path
-            # (peek, list, read-one, normal) inherits it.
-            if (( spam_mail_flag )); then
-                if [[ -n "$query_string" ]]; then
-                    query_string="in:spam ${query_string}"
-                else
-                    query_string="in:spam"
+                if (( spam_mail_flag )); then
+                    if [[ -n "$query_string" ]]; then
+                        query_string="in:spam ${query_string}"
+                    else
+                        query_string="in:spam"
+                    fi
                 fi
             fi
 
@@ -3973,33 +4028,44 @@ case "$action" in
         if [[ "$action" == "archive" ]] && (( dry_run )); then
             rest+=("--dry-run")
         fi
+        # Compose/send verbs must NOT be re-scoped: the read-scope fix leaves
+        # every send/compose path exactly as it was. Read/label verbs
+        # (archive/unarchive/thread/read/unread/open/trash) DO get the --all/
+        # --spam scope so their index resolves against the same listing a bare
+        # `m u --all` shows. _sq holds scope_qargs for the latter, empty for the
+        # former (and empty whenever no scope flag was given).
+        if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all|draft)$ ]]; then
+            _sq=()
+        else
+            _sq=("${scope_qargs[@]+"${scope_qargs[@]}"}")
+        fi
         # Special handling for reply/fwd actions: default to message #1 if no index provided
         if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all)$ ]] && [[ ${#rest[@]} -eq 0 ]]; then
             log_warn "No message index provided, assuming message #1"
             exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "1"
         else
-            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "${_sq[@]+"${_sq[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         fi
         ;;
     urls)
         # Extract URLs from message
-        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "${scope_qargs[@]+"${scope_qargs[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     unsub)
         # Find one message's unsubscribe options and PRINT the commands to run.
         # Read-only: the backend parses List-Unsubscribe headers (body-link
         # fallback) and prints a ranked menu; it never sends or fires anything.
-        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "${scope_qargs[@]+"${scope_qargs[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     pdf)
         # Render one PDF per selected message into /tmp/spool/pdf/. The backend
         # does all index/range parsing and fan-out (e.g. `m 1-4,5 pdf`).
-        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "${scope_qargs[@]+"${scope_qargs[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     meets)
         # Scan the most recently cached message list for Zoom/Meet links
         # and offer a menu to open one. e.g. `m h meets`.
-        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "${scope_qargs[@]+"${scope_qargs[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     scheduled)
         # Manage scheduled sends
