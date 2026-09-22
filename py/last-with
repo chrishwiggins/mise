@@ -74,9 +74,28 @@ def main():
                 print("   ", r)
         total += 1
     if total == 0:
-        print(f"nothing to or from '{frag}' in the last {days}d, "
-              f"searched {len(accts)} accounts: "
-              + ", ".join(a for a, _ in accts))
+        # A zero here is a claim Chris may act on ("she has not written"), and the
+        # likeliest cause is a WRONG FRAGMENT rather than real silence. So prove the
+        # probe ran: widen the same query to a year, and if that hits, the fragment is
+        # fine and the silence is real; if a year is also empty, say the fragment
+        # matches nothing ever, which is a different finding and usually a typo.
+        ever = 0
+        for alias, _addr in accts:
+            rows = listing(alias, f"from:{frag} newer_than:365d", False)
+            rows += listing(alias, f"to:{frag} newer_than:365d", True)
+            ever += sum(1 for r in rows if "No messages found" not in r)
+        acct_list = ", ".join(a for a, _ in accts)
+        if ever:
+            print(f"nothing to or from '{frag}' in the last {days}d, "
+                  f"searched {len(accts)} accounts: {acct_list}")
+            print(f"  (fragment is good: {ever} message(s) in the last 365d, "
+                  f"so this silence is real for this window)")
+        else:
+            print(f"NO MESSAGES EVER for fragment '{frag}' in {len(accts)} accounts "
+                  f"({acct_list}), searched 365d.")
+            print("  Do NOT report this as 'they have not written'. A fragment that")
+            print("  matches nothing in a year is almost always wrong: try the")
+            print("  local-part of their actual address, or a distinctive name word.")
     return 0
 
 
