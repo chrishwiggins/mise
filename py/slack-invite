@@ -1,0 +1,327 @@
+#!/usr/bin/python3
+"""Invite people to a Slack channel via the Web API (companion to slack-post).
+
+Runs as the token owner (a USER token, xoxp-), so it invites with YOUR own
+permissions: whoever you could add in the Slack UI, this can add. There is no
+bot and no "bot must be in the channel" caveat; you only have to be a member of
+the target channel yourself.
+
+SCOPE: a private channel (groups) needs groups:write; a public channel needs
+channels:write. If the token lacks it, Slack says missing_scope and this tool
+prints which scope to add. Resolving a person needs users:read (already on the
+apma2026 token).
+
+COHORT GUARD (course-specific, opt-in via --seniors-channel / --juniors-channel
+or the built-in APMA default): a junior (4901) does not belong in a seniors-only
+(4903) channel and vice versa. When the target channel is flagged as one
+cohort's channel, this tool REFUSES to invite a member of the other cohort
+unless --force-cohort is given. Classification comes from the roster TSVs
+(students-4901.tsv / students-4903.tsv) found next to the invocation.
+
+Invites ARE reversible (you can kick), but this still asks before acting: it
+prints every resolved target, its cohort, and the channel, then requires --yes
+or a typed "yes" on the tty. --dry-run resolves, classifies, and prints, but
+calls no invite method.
+
+Usage:
+    slack-invite --channel C0C0J792ZL5 ag5289 kd3143         # UNIs
+    slack-invite --channel C0C0J792ZL5 --file unis.txt       # one per line
+    slack-invite --channel C0... u3.j@columbia.edu U09ABC    # email / slack id ok
+    slack-invite --channel C0... --dry-run ag5289            # classify+resolve, no invite
+    slack-invite --channel C0... --force-cohort jr123        # override the guard
+    slack-invite --whoami
+
+Targets may be a Slack user id (U...), an email, or a UNI/roster local-part.
+"""
+import argparse
+import csv
+import json
+import os
+import pathlib
+import sys
+import urllib.parse
+import urllib.request
+
+API = "https://slack.com/api/"
+
+# The APMA seminar seniors-only private channel; a junior must NOT be added here
+# without --force-cohort. Empty juniors id: no default junior channel is wired.
+APMA_SENIORS_CHANNEL = "C0C0J792ZL5"
+
+
+def token():
+    t = os.environ.get("SLACK_TOKEN")
+    if t:
+        return t.strip()
+    path = os.path.expanduser("~/.config/slack/token")
+    try:
+        with open(path) as fh:
+            return fh.readline().strip()
+    except OSError:
+        sys.exit(
+            "no token: set $SLACK_TOKEN or put one in ~/.config/slack/token\n"
+            "needs a USER token (xoxp-) with groups:write (private) or channels:write (public)"
+        )
+
+
+HINTS = {
+    "not_in_channel": "you are not a member of that channel; join it in Slack first",
+    "channel_not_found": "wrong channel id, wrong workspace, or a private channel you cannot see",
+    "missing_scope": (
+        "add the scope Slack names above (groups:write for a private channel,\n"
+        "  channels:write for a public one; users:read to resolve names), then\n"
+        "  REINSTALL the app and copy the new xoxp- token"
+    ),
+    "invalid_auth": "token revoked, expired, or app uninstalled; remint it",
+    "cant_invite_self": "you cannot invite yourself",
+    "already_in_channel": "that user is already in the channel",
+    "cant_invite": "you lack permission to invite to that channel",
+    "ratelimited": "too many calls; wait and retry",
+    "user_not_found": "resolved to a bad user id",
+}
+
+
+def _check(method, r):
+    if not r.get("ok"):
+        err = r.get("error", "unknown")
+        msg = "slack api error on %s: %s" % (method, err)
+        if r.get("needed"):
+            msg += "\n  needs scope: %s" % r["needed"]
+        if err in HINTS:
+            msg += "\n  " + HINTS[err]
+        raise SlackError(err, msg)
+    return r
+
+
+class SlackError(Exception):
+    def __init__(self, code, msg):
+        super().__init__(msg)
+        self.code = code
+
+
+def get(method, **params):
+    url = API + method + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token()})
+    return _check(method, json.load(urllib.request.urlopen(req)))
+
+
+def post(method, **params):
+    data = urllib.parse.urlencode(params).encode()
+    req = urllib.request.Request(
+        API + method, data=data,
+        headers={"Authorization": "Bearer " + token(),
+                 "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    return _check(method, json.load(urllib.request.urlopen(req)))
+
+
+# ---- roster / cohort ----------------------------------------------------
+
+def _find_dat():
+    """Walk up from CWD to find a dir with dat/students-4901.tsv."""
+    here = pathlib.Path.cwd()
+    for d in [here] + list(here.parents):
+        if (d / "dat" / "students-4901.tsv").exists():
+            return d / "dat"
+    return None
+
+
+def load_rosters(dat):
+    """Return {local_part_or_uni_lower: ('4901'|'4903', email, first)}."""
+    table = {}
+    if dat is None:
+        return table
+    for course, fname in (("4901", "students-4901.tsv"), ("4903", "students-4903.tsv")):
+        p = dat / fname
+        if not p.exists():
+            continue
+        with open(p) as fh:
+            for row in csv.DictReader(fh, delimiter="\t"):
+                email = (row.get("email") or "").strip().lower()
+                if not email:
+                    continue
+                local = email.split("@")[0]
+                table[email] = (course, email, row.get("first", ""))
+                table[local] = (course, email, row.get("first", ""))
+    return table
+
+
+def load_crosswalk(dat):
+    """Return {key_lower: slack_id} from slack-crosswalk.tsv (seniors)."""
+    xw = {}
+    if dat is None:
+        return xw
+    p = dat / "slack-crosswalk.tsv"
+    if not p.exists():
+        return xw
+    with open(p) as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            sid = (row.get("slack_id") or "").strip()
+            if not sid:
+                continue
+            for k in (row.get("roster_key"), row.get("email"), row.get("slack_uni")):
+                if k:
+                    xw[k.strip().lower()] = sid
+    return xw
+
+
+# ---- resolution ---------------------------------------------------------
+
+_users_cache = None
+
+
+def _all_users():
+    global _users_cache
+    if _users_cache is not None:
+        return _users_cache
+    out = []
+    cursor = ""
+    while True:
+        r = get("users.list", limit=200, cursor=cursor)
+        out.extend(r.get("members", []))
+        cursor = r.get("response_metadata", {}).get("next_cursor", "")
+        if not cursor:
+            break
+    _users_cache = out
+    return out
+
+
+def resolve(target, rosters, xw):
+    """A target -> (slack_id, cohort, note). Raises ValueError if unresolvable."""
+    t = target.strip().lstrip("@")
+    key = t.lower()
+    cohort = rosters.get(key, (None,))[0] if rosters.get(key) else None
+
+    # explicit slack id
+    if t.startswith("U") and t == t.upper() and len(t) >= 8:
+        return t, cohort, "explicit id"
+
+    # crosswalk fast path (seniors)
+    if key in xw:
+        return xw[key], cohort or "4903", "crosswalk"
+
+    # roster -> real first name -> live users.list; also try email/handle directly
+    roster = rosters.get(key)
+    email = roster[1] if roster else (t if "@" in t else None)
+    for m in _all_users():
+        prof = m.get("profile", {})
+        if email and prof.get("email", "").lower() == email:
+            return m["id"], cohort, "users.list email"
+        if m.get("name", "").lower() == key or prof.get("display_name", "").lower() == key:
+            return m["id"], cohort, "users.list handle"
+    # match by roster real first name against real_name (last-resort, ambiguous)
+    if roster and roster[2]:
+        first = roster[2].lower()
+        hits = [m for m in _all_users()
+                if m.get("real_name", "").lower().split()[:1] == [first]]
+        if len(hits) == 1:
+            return hits[0]["id"], cohort, "users.list first-name (unique)"
+        if len(hits) > 1:
+            raise ValueError("%r matches %d Slack users by first name; give a slack id"
+                             % (target, len(hits)))
+    raise ValueError("could not resolve %r (tried slack id, crosswalk, email, handle, name)"
+                     % target)
+
+
+# ---- main ---------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--channel", help="channel id to invite into")
+    ap.add_argument("targets", nargs="*", help="UNIs / emails / slack ids")
+    ap.add_argument("--file", help="read targets from this file, one per line")
+    ap.add_argument("--seniors-channel", default=APMA_SENIORS_CHANNEL,
+                    help="channel id that is seniors-only (4903); default APMA")
+    ap.add_argument("--juniors-channel", default="",
+                    help="channel id that is juniors-only (4901), if any")
+    ap.add_argument("--force-cohort", action="store_true",
+                    help="skip the junior-in-senior-channel (and reverse) guard")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="resolve, classify, print; invite nothing")
+    ap.add_argument("--yes", action="store_true", help="skip the tty confirmation")
+    ap.add_argument("--whoami", action="store_true")
+    a = ap.parse_args()
+
+    try:
+        if a.whoami:
+            r = get("auth.test")
+            print(json.dumps({k: r[k] for k in ("team", "user", "user_id", "url")
+                              if k in r}, indent=2))
+            return
+
+        if not a.channel:
+            sys.exit("need --channel")
+        targets = list(a.targets)
+        if a.file:
+            with open(a.file) as fh:
+                targets += [ln.strip() for ln in fh if ln.strip() and not ln.startswith("#")]
+        if not targets:
+            sys.exit("no targets given")
+
+        dat = _find_dat()
+        rosters = load_rosters(dat)
+        xw = load_crosswalk(dat)
+        if dat is None:
+            sys.stderr.write("WARN: no dat/students-4901.tsv found from CWD; "
+                             "cohort guard is OFF (cannot classify)\n")
+
+        # channel cohort, for the guard
+        chan_cohort = None
+        if a.channel == a.seniors_channel:
+            chan_cohort = "4903"
+        elif a.juniors_channel and a.channel == a.juniors_channel:
+            chan_cohort = "4901"
+
+        resolved, blocked, failed = [], [], []
+        for t in targets:
+            try:
+                sid, cohort, note = resolve(t, rosters, xw)
+            except ValueError as e:
+                failed.append((t, str(e)))
+                continue
+            mism = (chan_cohort and cohort and cohort != chan_cohort)
+            if mism and not a.force_cohort:
+                blocked.append((t, sid, cohort, note))
+            else:
+                resolved.append((t, sid, cohort, note, "MISMATCH-forced" if mism else ""))
+
+        sys.stderr.write("\n--- channel %s%s ---\n"
+                         % (a.channel, " (%s)" % chan_cohort if chan_cohort else ""))
+        for t, sid, cohort, note, flag in resolved:
+            sys.stderr.write("  invite  %-24s %s  cohort=%s  (%s) %s\n"
+                             % (t, sid, cohort or "?", note, flag))
+        for t, sid, cohort, note in blocked:
+            sys.stderr.write("  BLOCKED %-24s %s  cohort=%s  wrong cohort for this channel; "
+                             "--force-cohort to override\n" % (t, sid, cohort or "?"))
+        for t, why in failed:
+            sys.stderr.write("  FAIL    %-24s %s\n" % (t, why))
+
+        if failed:
+            sys.exit("\nunresolved targets above; fix them and rerun (nothing invited)")
+        if blocked:
+            sys.exit("\ncohort guard blocked the targets above; "
+                     "put them in the right channel or pass --force-cohort (nothing invited)")
+        if not resolved:
+            sys.exit("nothing to invite")
+
+        if a.dry_run:
+            sys.stderr.write("\n--- DRY RUN, nothing invited ---\n")
+            return
+
+        if not a.yes:
+            if not sys.stdin.isatty():
+                sys.exit("refusing to invite: no tty to confirm on, and --yes not given")
+            ans = input("invite the %d target(s) above? type yes: " % len(resolved)).strip().lower()
+            if ans != "yes":
+                sys.exit("declined; nothing invited")
+
+        ids = ",".join(sid for _, sid, _, _, _ in resolved)
+        r = post("conversations.invite", channel=a.channel, users=ids)
+        got = {m["id"] for m in r.get("channel", {}).get("members", [])} if False else None
+        print("invited %d to %s" % (len(resolved), a.channel))
+    except SlackError as e:
+        sys.exit(str(e))
+
+
+if __name__ == "__main__":
+    main()

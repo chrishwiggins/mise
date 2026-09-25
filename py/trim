@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""
+trim - remove every desktop that has no windows in it.
+
+The same job cleandesks (close-empty-spaces) was reached for, done the way
+asplode does it: one yabai query for spaces, one for windows, one destroy per
+empty desktop, no Mission Control, no AppleScript, no per-desktop Swift
+compile, no fixed sleeps. Roughly 1-3 s where the AppleScript version takes
+30-40 s on sixteen desktops.
+
+Usage:
+    trim                 destroy every empty desktop
+    trim -n              dry run: list what would go, change nothing
+    trim -v              verbose (show each desktop as it goes)
+
+Windows are never touched. A desktop counts as empty by asplode's rule: no
+window on it other than minimized or sticky ones, and not pinned. macOS
+keeps at least one desktop, and native-fullscreen desktops are skipped.
+
+Needs yabai's scripting addition (sudo yabai --load-sa). If this exits 0 and
+the desktop count does not drop, either the addition is dead (run
+yabai-sa-doctor) or yabai is listing windows no app is showing: Electron apps
+(Slack, Bitwarden) hide their window on close rather than destroying it, and
+tooltips (AXHelpTag) count too. 2026-09-07: two visibly empty desktops survived
+for exactly that reason. Check with
+  osascript -e 'tell application "System Events" to tell process "Slack" to get every window'
+which returns nothing for a phantom. Fix belongs in asplode.real_windows().
+
+Until 2026-09-07 this also closed every window first; that half was cut
+because it was never wanted. It was never committed, so it is NOT in git
+history; the closing logic was one `yabai -m window <id> --close` per
+window from asplode.query("windows"), which is easy to rebuild if needed.
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import sys
+from pathlib import Path
+
+
+def load_asplode():
+    """Import the sibling `asplode` script (no .py suffix) as a module."""
+    path = Path(__file__).resolve().parent / "asplode"
+    loader = importlib.machinery.SourceFileLoader("asplode", str(path))
+    spec = importlib.util.spec_from_loader("asplode", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+asplode = load_asplode()
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Remove every desktop that has no windows in it.")
+    ap.add_argument("-n", "--dry-run", action="store_true",
+                    help="list what would go without changing anything")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="show each desktop as it goes")
+    args = ap.parse_args()
+
+    spaces = asplode.query("spaces")
+    if spaces is None:
+        sys.exit("trim: yabai is not running (yabai --start-service)")
+
+    print(f"trim: {len(spaces)} desktop(s)")
+    removed = asplode.destroy_empty_spaces(args.dry_run, args.verbose)
+    if args.dry_run:
+        print(f"  would remove {removed} empty desktop(s)")
+        return
+    print(f"  removed {removed} empty desktop(s)")
+    final = asplode.query("spaces") or []
+    print(f"trim: now {len(final)} desktop(s)")
+    if asplode.LAST_DESTROY_FAILURES:
+        # 2026-09-07: exit 0 with "removed 0" after six failed destroys read as
+        # success to anything checking the code. asplode prints the cause.
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

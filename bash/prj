@@ -1,0 +1,901 @@
+#!/opt/homebrew/bin/bash
+# prj - Project context launcher for iTerm2 + Claude Code
+#
+# Usage:
+#   prj                          List all projects
+#   prj <slug> [prompt...]        Launch project (2-tab iTerm window)
+#   prj -new <slug> <dir> <color>  Register a new project
+#   prj -rm <slug>               Remove a project
+#   prj -edit <slug> [field=val]  Update a project field
+#   prj -ls <slug>                List sessions for a project
+#   prj -h                        Show help
+#
+# Color spec: single color or hyphen-delimited per-tab colors.
+#   "sage"           -> 2 tabs, both sage
+#   "blue-gold"      -> 2 tabs: blue (claude), gold (shell)
+#   "red-white-blue" -> 3 tabs: red (claude), white (shell), blue (shell)
+#
+# Each project is a slug mapped to a directory and color spec.
+# Session ID is derived at launch from ~/.claude/projects/.
+# Reuse detection via iTerm2 window titles (prj:<slug>).
+
+PRJ_DIR="$HOME/.config/prj"
+PRJ_DB="$PRJ_DIR/projects.json"
+CLAUDE_PROJECTS="$HOME/.claude/projects"
+
+# Ensure config dir and db exist
+mkdir -p "$PRJ_DIR"
+if [[ ! -f "$PRJ_DB" ]]; then
+  echo '{}' > "$PRJ_DB"
+fi
+
+# ── helpers ────────────────────────────────────────────────────────
+
+_read_field() {
+  # _read_field <slug> <field>
+  PRJ_DB="$PRJ_DB" PRJ_SLUG="$1" PRJ_FIELD="$2" python3 -c "
+import json, os
+with open(os.environ['PRJ_DB']) as f:
+    db = json.load(f)
+entry = db.get(os.environ['PRJ_SLUG'], {})
+print(entry.get(os.environ['PRJ_FIELD'], ''))
+"
+}
+
+_list_open_slugs() {
+  # Return space-separated slugs that have at least one open prj tab in iTerm2.
+  # iTerm may prefix titles with the profile name (e.g. "Default: prj:foo [claude]"),
+  # so we locate "prj:" by offset rather than requiring it at position 1.
+  # Empty if iTerm2 is not running.
+  osascript -e '
+    tell application "iTerm2"
+      set slugs to {}
+      repeat with w in windows
+        repeat with t in tabs of w
+          try
+            set n to name of (current session of t)
+            if n contains "prj:" then
+              set prjPos to offset of "prj:" in n
+              set afterPrj to text (prjPos + 4) thru -1 of n
+              if afterPrj contains " [" then
+                set bracketPos to offset of " [" in afterPrj
+                if bracketPos > 1 then
+                  set theSlug to text 1 thru (bracketPos - 1) of afterPrj
+                  if theSlug is not in slugs then
+                    set end of slugs to theSlug
+                  end if
+                end if
+              end if
+            end if
+          end try
+        end repeat
+      end repeat
+      set AppleScript'"'"'s text item delimiters to " "
+      return slugs as text
+    end tell
+  ' 2>/dev/null
+}
+
+_list_projects() {
+  local open_slugs
+  open_slugs=$(_list_open_slugs)
+  PRJ_DB="$PRJ_DB" CLAUDE_PROJECTS="$CLAUDE_PROJECTS" PRJ_OPEN_SLUGS="$open_slugs" python3 -c "
+import json, os, glob, re
+from datetime import datetime
+
+db_path = os.environ['PRJ_DB']
+claude_projects = os.environ['CLAUDE_PROJECTS']
+open_slugs = set(os.environ.get('PRJ_OPEN_SLUGS', '').split())
+
+with open(db_path) as f:
+    db = json.load(f)
+if not db:
+    print('No projects registered. Use: prj -new <slug> <dir> <color>')
+else:
+    def mangle(p):
+        return re.sub(r'[^a-zA-Z0-9]', '-', p)
+
+    def sort_key(item):
+        slug, entry = item
+        # 1. Use last_used timestamp if present
+        lu = entry.get('last_used', '')
+        if lu:
+            return lu
+        # 2. Fall back to most recent session file mtime
+        d = entry.get('dir', '')
+        if d:
+            mangled = mangle(d)
+            pdir = os.path.join(claude_projects, mangled)
+            if os.path.isdir(pdir):
+                jsonls = glob.glob(os.path.join(pdir, '*.jsonl'))
+                if jsonls:
+                    return datetime.fromtimestamp(max(os.path.getmtime(f) for f in jsonls)).isoformat()
+        # 3. Sort to bottom
+        return ''
+
+    def fmt_recency(iso_str):
+        if not iso_str:
+            return '--'
+        try:
+            dt = datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
+            # strip timezone for display
+            dt = dt.replace(tzinfo=None)
+            now = datetime.now()
+            delta = now - dt
+            if delta.days == 0:
+                hours = delta.seconds // 3600
+                if hours == 0:
+                    return f'{delta.seconds // 60}m ago'
+                return f'{hours}h ago'
+            if delta.days == 1:
+                return 'yesterday'
+            if delta.days < 7:
+                return f'{delta.days}d ago'
+            return dt.strftime('%Y-%m-%d')
+        except Exception:
+            return '--'
+
+    items = sorted(db.items(), key=sort_key, reverse=True)
+    print('{:<2s}{:<16s} {:<12s} {:<14s} {}'.format('', 'Slug', 'Color', 'Last used', 'Directory'))
+    print('-' * 80)
+    for slug, entry in items:
+        d = entry.get('dir', '?')
+        c = entry.get('color', '?')
+        sk = sort_key((slug, entry))
+        marker = '* ' if slug in open_slugs else '  '
+        print('{}{:<16s} {:<12s} {:<14s} {}'.format(marker, slug, c, fmt_recency(sk), d))
+    if open_slugs:
+        print()
+        print('* = currently open in iTerm')
+"
+}
+
+_mangle_path() {
+  # Claude Code replaces every non-alphanumeric char with -
+  echo "$1" | sed 's|[^a-zA-Z0-9]|-|g'
+}
+
+_find_latest_session() {
+  # Find the most recent resumable .jsonl in the mangled project dir.
+  # Skips files that only contain file-history-snapshot metadata.
+  local dir="$1"
+  local mangled
+  mangled=$(_mangle_path "$dir")
+  local project_dir="$CLAUDE_PROJECTS/$mangled"
+
+  if [[ ! -d "$project_dir" ]]; then
+    return 1
+  fi
+
+  # Most recent .jsonl by mtime, but only if it has conversation content
+  local latest
+  latest=$(ls -t "$project_dir"/*.jsonl 2>/dev/null | while read -r f; do
+    if grep -q '"type":"user"' "$f" 2>/dev/null; then
+      echo "$f"
+      break
+    fi
+  done)
+  if [[ -z "$latest" ]]; then
+    return 1
+  fi
+
+  # Session ID is the filename without .jsonl
+  basename "$latest" .jsonl
+}
+
+_find_prj_windows() {
+  # Check iTerm2 for windows titled "prj:<slug>"
+  # Returns win.tab specs (e.g., "2.1 3.1") or empty
+  local slug="$1"
+  osascript -e "
+    tell application \"iTerm2\"
+      set hits to {}
+      set winIdx to 1
+      repeat with w in windows
+        set tabIdx to 1
+        repeat with t in tabs of w
+          set s to current session of t
+          if name of s contains \"prj:$slug [\" then
+            set end of hits to (winIdx & \".\" & tabIdx) as text
+          end if
+          set tabIdx to tabIdx + 1
+        end repeat
+        set winIdx to winIdx + 1
+      end repeat
+      set AppleScript's text item delimiters to \" \"
+      return hits as text
+    end tell
+  " 2>/dev/null
+}
+
+_find_prj_window_id() {
+  # iTerm2 window id of the first window with a tab whose session name
+  # contains "$1", or empty. Ids are stable; window INDICES shift with
+  # focus, so anything that creates a tab must address the window by id.
+  local pattern="$1"
+  osascript -e "
+    tell application \"iTerm2\"
+      repeat with w in windows
+        repeat with t in tabs of w
+          if name of current session of t contains \"$pattern\" then
+            return id of w
+          end if
+        end repeat
+      end repeat
+      return \"\"
+    end tell
+  " 2>/dev/null
+}
+
+_prj_window_ttys() {
+  # ttys of every tab in iTerm2 window id $1, one per line
+  osascript -e "
+    tell application \"iTerm2\"
+      set out to {}
+      tell window id $1
+        repeat with t in tabs
+          set end of out to tty of current session of t
+        end repeat
+      end tell
+      set AppleScript's text item delimiters to linefeed
+      return out as text
+    end tell
+  " 2>/dev/null
+}
+
+_claude_alive_in_window() {
+  # 0 if window id $1 has a tab running claude with cwd $2, else 1.
+  # Claude Code renames its tab (glyph + topic) as soon as it starts, so
+  # the "prj:<slug> [claude]" title only proves liveness before launch;
+  # the process is the evidence afterwards.
+  local win_id="$1" dir="$2" tty pid cwd
+  dir=$(cd "$dir" 2>/dev/null && pwd -P)
+  while read -r tty; do
+    [[ -z "$tty" ]] && continue
+    # ps -t, not pgrep -t: pgrep here rejects every tty spelling (verified 2026-09-07)
+    for pid in $(/bin/ps -t "${tty#/dev/}" -o pid=,command= 2>/dev/null \
+                 | /usr/bin/grep -E '(^| |/)claude( |$)' | /usr/bin/awk '{print $1}'); do
+      cwd=$(/usr/sbin/lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+      [[ -n "$cwd" && "$(cd "$cwd" 2>/dev/null && pwd -P)" == "$dir" ]] && return 0
+    done
+  done < <(_prj_window_ttys "$win_id")
+  return 1
+}
+
+_stamp_last_used() {
+  PRJ_DB="$PRJ_DB" PRJ_SLUG="$1" python3 -c "
+import json, os
+from datetime import datetime, timezone
+db_path = os.environ['PRJ_DB']
+with open(db_path) as f:
+    db = json.load(f)
+db[os.environ['PRJ_SLUG']]['last_used'] = datetime.now(timezone.utc).isoformat()
+with open(db_path, 'w') as f:
+    json.dump(db, f, indent=2)
+    f.write('\n')
+"
+}
+
+# ── commands ───────────────────────────────────────────────────────
+
+cmd_new() {
+  local slug="$1" dir="$2" color="$3"
+
+  if [[ -z "$slug" || -z "$dir" || -z "$color" ]]; then
+    echo "Usage: prj -new <slug> <dir> <color>" >&2
+    echo "  color: any tc color name (green, columbia, sage, ...)" >&2
+    exit 1
+  fi
+
+  # Resolve dir to absolute path
+  dir=$(cd "$dir" 2>/dev/null && pwd -P)
+  if [[ -z "$dir" ]]; then
+    echo "Error: directory '$2' does not exist" >&2
+    exit 1
+  fi
+
+  # Validate color(s) resolve in tc
+  # Color spec can be "blue" (all tabs same) or "blue-gold" (per-tab)
+  IFS='-' read -ra _colors <<< "$color"
+  for _c in "${_colors[@]}"; do
+    if ! tc "$_c" > /dev/null 2>&1; then
+      echo "Warning: '$_c' is not a known tc color (will try at launch)" >&2
+    fi
+  done
+  if [[ ${#_colors[@]} -gt 1 ]]; then
+    echo "Multi-tab: ${#_colors[@]} tabs with colors: ${_colors[*]}"
+  fi
+
+  # Check for existing slug
+  local existing
+  existing=$(_read_field "$slug" "dir")
+  if [[ -n "$existing" ]]; then
+    echo "Slug '$slug' already exists (dir: $existing)" >&2
+    echo "Use 'prj -edit $slug dir=$dir' to update, or 'prj -rm $slug' first." >&2
+    exit 1
+  fi
+
+  PRJ_DB="$PRJ_DB" PRJ_SLUG="$slug" PRJ_DIR="$dir" PRJ_COLOR="$color" python3 -c "
+import json, os
+db_path = os.environ['PRJ_DB']
+with open(db_path) as f:
+    db = json.load(f)
+db[os.environ['PRJ_SLUG']] = {'dir': os.environ['PRJ_DIR'], 'color': os.environ['PRJ_COLOR']}
+with open(db_path, 'w') as f:
+    json.dump(db, f, indent=2)
+    f.write('\n')
+"
+
+  echo "Registered: $slug -> $dir ($color)"
+
+  # Show available sessions for this directory
+  local mangled
+  mangled=$(_mangle_path "$dir")
+  local project_dir="$CLAUDE_PROJECTS/$mangled"
+  local count
+  count=$(ls "$project_dir"/*.jsonl 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$count" -gt 0 ]]; then
+    echo "Found $count session(s) for this directory."
+  else
+    echo "No Claude sessions found yet for this directory."
+  fi
+}
+
+cmd_rm() {
+  local slug="$1"
+  if [[ -z "$slug" ]]; then
+    echo "Usage: prj -rm <slug>" >&2
+    exit 1
+  fi
+
+  local existing
+  existing=$(_read_field "$slug" "dir")
+  if [[ -z "$existing" ]]; then
+    echo "Unknown project: $slug" >&2
+    exit 1
+  fi
+
+  PRJ_DB="$PRJ_DB" PRJ_SLUG="$slug" python3 -c "
+import json, os
+db_path = os.environ['PRJ_DB']
+with open(db_path) as f:
+    db = json.load(f)
+del db[os.environ['PRJ_SLUG']]
+with open(db_path, 'w') as f:
+    json.dump(db, f, indent=2)
+    f.write('\n')
+"
+  echo "Removed: $slug"
+}
+
+cmd_edit() {
+  local slug="$1"
+  shift
+
+  if [[ -z "$slug" ]]; then
+    echo "Usage: prj -edit <slug> dir=/new/path color=newcolor slug=newslug" >&2
+    exit 1
+  fi
+
+  local existing
+  existing=$(_read_field "$slug" "dir")
+  if [[ -z "$existing" ]]; then
+    echo "Unknown project: $slug" >&2
+    exit 1
+  fi
+
+  if [[ $# -eq 0 ]]; then
+    echo "Current values for '$slug':"
+    echo "  dir:   $existing"
+    echo "  color: $(_read_field "$slug" "color")"
+    echo ""
+    echo "Usage: prj -edit $slug dir=/new/path color=newcolor slug=newslug"
+    exit 0
+  fi
+
+  for arg in "$@"; do
+    local key="${arg%%=*}"
+    local val="${arg#*=}"
+    if [[ "$key" != "dir" && "$key" != "color" && "$key" != "slug" ]]; then
+      echo "Unknown field: $key (use dir, color, or slug)" >&2
+      exit 1
+    fi
+    if [[ "$key" == "slug" ]]; then
+      if [[ -z "$val" ]]; then
+        echo "Error: new slug cannot be empty" >&2
+        exit 1
+      fi
+      if [[ "$val" == "$slug" ]]; then
+        echo "Slug unchanged: $slug"
+        continue
+      fi
+      local collision
+      collision=$(_read_field "$val" "dir")
+      if [[ -n "$collision" ]]; then
+        echo "Error: slug '$val' already exists (dir: $collision)" >&2
+        exit 1
+      fi
+      PRJ_DB="$PRJ_DB" OLD_SLUG="$slug" NEW_SLUG="$val" python3 -c "
+import json, os
+db_path = os.environ['PRJ_DB']
+with open(db_path) as f:
+    db = json.load(f)
+db[os.environ['NEW_SLUG']] = db.pop(os.environ['OLD_SLUG'])
+with open(db_path, 'w') as f:
+    json.dump(db, f, indent=2)
+    f.write('\n')
+"
+      echo "Renamed $slug -> $val"
+      slug="$val"
+    else
+      PRJ_DB="$PRJ_DB" PRJ_SLUG="$slug" PRJ_KEY="$key" PRJ_VAL="$val" python3 -c "
+import json, os
+db_path = os.environ['PRJ_DB']
+with open(db_path) as f:
+    db = json.load(f)
+db[os.environ['PRJ_SLUG']][os.environ['PRJ_KEY']] = os.environ['PRJ_VAL']
+with open(db_path, 'w') as f:
+    json.dump(db, f, indent=2)
+    f.write('\n')
+"
+      echo "Updated $slug.$key = $val"
+    fi
+  done
+}
+
+cmd_launch() {
+  local slug="$1"
+  shift
+  local fresh=0
+  # Strip -0 / --fresh from anywhere in remaining args (prompt or position 2)
+  local -a rest=()
+  for a in "$@"; do
+    if [[ "$a" == "-0" || "$a" == "--fresh" ]]; then
+      fresh=1
+    else
+      rest+=("$a")
+    fi
+  done
+  set -- "${rest[@]}"
+  local initial_prompt="$*"
+
+  # Look up project
+  local dir color
+  dir=$(_read_field "$slug" "dir")
+  color=$(_read_field "$slug" "color")
+
+  if [[ -z "$dir" ]]; then
+    echo "Unknown project: $slug" >&2
+    local suggestions
+    suggestions=$(PRJ_DB="$PRJ_DB" PRJ_SLUG="$slug" python3 -c "
+import json, os, difflib
+with open(os.environ['PRJ_DB']) as f:
+    db = json.load(f)
+matches = difflib.get_close_matches(os.environ['PRJ_SLUG'], list(db.keys()), n=3, cutoff=0.4)
+if matches:
+    print('Did you mean: ' + ', '.join(matches) + '?')
+")
+    if [[ -n "$suggestions" ]]; then
+      echo "$suggestions" >&2
+    else
+      echo "Registered projects:" >&2
+      _list_projects >&2
+    fi
+    exit 1
+  fi
+
+  if [[ ! -d "$dir" ]]; then
+    echo "Error: directory '$dir' no longer exists" >&2
+    exit 1
+  fi
+
+  # ── reuse detection: check running claude processes first ────────
+  # This catches sessions that are running but not visible (minimized, other spaces, etc).
+  # Only check if not --fresh.
+  if [[ $fresh -eq 0 ]]; then
+    local session_id_check
+    session_id_check=$(_find_latest_session "$dir")
+    if [[ -n "$session_id_check" ]]; then
+      # Check if claude --resume <session_id> is actually running right now
+      if /usr/bin/pgrep -f "claude --resume $session_id_check" > /dev/null 2>&1; then
+        echo "** '$slug' session $session_id_check is already running (may be hidden) **" >&2
+        echo "Bring it to focus, or use 'prj -0 $slug' to start fresh." >&2
+        exit 1
+      fi
+    fi
+  fi
+
+  # ── reuse detection: check iTerm windows ────────────────────────
+  local existing_wins reopen_win_id=""
+  existing_wins=$(_find_prj_windows "$slug")
+  if [[ -n "$existing_wins" ]]; then
+    reopen_win_id=$(_find_prj_window_id "prj:$slug [")
+    if [[ -n "$(_find_prj_window_id "prj:$slug [claude]")" ]] \
+       || _claude_alive_in_window "$reopen_win_id" "$dir"; then
+      echo "** '$slug' is already open **" >&2
+      echo "Switching to existing windows: $existing_wins" >&2
+      # Focus the first window
+      local first_win="${existing_wins%% *}"
+      tc focus "$first_win" 2>/dev/null
+      exit 0
+    fi
+    # Shell tabs survive but the claude tab is gone (closed by hand).
+    # Recreate it inside that window rather than refusing to launch.
+    echo "** '$slug' shell tabs are open but the claude tab is closed; reopening it **" >&2
+  fi
+
+  # ── find latest session (unless -0/--fresh) ─────────────────────
+  local session_id=""
+  if [[ $fresh -eq 1 ]]; then
+    echo "Fresh session requested (-0/--fresh); skipping resume"
+  else
+    session_id=$(_find_latest_session "$dir")
+  fi
+  if [[ -z "$session_id" && $fresh -eq 0 ]]; then
+    echo "No existing Claude sessions found for $dir" >&2
+    printf "Start a new Claude session? [y/N] " >&2
+    read -r confirm < /dev/tty
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+      echo "Aborted." >&2
+      exit 0
+    fi
+  fi
+
+  # ── parse color spec ────────────────────────────────────────────
+  # "sage" = all tabs same color; "blue-gold" = per-tab colors
+  IFS='-' read -ra colors <<< "$color"
+  local num_tabs=${#colors[@]}
+  # Single color: 2 tabs (claude + shell), same color
+  if [[ $num_tabs -eq 1 ]]; then
+    colors=("$color" "$color")
+    num_tabs=2
+  fi
+
+  # ── build claude command ─────────────────────────────────────────
+  local claude_cmd
+  if [[ -n "$session_id" ]]; then
+    claude_cmd="claude --resume $session_id"
+    echo "Resuming session $session_id in tab 1"
+  else
+    claude_cmd="claude"
+    echo "Starting new Claude session in tab 1"
+  fi
+  if [[ -n "$initial_prompt" ]]; then
+    # Escape single quotes for AppleScript embedding
+    local escaped_prompt="${initial_prompt//\'/\'\\\'\'}"
+    claude_cmd="$claude_cmd '$escaped_prompt'"
+    echo "Initial prompt: $initial_prompt"
+  fi
+
+  # ── reopen claude tab in the surviving window ──────────────────
+  if [[ -n "$reopen_win_id" ]]; then
+    local new_tty
+    new_tty=$(osascript -e "
+      tell application \"iTerm2\"
+        tell window id $reopen_win_id
+          set newTab to (create tab with default profile)
+          select
+        end tell
+        set ns to current session of newTab
+        tell ns
+          set name to \"prj:$slug [claude]\"
+          write text \"cd '$dir'\"
+          write text \"$claude_cmd\"
+        end tell
+        return tty of ns
+      end tell
+    " 2>/dev/null)
+    if [[ -z "$new_tty" ]]; then
+      echo "Error: failed to create claude tab in window $reopen_win_id" >&2
+      exit 1
+    fi
+    tc -t "$new_tty" "${colors[0]}" 2>/dev/null
+    _stamp_last_used "$slug"
+    echo "Project '$slug': claude tab reopened in existing window ($new_tty)"
+    exit 0
+  fi
+
+  # ── create iTerm window with N tabs ────────────────────────────
+  # Tab 1: claude. Tabs 2..N: shells.
+  # Build AppleScript dynamically for N tabs.
+  local ascript=""
+  ascript+='tell application "iTerm2"
+  activate
+  set newWin to (create window with default profile)
+  set sess1 to current session of current tab of newWin
+'
+  # Create additional tabs (2..N)
+  for (( t=2; t<=num_tabs; t++ )); do
+    ascript+="
+  tell newWin
+    set tab${t} to (create tab with default profile)
+  end tell
+  set sess${t} to current session of tab${t}
+"
+  done
+
+  # Set titles and cd for all tabs
+  ascript+="
+  tell sess1
+    set name to \"prj:$slug [claude]\"
+    write text \"cd '$dir'\"
+  end tell
+"
+  for (( t=2; t<=num_tabs; t++ )); do
+    ascript+="
+  tell sess${t}
+    set name to \"prj:$slug [shell${t}]\"
+    write text \"cd '$dir'\"
+  end tell
+"
+  done
+
+  # Launch claude in tab 1, select it
+  ascript+="
+  tell newWin
+    select tab 1
+  end tell
+  tell sess1
+    write text \"$claude_cmd\"
+  end tell
+  return id of newWin
+end tell
+"
+
+  local win_id
+  win_id=$(osascript -e "$ascript" 2>/dev/null)
+
+  if [[ -z "$win_id" ]]; then
+    echo "Error: failed to create iTerm2 window" >&2
+    exit 1
+  fi
+
+  echo "Created window with $num_tabs tabs"
+
+  # ── color each tab (find window index, needed for tc) ──────────
+  local win_idx
+  win_idx=$(osascript -e "
+    tell application \"iTerm2\"
+      set idx to 1
+      repeat with w in windows
+        if id of w is equal to $win_id then
+          return idx
+        end if
+        set idx to idx + 1
+      end repeat
+      return 0
+    end tell
+  " 2>/dev/null)
+
+  for (( t=0; t<num_tabs; t++ )); do
+    tc -t "${win_idx}.$((t+1))" "${colors[$t]}" 2>/dev/null
+  done
+
+  # ── stamp last_used in DB ──────────────────────────────────────
+  _stamp_last_used "$slug"
+
+  echo "Project '$slug' launched ($color)"
+}
+
+cmd_ls() {
+  local slug="$1"
+  if [[ -z "$slug" ]]; then
+    echo "Usage: prj -ls <slug>" >&2
+    exit 1
+  fi
+
+  local dir
+  dir=$(_read_field "$slug" "dir")
+  if [[ -z "$dir" ]]; then
+    echo "Unknown project: $slug" >&2
+    exit 1
+  fi
+
+  local mangled
+  mangled=$(_mangle_path "$dir")
+  local project_dir="$CLAUDE_PROJECTS/$mangled"
+
+  if [[ ! -d "$project_dir" ]]; then
+    echo "No sessions found for $slug ($dir)" >&2
+    exit 0
+  fi
+
+  # List sessions sorted by mtime (newest first) with date and message count.
+  # Mark the session that cmd_launch would auto-resume with *.
+  PRJ_DIR_PATH="$project_dir" python3 -c "
+import os, json, glob
+from datetime import datetime
+
+pdir = os.environ['PRJ_DIR_PATH']
+jsonls = glob.glob(os.path.join(pdir, '*.jsonl'))
+if not jsonls:
+    print('No sessions found.')
+    raise SystemExit(0)
+
+sessions = []
+for f in jsonls:
+    sid = os.path.basename(f).replace('.jsonl', '')
+    mtime = os.path.getmtime(f)
+    # count lines (messages) quickly
+    with open(f, 'rb') as fh:
+        lines = sum(1 for _ in fh)
+    # Has real conversation content? (matches _find_latest_session logic)
+    has_user = False
+    with open(f, 'rb') as fh:
+        for line in fh:
+            if b'\"type\":\"user\"' in line:
+                has_user = True
+                break
+    sessions.append((mtime, sid, lines, f, has_user))
+
+sessions.sort(reverse=True)
+# The resumable one is the newest-by-mtime session with user content
+resumable_sid = next((s[1] for s in sessions if s[4]), None)
+
+print('{:<2s}{:<38s} {:<20s} {:>5s}'.format('', 'Session ID', 'Modified', 'Msgs'))
+print('-' * 68)
+for mtime, sid, lines, _f, _hu in sessions:
+    marker = '* ' if sid == resumable_sid else '  '
+    dt = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
+    print('{}{:<38s} {:<20s} {:>5d}'.format(marker, sid, dt, lines))
+if resumable_sid:
+    print()
+    print('* = session prj would auto-resume')
+"
+}
+
+cmd_close() {
+  local slug="$1"
+  if [[ -z "$slug" ]]; then
+    echo "Usage: prj -close <slug>" >&2
+    exit 1
+  fi
+
+  # Don't require the slug to be registered - user may want to close
+  # windows for a project they already removed.
+  local closed
+  closed=$(osascript -e "
+    tell application \"iTerm2\"
+      set closedCount to 0
+      repeat
+        set foundOne to false
+        repeat with w in windows
+          repeat with t in tabs of w
+            try
+              set s to current session of t
+              if name of s contains \"prj:$slug [\" then
+                close t
+                set foundOne to true
+                set closedCount to closedCount + 1
+                exit repeat
+              end if
+            end try
+          end repeat
+          if foundOne then exit repeat
+        end repeat
+        if not foundOne then exit repeat
+      end repeat
+      return closedCount
+    end tell
+  " 2>/dev/null)
+
+  if [[ -z "$closed" || "$closed" == "0" ]]; then
+    echo "No open windows for '$slug'" >&2
+    exit 0
+  fi
+  echo "Closed $closed tab(s) for '$slug'"
+}
+
+# ── main dispatch ──────────────────────────────────────────────────
+
+case "$1" in
+  -new|--new)
+    shift
+    cmd_new "$@"
+    ;;
+  -rm|--rm)
+    shift
+    cmd_rm "$@"
+    ;;
+  -edit|--edit)
+    shift
+    cmd_edit "$@"
+    ;;
+  -ls|--ls)
+    shift
+    cmd_ls "$@"
+    ;;
+  -close|--close)
+    shift
+    cmd_close "$@"
+    ;;
+  --cd-path)
+    # Print the directory path for a slug (used by cd-prj alias)
+    if [[ -z "$2" ]]; then
+      echo "Usage: prj --cd-path <slug>" >&2
+      exit 1
+    fi
+    dir=$(_read_field "$2" "dir")
+    if [[ -z "$dir" ]]; then
+      echo "Unknown project: $2" >&2
+      exit 1
+    fi
+    echo "$dir"
+    ;;
+  --slugs)
+    # Print slug names one per line (for shell completion)
+    PRJ_DB="$PRJ_DB" python3 -c "
+import json, os
+with open(os.environ['PRJ_DB']) as f:
+    db = json.load(f)
+for slug in sorted(db.keys()):
+    print(slug)
+"
+    ;;
+  -h|--help)
+    cat <<'EOF'
+prj - Project context launcher for iTerm2 + Claude Code
+
+Usage:
+  prj                            List all registered projects
+  prj <slug> [prompt...]         Launch project with optional initial prompt
+  prj -0 <slug> [prompt...]      Launch fresh (don't resume last session);
+                                 --fresh also works; flag may go before or after slug
+  prj -new <slug> <dir> <color>  Register a new project
+  prj -rm <slug>                 Remove a project
+  prj -edit <slug> [field=val]   Update dir, color, or slug
+  prj -ls <slug>                 List sessions for a project (* = auto-resume target)
+  prj -close <slug>              Close all open iTerm tabs for a project
+  prj --cd-path <slug>           Print project directory (for cd-prj alias)
+  prj --slugs                    Print slug names one per line (for completion)
+  prj -h                         Show this help
+
+Launch behavior:
+  - Tab 1: claude --resume (most recent session for that dir)
+  - Tabs 2+: shells at project dir
+  - Color per tab (or all same if single color)
+  - If already open: warns and switches focus instead
+  - If only shell tabs remain (claude tab closed by hand): reopens the
+    claude tab in that window, resuming the latest session
+  - Extra args after slug are passed as initial prompt to claude
+
+Color spec:
+  sage              2 tabs, both sage
+  blue-gold         2 tabs: blue (claude), gold (shell)
+  red-white-blue    3 tabs: red (claude), white (shell2), blue (shell3)
+  Any tc color name works: green, columbia, sage, harvard, etc.
+
+Examples:
+  prj -new edge ~/projects/edgeworth columbia
+  prj -new france ~/trips/paris red-white-blue
+  prj edge                       # launch it (resume last session)
+  prj harvard "debug the tests"  # launch with initial prompt message
+  prj -0 harvard /help           # launch fresh with /help command
+  prj -edit edge color=sage      # change to single color
+  prj -edit edge color=blue-gold # change to per-tab colors
+  prj -edit edge slug=edgeworth  # rename the slug
+  prj -rm edge                   # unregister
+EOF
+    ;;
+  "")
+    _list_projects | more
+    ;;
+  -0|--fresh)
+    # Allow -0/--fresh before the slug: prj -0 <slug> [prompt...]
+    shift
+    if [[ -z "$1" ]]; then
+      echo "Usage: prj -0 <slug> [prompt...]" >&2
+      exit 1
+    fi
+    slug="$1"
+    shift
+    cmd_launch "$slug" -0 "$@"
+    ;;
+  -*)
+    echo "Unknown option: $1 (try 'prj -h')" >&2
+    exit 1
+    ;;
+  *)
+    cmd_launch "$@"
+    ;;
+esac

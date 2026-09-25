@@ -1,0 +1,200 @@
+#!/usr/bin/python3
+"""Post a message to Slack via the Web API (companion to slack-fetch/slack-dms).
+
+Token is read from $SLACK_TOKEN, else ~/.config/slack/token (first line). Needs
+a USER token (xoxp-) with chat:write. A DM also needs im:write (users:read to
+resolve a @handle or email to a user id); a channel post needs the bot/user to
+be a member.
+
+POSTING IS NOT UNDOABLE from here: once sent, everyone in the target sees it and
+Slack keeps it. So this tool REFUSES to send without an explicit confirmation.
+It prints the resolved target and the exact text, then requires either --yes or
+a typed "yes" on the tty. There is a --dry-run that resolves the target and
+prints everything but calls no send method at all.
+
+Usage:
+    slack-post --channel <id|#name> --text "message"        # to a channel
+    slack-post --channel <id> --file body.md                # text from a file
+    slack-post --dm <userid|@handle|email> --text "..."     # to a 1:1 DM
+    slack-post ... --thread <ts>                            # reply in a thread
+    slack-post ... --dry-run                                # resolve+print, send nothing
+    slack-post ... --yes                                    # skip the tty confirm
+    slack-post --whoami                                     # verify the token
+
+Exit 0 on a real send (prints the new message ts and permalink-ish channel/ts);
+exit 0 on --dry-run without sending; nonzero on any API error or a declined
+confirmation.
+"""
+import argparse
+import json
+import os
+import sys
+import urllib.parse
+import urllib.request
+
+API = "https://slack.com/api/"
+
+
+def token():
+    t = os.environ.get("SLACK_TOKEN")
+    if t:
+        return t.strip()
+    path = os.path.expanduser("~/.config/slack/token")
+    try:
+        with open(path) as fh:
+            return fh.readline().strip()
+    except OSError:
+        sys.exit(
+            "no token: set $SLACK_TOKEN or put one in ~/.config/slack/token\n"
+            "needs a USER token (xoxp-) with chat:write"
+        )
+
+
+HINTS = {
+    "not_in_channel": "the token owner is not a member of that channel; join it in Slack first",
+    "channel_not_found": "wrong channel id, wrong workspace, or a private channel the token cannot see",
+    "missing_scope": (
+        "add the scope Slack names above (chat:write for posting; im:write for a DM;\n"
+        "  users:read to resolve a handle/email), then REINSTALL the app and copy the new token"
+    ),
+    "invalid_auth": "token revoked, expired, or app uninstalled; remint it",
+    "is_archived": "the channel is archived; unarchive it or pick another",
+    "cannot_dm_bot": "cannot DM a bot user",
+    "ratelimited": "too many calls; wait and retry",
+}
+
+
+def _check(method, r):
+    if not r.get("ok"):
+        err = r.get("error", "unknown")
+        msg = "slack api error on %s: %s" % (method, err)
+        if r.get("needed"):
+            msg += "\n  needs scope: %s" % r["needed"]
+        if err in HINTS:
+            msg += "\n  " + HINTS[err]
+        sys.exit(msg)
+    return r
+
+
+def get(method, **params):
+    url = API + method + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token()})
+    return _check(method, json.load(urllib.request.urlopen(req)))
+
+
+def post(method, **params):
+    data = urllib.parse.urlencode(params).encode()
+    req = urllib.request.Request(
+        API + method, data=data,
+        headers={"Authorization": "Bearer " + token(),
+                 "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    return _check(method, json.load(urllib.request.urlopen(req)))
+
+
+def resolve_user(who):
+    """A user id (U...), an @handle, or an email -> a user id."""
+    who = who.lstrip("@")
+    if who.startswith("U") and who.isupper():
+        return who
+    # users.list is paged; fine for a course workspace of a few hundred
+    cursor = ""
+    while True:
+        r = get("users.list", limit=200, cursor=cursor)
+        for m in r.get("members", []):
+            prof = m.get("profile", {})
+            if (m.get("name") == who or prof.get("email") == who
+                    or prof.get("display_name") == who
+                    or m.get("real_name") == who):
+                return m["id"]
+        cursor = r.get("response_metadata", {}).get("next_cursor", "")
+        if not cursor:
+            break
+    sys.exit("could not resolve user %r (tried id, @handle, email, name)" % who)
+
+
+def open_dm(userids):
+    # userids: a single id or a comma-joined list. Slack opens a 1:1 for one
+    # user and a group DM (mpim) for several.
+    r = post("conversations.open", users=userids)
+    return r["channel"]["id"]
+
+
+def confirm(target_desc, text, auto_yes):
+    sys.stderr.write("\n--- SLACK POST (this is not undoable) ---\n")
+    sys.stderr.write("to:   %s\n" % target_desc)
+    sys.stderr.write("text: %d chars\n" % len(text))
+    sys.stderr.write("----- message -----\n%s\n-------------------\n" % text)
+    if auto_yes:
+        sys.stderr.write("(--yes given, sending)\n")
+        return True
+    if not sys.stdin.isatty():
+        sys.exit("refusing to send: no tty to confirm on, and --yes not given")
+    ans = input("send this? type yes: ").strip().lower()
+    return ans == "yes"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--channel", help="channel id or #name to post to")
+    ap.add_argument("--dm", help="user id, @handle, or email to DM")
+    ap.add_argument("--text", help="message text")
+    ap.add_argument("--file", help="read message text from this file")
+    ap.add_argument("--thread", help="ts of a parent message to reply under")
+    ap.add_argument("--dry-run", action="store_true", help="resolve+print, send nothing")
+    ap.add_argument("--yes", action="store_true", help="skip the tty confirmation")
+    ap.add_argument("--whoami", action="store_true")
+    a = ap.parse_args()
+
+    if a.whoami:
+        r = get("auth.test")
+        print(json.dumps({k: r[k] for k in ("team", "team_id", "user", "user_id", "url")
+                          if k in r}, indent=2))
+        return
+
+    if a.file:
+        with open(a.file) as fh:
+            text = fh.read().rstrip("\n")
+    elif a.text is not None:
+        text = a.text
+    else:
+        sys.exit("need --text or --file")
+    if not text.strip():
+        sys.exit("refusing to post an empty message")
+
+    if bool(a.channel) == bool(a.dm):
+        sys.exit("give exactly one of --channel or --dm")
+
+    if a.channel:
+        channel = a.channel
+        desc = "channel %s" % channel
+    else:
+        # --dm may be one recipient or a comma-separated list (group DM / mpim)
+        who = [w.strip() for w in a.dm.split(",") if w.strip()]
+        uids = [resolve_user(w) for w in who]
+        channel = open_dm(",".join(uids))
+        if len(uids) == 1:
+            desc = "DM to %s (%s, channel %s)" % (who[0], uids[0], channel)
+        else:
+            desc = "GROUP DM to %d people [%s] (channel %s)" % (
+                len(uids), ", ".join("%s=%s" % (w, u) for w, u in zip(who, uids)), channel)
+    if a.thread:
+        desc += " [thread reply under %s]" % a.thread
+
+    if a.dry_run:
+        sys.stderr.write("\n--- DRY RUN, nothing sent ---\n")
+        confirm(desc, text, auto_yes=True)
+        return
+
+    if not confirm(desc, text, a.yes):
+        sys.exit("declined; nothing sent")
+
+    params = {"channel": channel, "text": text}
+    if a.thread:
+        params["thread_ts"] = a.thread
+    r = post("chat.postMessage", **params)
+    print("sent: channel=%s ts=%s" % (r["channel"], r["ts"]))
+
+
+if __name__ == "__main__":
+    main()

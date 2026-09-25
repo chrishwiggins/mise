@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""Answer "who is this website and do they publish code" from primary sources.
+
+Given a domain, report when it was registered, when it first appeared in the
+Wayback Machine, and which GitHub org or repos plausibly belong to it, with
+every date traced to the API or whois record it came from.
+
+This exists because the manual version is four probes that are easy to run
+inconsistently: whois for registration, the Wayback CDX API for first capture,
+the GitHub search API for repos naming the domain, and the GitHub org API for
+creation dates. Running them by hand invites reporting a domain registration
+date as a "launch date" without noting the difference.
+
+The GitHub association is reported as EVIDENCE, never as a fact. A repo whose
+name contains the domain is a strong hint and not a confirmation; only a link
+published by the site itself is that. The output labels which one it found.
+
+Usage:
+    org-provenance dataindex.us
+    org-provenance dataindex.us --json
+"""
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+
+UA = {"User-Agent": "org-provenance/1.0"}
+TIMEOUT = 30
+
+
+def get_json(url):
+    req = urllib.request.Request(url, headers=UA)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return json.load(r)
+    except Exception as e:
+        return {"_error": str(e)}
+
+
+def day(stamp):
+    """First 10 chars of an ISO timestamp, tolerating null. GitHub returns a
+    null pushed_at for a repo that has never received a push, which crashed the
+    first version of this script on hackny.org."""
+    return (stamp or "")[:10] or "unknown"
+
+
+def get_text(url):
+    req = urllib.request.Request(url, headers=UA)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return r.read().decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+
+def domain_registered(domain):
+    """Creation date from whois, or None.
+
+    Two traps, both hit on the first real run against dataindex.us:
+
+    1. whois output includes the TLD REGISTRY's own record alongside the
+       domain's. Taking min() of every Creation Date returned 1985-02-15, the
+       birthday of the .us TLD, for a domain registered in 2025. So only scan
+       the part of the output that follows a line naming the domain itself.
+    2. The domain's own record is usually repeated by registry and registrar,
+       so within that section take the earliest as canonical."""
+    try:
+        out = subprocess.run(
+            ["whois", domain], capture_output=True, text=True, timeout=TIMEOUT
+        ).stdout
+    except Exception:
+        return None, None
+    m = re.search(rf"^\s*Domain Name:\s*{re.escape(domain)}\s*$", out,
+                  re.I | re.M)
+    if m:
+        out = out[m.start():]
+    dates = re.findall(
+        r"(?:Creation Date|Created On|created):\s*([0-9]{4}-[0-9]{2}-[0-9]{2})",
+        out,
+        re.I,
+    )
+    expiry = re.findall(r"Expir\w*\s*Date:\s*([0-9]{4}-[0-9]{2}-[0-9]{2})", out, re.I)
+    return (min(dates) if dates else None, min(expiry) if expiry else None)
+
+
+def first_capture(domain):
+    """Earliest Wayback capture returning 200.
+
+    The site's earliest captures may be under www., so try both hosts and take
+    the earlier. Sorting the returned rows rather than trusting limit=1 guards
+    against the API returning them unordered.
+
+    Do not switch this to matchType=domain. On a high-traffic domain that query
+    never returns (nytimes.com hung past 40s), whereas the two exact-host queries
+    answer in about 9s each. A slow or hanging CDX host is expected, not an
+    error: get_json's timeout turns it into an empty result and the other host
+    still answers, so a partial answer beats no answer here."""
+    stamps = []
+    for host in (domain, "www." + domain):
+        url = (
+            "http://web.archive.org/cdx/search/cdx?url="
+            + urllib.parse.quote(host)
+            + "&output=json&fl=timestamp,statuscode"
+            + "&filter=statuscode:200&limit=50"
+        )
+        rows = get_json(url)
+        if isinstance(rows, dict) or not rows or len(rows) < 2:
+            continue
+        stamps += [r[0] for r in rows[1:] if r and r[0]]
+    if not stamps:
+        return None
+    ts = min(stamps)
+    return f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}"
+
+
+def repos_naming(domain):
+    """Repos whose metadata mentions the domain. This is how an org that does not
+    name itself after its own site gets found."""
+    url = (
+        "https://api.github.com/search/repositories?q="
+        + urllib.parse.quote(domain)
+    )
+    d = get_json(url)
+    return [
+        {
+            "full_name": r["full_name"],
+            "owner": r["owner"]["login"],
+            "created": day(r.get("created_at")),
+            "pushed": day(r.get("pushed_at")),
+            "language": r.get("language"),
+            "stars": r.get("stargazers_count", 0),
+            "description": r.get("description"),
+        }
+        for r in d.get("items", [])[:10]
+    ]
+
+
+def org_detail(login):
+    d = get_json(f"https://api.github.com/orgs/{login}")
+    if d.get("message") == "Not Found":
+        d = get_json(f"https://api.github.com/users/{login}")
+    if d.get("message") == "Not Found":
+        return None
+    repos = get_json(
+        f"https://api.github.com/orgs/{login}/repos?per_page=100"
+    )
+    if isinstance(repos, dict):
+        repos = get_json(f"https://api.github.com/users/{login}/repos?per_page=100")
+    if isinstance(repos, dict):
+        repos = []
+    return {
+        "login": d.get("login"),
+        "name": d.get("name"),
+        "blog": d.get("blog"),
+        "description": d.get("description"),
+        "created": (d.get("created_at") or "")[:10],
+        "repos": sorted(
+            [
+                {
+                    "name": r["name"],
+                    "created": day(r.get("created_at")),
+                    "pushed": day(r.get("pushed_at")),
+                    "language": r.get("language"),
+                    "stars": r.get("stargazers_count", 0),
+                    "description": r.get("description"),
+                }
+                for r in repos
+            ],
+            key=lambda r: r["created"],
+        ),
+    }
+
+
+def site_links_to(domain, login):
+    """Does the site itself link to this GitHub owner? This is the difference
+    between a confirmed association and an inferred one."""
+    for path in ("", "about", "about-us", "contact"):
+        html = get_text(f"https://{domain}/{path}")
+        if re.search(rf"github\.com/{re.escape(login)}\b", html, re.I):
+            return f"https://{domain}/{path}"
+    return None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("domain")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
+    a = ap.parse_args()
+    domain = a.domain.replace("https://", "").replace("http://", "").strip("/")
+
+    reg, exp = domain_registered(domain)
+    cap = first_capture(domain)
+    hits = repos_naming(domain)
+    owners = []
+    seen = set()
+    for h in hits:
+        if h["owner"] not in seen:
+            seen.add(h["owner"])
+            o = org_detail(h["owner"])
+            if o:
+                o["linked_from_site"] = site_links_to(domain, h["owner"])
+                owners.append(o)
+
+    result = {
+        "domain": domain,
+        "registered": reg,
+        "registration_expires": exp,
+        "first_wayback_200": cap,
+        "repos_naming_domain": hits,
+        "candidate_owners": owners,
+    }
+
+    if a.json:
+        print(json.dumps(result, indent=2))
+        return 0
+
+    print(f"## {domain}")
+    print(f"  domain registered : {reg or 'unknown (whois gave no creation date)'}")
+    if exp:
+        print(f"  registration ends : {exp}")
+    print(f"  first archived 200: {cap or 'no Wayback capture found'}")
+    if reg and cap:
+        print("  note: registration and first capture BRACKET when the site went up.")
+        print("        Neither is an announcement date. Search for a launch post separately.")
+
+    if not hits:
+        print("\n  No GitHub repo mentions this domain. That is not proof they have none:")
+        print("  an org may publish code under a name unrelated to its website.")
+        return 0
+
+    print(f"\n## GitHub repos naming {domain}")
+    for h in hits:
+        print(f"  {h['full_name']}  created={h['created']} pushed={h['pushed']}")
+
+    for o in owners:
+        print(f"\n## Owner: {o['login']}  (org/user created {o['created']})")
+        for f in ("name", "description", "blog"):
+            if o.get(f):
+                print(f"  {f}: {o[f]}")
+        if o["linked_from_site"]:
+            print(f"  CONFIRMED: {domain} links to this owner at {o['linked_from_site']}")
+        else:
+            print(f"  INFERRED ONLY: no page on {domain} links to github.com/{o['login']}.")
+            print("  The association rests on the repo name and subject matter. Say so")
+            print("  in writing, or confirm with the org before asserting it.")
+        if o["repos"]:
+            print(f"  {len(o['repos'])} public repos, oldest first:")
+            for r in o["repos"]:
+                d = (r["description"] or "")[:52]
+                print(f"    {r['name']:26} {r['created']} -> {r['pushed']} "
+                      f"{str(r['language'] or ''):8} *{r['stars']:<3} {d}")
+            print(f"  oldest repo predates domain registration: "
+                  f"{'yes' if reg and o['repos'][0]['created'] < reg else 'no'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

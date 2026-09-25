@@ -1,0 +1,111 @@
+#!/bin/bash
+# vshrink -- shrink a video to fit a target file size.
+#
+# Size is arithmetic, not judgment: a size cap means you solve for bitrate and
+# use two-pass x264, rather than guessing a CRF and measuring afterward. Written
+# 2026-09-17 after a CRF 21 guess undershot a 100MB budget by more than half and
+# needed a second full encode to fix.
+#
+# Usage: vshrink <input> <target> [output]
+#   target accepts 95MB, 100M, 1.5GB, or a bare number of megabytes.
+#   output defaults to <input-stem>-<target>.<ext>
+#
+# Exits nonzero if the target is not reachable at a sane bitrate, rather than
+# emitting a file that misses the cap.
+
+set -euo pipefail
+
+die() { echo "vshrink: $*" >&2; exit 1; }
+
+[[ $# -ge 2 ]] || die "usage: vshrink <input> <target-size> [output]"
+
+input=$1
+target_raw=$2
+
+[[ -f $input ]] || die "no such file: $input"
+command -v ffmpeg  >/dev/null || die "ffmpeg not found on PATH"
+command -v ffprobe >/dev/null || die "ffprobe not found on PATH"
+
+# Parse the target into bytes. Accept MB/M/GB/G suffixes, case-insensitively,
+# and treat a bare number as megabytes. Decimal units (10^6), which is what
+# upload limits almost always mean.
+target_bytes=$(
+  printf '%s' "$target_raw" | awk '
+    {
+      s = tolower($0)
+      gsub(/[[:space:],]/, "", s)
+      if (s ~ /^[0-9.]+g(b)?$/)      { sub(/g(b)?$/, "", s); print int(s * 1000000000) }
+      else if (s ~ /^[0-9.]+m(b)?$/) { sub(/m(b)?$/, "", s); print int(s * 1000000) }
+      else if (s ~ /^[0-9.]+k(b)?$/) { sub(/k(b)?$/, "", s); print int(s * 1000) }
+      else if (s ~ /^[0-9.]+$/)      { print int(s * 1000000) }
+      else                           { print "" }
+    }'
+)
+[[ -n $target_bytes && $target_bytes -gt 0 ]] || die "cannot parse target size: $target_raw"
+
+if [[ $# -ge 3 ]]; then
+  output=$3
+else
+  stem=${input%.*}
+  ext=${input##*.}
+  [[ $ext == "$input" ]] && ext=mp4
+  slug=$(printf '%s' "$target_raw" | tr '[:upper:]' '[:lower:]' | tr -cd '0-9a-z.')
+  output="${stem}-${slug}.${ext}"
+fi
+
+[[ $output == "$input" ]] && die "output would overwrite input: $output"
+
+duration=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$input")
+[[ -n $duration ]] || die "could not read duration from $input"
+
+# Audio: keep the source bitrate when it is already modest, else cap it. There is
+# no point spending 320k on speech, and no point degrading music that was fine.
+src_abr=$(ffprobe -v error -select_streams a:0 -show_entries stream=bit_rate -of csv=p=0 "$input" 2>/dev/null | head -1)
+[[ $src_abr =~ ^[0-9]+$ ]] || src_abr=128000
+audio_k=$(( src_abr / 1000 ))
+(( audio_k > 128 )) && audio_k=128
+(( audio_k < 64 ))  && audio_k=64
+
+src_size=$(ffprobe -v error -show_entries format=size -of csv=p=0 "$input")
+if [[ $src_size =~ ^[0-9]+$ ]] && (( src_size <= target_bytes )); then
+  echo "vshrink: $input is already $src_size bytes, at or under the $target_bytes byte target."
+  echo "vshrink: nothing to do. Copy it if you want a file at $output."
+  exit 0
+fi
+
+# Solve for video bitrate: total budget minus audio, minus ~1% container
+# overhead. Computed in awk because the duration is fractional.
+video_k=$(awk -v b="$target_bytes" -v d="$duration" -v a="$audio_k" '
+  BEGIN {
+    total_k = (b * 8 / d) / 1000     # total kbit/s the budget allows
+    v = (total_k * 0.99) - a         # leave 1% for container overhead
+    printf "%d", (v > 0 ? v : 0)
+  }')
+
+(( video_k >= 100 )) || die "target $target_raw over ${duration}s leaves only ${video_k}k for video; pick a larger target or shorten the clip"
+
+echo "vshrink: $input -> $output"
+echo "vshrink: ${duration}s, target ${target_bytes} bytes => video ${video_k}k + audio ${audio_k}k, two-pass"
+
+# Pass logs go somewhere disposable and get cleaned up on exit. Note that a
+# pass-2 run cannot be repeated without these, so always run both passes.
+passlog=$(mktemp -d)/vshrink
+trap 'rm -rf "$(dirname "$passlog")"' EXIT
+
+ffmpeg -y -v error -stats -i "$input" \
+  -c:v libx264 -preset slow -b:v "${video_k}k" \
+  -pass 1 -passlogfile "$passlog" -an -f mp4 /dev/null
+
+ffmpeg -y -v error -stats -i "$input" \
+  -c:v libx264 -preset slow -b:v "${video_k}k" \
+  -pass 2 -passlogfile "$passlog" -pix_fmt yuv420p \
+  -c:a aac -b:a "${audio_k}k" -movflags +faststart "$output"
+
+# Verify against the cap by measuring the artifact, never by trusting the encode.
+got=$(stat -f '%z' "$output" 2>/dev/null || stat -c '%s' "$output")
+pct=$(awk -v g="$got" -v t="$target_bytes" 'BEGIN { printf "%.1f", 100 * g / t }')
+echo "vshrink: wrote $output, $got bytes (${pct}% of target)"
+if (( got > target_bytes )); then
+  echo "vshrink: OVER TARGET by $(( got - target_bytes )) bytes; re-run with a smaller target" >&2
+  exit 1
+fi

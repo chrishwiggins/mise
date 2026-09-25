@@ -1,0 +1,52 @@
+#!/bin/bash
+# Claude Code statusLine: shout when the model is quota-metered (Fable).
+#
+# Reads the statusline JSON payload on stdin (contract:
+# https://code.claude.com/docs/en/statusline) and prints one line.
+#
+# The point is the FABLE banner: Chris keeps forgetting which model a window is
+# on and burning metered credits. On Fable the line is red-background white
+# text with the five-hour and seven-day quota actually used; on any other model
+# it is a quiet dim line, so the loud case cannot be mistaken for normal.
+
+payload=$(cat)
+
+jqr() { printf '%s' "$payload" | /usr/bin/jq -r "$1 // empty" 2>/dev/null; }
+
+model=$(jqr '.model.display_name')
+model_id=$(jqr '.model.id')
+dir=$(jqr '.workspace.current_dir')
+[ -n "$dir" ] && dir=$(basename "$dir")
+ctx=$(jqr '.context_window.used_percentage')
+
+# Quota: five-hour and seven-day windows, as whole percentages.
+h5=$(jqr '.rate_limits.five_hour.used_percentage')
+d7=$(jqr '.rate_limits.seven_day.used_percentage')
+pct() { [ -n "$1" ] && printf '%.0f' "$1" 2>/dev/null || printf '?'; }
+
+R=$'\033[0m'
+DIM=$'\033[2m'
+
+# Fable is the metered one. Match on id so a display-name change cannot
+# silently turn the warning off; keep the name check as a second net.
+case "$model_id$model" in
+  *[Ff]able*) metered=1 ;;
+  *)          metered=0 ;;
+esac
+
+if [ "$metered" = 1 ]; then
+  BANNER=$'\033[1;97;41m'   # bold white on red
+  WARN=$'\033[1;31m'        # bold red
+  line="${BANNER} FABLE - METERED ${R}"
+  q=""
+  [ -n "$h5" ] && q="5h $(pct "$h5")%"
+  [ -n "$d7" ] && q="${q:+$q  }7d $(pct "$d7")%"
+  [ -n "$q" ] && line="$line ${WARN}${q}${R}"
+else
+  line="${DIM}${model:-?}${R}"
+fi
+
+[ -n "$dir" ] && line="$line ${DIM}${dir}${R}"
+[ -n "$ctx" ] && line="$line ${DIM}ctx $(pct "$ctx")%${R}"
+
+printf '%s\n' "$line"

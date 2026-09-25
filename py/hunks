@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""List the uncommitted hunks in a file, one line each, so you can tell your
+own work from another session's before staging.
+
+Chris runs many concurrent Claude sessions against the same mise and seiton
+trees, so a file you edited often ALSO holds another session's uncommitted
+work. `git add <file>` then sweeps their in-flight change into your commit.
+This is not the "did HEAD move" case: two sessions editing the same file from
+the same baseline leaves foreign hunks with HEAD completely unchanged.
+
+Usage:
+    hunks <file> [...]          list hunks: index, new-file line range, first
+                                added line, and a guessed identifying symbol
+    hunks --split <file>        also write /tmp/hunks-<name>/NN.diff, one
+                                applicable diff per hunk, plus a header stub
+
+Staging a subset (the whole point). Each NN.diff is SELF-CONTAINED: it already
+carries the file header, so apply them one at a time and do NOT prepend
+`header` (that yields "patch with only garbage"). The `header` file is there
+only for hand-assembly.
+
+    hunks --split bash/m
+    for h in 04 05; do git apply --cached --check /tmp/hunks-m/$h.diff \
+        && git apply --cached /tmp/hunks-m/$h.diff; done
+    git diff --cached -- bash/m | grep -c '<foreign token>'   # must be 0
+    git show :bash/m | bash -n -                              # still parses
+
+Offsets: each emitted hunk keeps its ORIGINAL @@ header, which assumes the
+earlier hunks were applied. When you drop earlier ones the +start is wrong by
+their net line delta, so this script rewrites +start per hunk to stand alone.
+`git apply --check` is still the authority; run it.
+
+Exit status: 0 if hunks were found, 1 if the file is clean, 2 on error.
+"""
+
+import os
+import re
+import subprocess
+import sys
+
+HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
+
+
+def die(msg):
+    print(f"hunks: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def diff_for(path):
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--", path],
+            capture_output=True, text=True, check=True,
+        )
+    except FileNotFoundError:
+        die("git not found on PATH")
+    except subprocess.CalledProcessError as e:
+        die(f"git diff failed for {path}: {e.stderr.strip()}")
+    return out.stdout
+
+
+def parse(diff):
+    """Return (header_lines, [(hdr, [body lines]), ...])."""
+    lines = diff.splitlines(keepends=True)
+    header, hunks, i = [], [], 0
+    while i < len(lines) and not lines[i].startswith("@@"):
+        header.append(lines[i])
+        i += 1
+    while i < len(lines):
+        hdr = lines[i]
+        i += 1
+        body = []
+        while i < len(lines) and not lines[i].startswith("@@"):
+            body.append(lines[i])
+            i += 1
+        hunks.append((hdr, body))
+    return header, hunks
+
+
+def summarize(body):
+    """First added line, trimmed, as the human-recognizable fingerprint."""
+    for ln in body:
+        if ln.startswith("+") and ln[1:].strip():
+            return ln[1:].strip()[:70]
+    for ln in body:
+        if ln.startswith("-") and ln[1:].strip():
+            return "(deletion) " + ln[1:].strip()[:58]
+    return "(whitespace only)"
+
+
+def counts(body):
+    add = sum(1 for l in body if l.startswith("+"))
+    rem = sum(1 for l in body if l.startswith("-"))
+    return add, rem
+
+
+def main(argv):
+    split = False
+    args = []
+    for a in argv:
+        if a == "--split":
+            split = True
+        elif a in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        else:
+            args.append(a)
+    if not args:
+        die("usage: hunks [--split] <file> [...]")
+
+    found_any = False
+    for path in args:
+        diff = diff_for(path)
+        if not diff.strip():
+            print(f"{path}: clean (no uncommitted changes)")
+            continue
+        found_any = True
+        header, hunks = parse(diff)
+        total_add = sum(counts(b)[0] for _, b in hunks)
+        total_rem = sum(counts(b)[1] for _, b in hunks)
+        print(f"{path}: {len(hunks)} hunk(s), +{total_add} -{total_rem}")
+
+        outdir = None
+        if split:
+            outdir = os.path.join("/tmp", "hunks-" + os.path.basename(path))
+            os.makedirs(outdir, exist_ok=True)
+            with open(os.path.join(outdir, "header"), "w") as fh:
+                fh.writelines(header)
+
+        for n, (hdr, body) in enumerate(hunks, 1):
+            m = HUNK_RE.match(hdr)
+            if not m:
+                die(f"unparseable hunk header in {path}: {hdr.strip()}")
+            new_start = int(m.group(3))
+            new_len = int(m.group(4) or 1)
+            add, rem = counts(body)
+            print(f"  {n:2d}. lines {new_start}-{new_start + new_len - 1} "
+                  f"(+{add} -{rem})  {summarize(body)}")
+            if outdir:
+                # Rewrite +start so this hunk applies without the earlier ones.
+                old_start = int(m.group(1))
+                old_len = m.group(2)
+                new_len_s = m.group(4)
+                oldspec = f"{old_start}" + (f",{old_len}" if old_len else "")
+                newspec = f"{old_start}" + (f",{new_len_s}" if new_len_s else "")
+                fixed = f"@@ -{oldspec} +{newspec} @@{m.group(5)}\n"
+                with open(os.path.join(outdir, f"{n:02d}.diff"), "w") as fh:
+                    fh.writelines(header)
+                    fh.write(fixed)
+                    fh.writelines(body)
+        if outdir:
+            print(f"  split into {outdir}/NN.diff "
+                  f"(concatenate the ones you want, then "
+                  f"git apply --cached --check)")
+
+    return 0 if found_any else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

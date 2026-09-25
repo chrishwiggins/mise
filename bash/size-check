@@ -1,0 +1,38 @@
+#!/bin/bash
+# Report a file's size in BOTH decimal MB and binary MiB, and optionally test it
+# against a limit stated in decimal MB.
+#
+# Exists because `ls -lh` prints MiB but labels it "M", which reads as MB. On
+# 2026-09-05 a compressed video showed as "96M" in ls and was actually
+# 100,853,041 bytes = 100.85 MB decimal, i.e. OVER a 100 MB upload limit that
+# it appeared to clear. Upload limits (GitHub, most web forms) are decimal.
+#
+# Usage:
+#   size-check <file> [limit_MB]
+# Exit: 0 under the limit (or no limit given), 1 if at/over it.
+
+set -u
+[ $# -ge 1 ] || { echo "usage: size-check <file> [limit_MB]" >&2; exit 2; }
+f=$1
+[ -f "$f" ] || { echo "size-check: no such file: $f" >&2; exit 2; }
+
+b=$(stat -f %z "$f")
+mb=$(echo "scale=2; $b/1000000" | bc)
+mib=$(echo "scale=2; $b/1048576" | bc)
+
+printf '%s\n' "$f"
+printf '  %s bytes\n' "$b"
+printf '  %s MB  (decimal, what upload limits mean)\n' "$mb"
+printf '  %s MiB (binary, what ls -lh prints as "M")\n' "$mib"
+
+if [ $# -ge 2 ]; then
+  lim=$2
+  limbytes=$(echo "$lim*1000000" | bc | cut -d. -f1)
+  if [ "$b" -lt "$limbytes" ]; then
+    printf '  UNDER %s MB limit by %s MB\n' "$lim" "$(echo "scale=2; ($limbytes-$b)/1000000" | bc)"
+    exit 0
+  else
+    printf '  OVER %s MB limit by %s MB\n' "$lim" "$(echo "scale=2; ($b-$limbytes)/1000000" | bc)"
+    exit 1
+  fi
+fi
