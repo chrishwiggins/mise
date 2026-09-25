@@ -1,0 +1,54 @@
+#!/bin/bash
+# Wait for a running process to exit, then print a done line.
+#
+# Exists because the obvious inline idiom is silently broken:
+#   while ps aux | grep -q "[f]fmpeg"; do sleep 10; done
+# The waiting shell's OWN command line contains the string "[f]fmpeg", and on
+# macOS `ps aux` shows full command lines, so the loop matches ITSELF and waits
+# forever after the real process is long gone. Caught 2026-09-05 compressing a
+# video: two such loops hung ~20 minutes past a clean ffmpeg exit.
+#
+# Match by PID, never by re-grepping a pattern each iteration.
+#
+# Usage:
+#   waitpid-quiet <pid> [interval_seconds]
+#   waitpid-quiet -f <pattern> [interval_seconds]   # resolve pattern to a PID ONCE, up front
+#
+# Exit: 0 when the process is gone; 1 if no process matched at start.
+
+set -u
+interval_default=10
+
+if [ "${1:-}" = "-f" ]; then
+  [ $# -ge 2 ] || { echo "usage: waitpid-quiet -f <pattern> [interval]" >&2; exit 2; }
+  pat=$2
+  interval=${3:-$interval_default}
+  # Resolve to a PID exactly once. Re-running pgrep in the loop reintroduces
+  # the self-match bug, since this script's argv holds the pattern too.
+  pid=$(/usr/bin/pgrep -n -f "$pat" 2>/dev/null)
+  if [ -z "$pid" ]; then
+    echo "waitpid-quiet: no process matching '$pat'" >&2
+    exit 1
+  fi
+  # Never wait on ourselves.
+  if [ "$pid" = "$$" ]; then
+    echo "waitpid-quiet: pattern matched this script; refusing to self-wait" >&2
+    exit 1
+  fi
+else
+  [ $# -ge 1 ] || { echo "usage: waitpid-quiet <pid> [interval] | -f <pattern> [interval]" >&2; exit 2; }
+  pid=$1
+  interval=${2:-$interval_default}
+  if ! /bin/kill -0 "$pid" 2>/dev/null; then
+    echo "waitpid-quiet: pid $pid is not running" >&2
+    exit 1
+  fi
+fi
+
+echo "waiting on pid $pid"
+start=$(date +%s)
+while /bin/kill -0 "$pid" 2>/dev/null; do
+  sleep "$interval"
+done
+end=$(date +%s)
+echo "pid $pid exited after $((end-start))s"

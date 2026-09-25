@@ -1,0 +1,136 @@
+#!/usr/bin/env python3.11
+"""bitly: create, rename, or resolve bit.ly links from the command line.
+
+    bitly shorten <long_url> [<back-half>]   create bit.ly/<back-half> (or a random one)
+    bitly custom <bit.ly/xxxx> <back-half>     give an existing link a custom back-half
+    bitly retarget <bit.ly/xxxx> <long_url>    point an existing link somewhere else
+    bitly resolve <back-half-or-url>          print where a link points (no token needed)
+    bitly list [N]                            newest N links in the default group
+
+Auth: a Bitly API access token in $BITLY_TOKEN or ~/.config/bitly/token, made at
+https://app.bitly.com/settings/api/ while logged in as the account that owns the
+links. Custom back-halves go through POST /v4/custom_bitlinks after the link is
+created; if the back-half is taken or the plan refuses it, the random link is
+kept and both are printed. Bitly's plan limits on custom back-halves are not
+known to this script; read the error it prints. Verified 2026-09-09: the free
+plan accepts custom back-halves but refuses `retarget` (HTTP 402), so a
+link's destination is permanent once made.
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+API = "https://api-ssl.bitly.com/v4"
+
+
+def token():
+    t = os.environ.get("BITLY_TOKEN") or ""
+    for name in ("token", "access_token"):
+        p = Path.home() / ".config" / "bitly" / name
+        if not t and p.exists():
+            t = p.read_text().strip()
+    if t.startswith("/"):
+        sys.exit(f"{p} holds a filesystem path, not a token; run: pbpaste > ~/.config/bitly/token")
+    if not t:
+        sys.exit("no token: set $BITLY_TOKEN or write it to ~/.config/bitly/token "
+                 "(https://app.bitly.com/settings/api/)")
+    return t
+
+
+def call(method, path, body=None):
+    req = urllib.request.Request(API + path, method=method,
+                                 headers={"Authorization": f"Bearer {token()}",
+                                          "Content-Type": "application/json"})
+    data = json.dumps(body).encode() if body is not None else None
+    try:
+        with urllib.request.urlopen(req, data) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"{method} {path} -> HTTP {e.code}: {e.read().decode(errors='replace')}")
+
+
+def group_guid():
+    return call("GET", "/groups")["groups"][0]["guid"]
+
+
+def retarget(bitlink, long_url):
+    """Point an existing bit.ly link (custom or not) at a new destination."""
+    bitlink = bitlink.replace("https://", "").replace("http://", "")
+    if "/" not in bitlink:
+        bitlink = "bit.ly/" + bitlink
+    call("PATCH", f"/bitlinks/{bitlink}", {"long_url": long_url})
+    print(f"retarget https://{bitlink}  ->  {long_url}")
+
+
+def custom(bitlink_id, back_half):
+    """Give an existing bit.ly/xxxx link a custom back-half."""
+    bitlink_id = bitlink_id.replace("https://", "").replace("http://", "")
+    custom_link = f"bit.ly/{back_half}"
+    call("POST", "/custom_bitlinks", {"custom_bitlink": custom_link, "bitlink_id": bitlink_id})
+    print(f"custom   https://{custom_link}  (alias of {bitlink_id})")
+
+
+def shorten(long_url, back_half=None):
+    link = call("POST", "/bitlinks", {"long_url": long_url, "domain": "bit.ly",
+                                      "group_guid": group_guid()})
+    print(f"created  https://{link['id']}  ->  {long_url}")
+    if back_half:
+        custom = f"bit.ly/{back_half}"
+        try:
+            call("POST", "/custom_bitlinks", {"custom_bitlink": custom,
+                                              "bitlink_id": link["id"]})
+        except SystemExit as e:
+            print(f"custom back-half {custom} refused: {e}", file=sys.stderr)
+            print(f"kept     https://{link['id']}")
+            return
+        print(f"custom   https://{custom}  ->  {long_url}")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None
+
+
+def resolve(s):
+    s = s.replace("https://", "").replace("http://", "")
+    if "/" not in s:
+        s = "bit.ly/" + s
+    opener = urllib.request.build_opener(_NoRedirect)
+    req = urllib.request.Request("https://" + s, method="HEAD")
+    try:
+        opener.open(req)
+        print(f"{s} -> (200 with no redirect)")
+    except urllib.error.HTTPError as e:
+        print(f"{s} -> {e.headers.get('Location', '(no Location header)')}")
+
+
+def listing(n):
+    g = group_guid()
+    for b in call("GET", f"/groups/{g}/bitlinks?size={n}")["links"]:
+        print(f"{b['id']:<28} {b['long_url']}")
+
+
+def main(argv):
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return
+    cmd = argv[1]
+    if cmd == "shorten" and len(argv) in (3, 4):
+        shorten(argv[2], argv[3] if len(argv) == 4 else None)
+    elif cmd == "retarget" and len(argv) == 4:
+        retarget(argv[2], argv[3])
+    elif cmd == "custom" and len(argv) == 4:
+        custom(argv[2], argv[3])
+    elif cmd == "resolve" and len(argv) == 3:
+        resolve(argv[2])
+    elif cmd == "list":
+        listing(int(argv[2]) if len(argv) > 2 else 20)
+    else:
+        sys.exit(__doc__.strip())
+
+
+if __name__ == "__main__":
+    main(sys.argv)

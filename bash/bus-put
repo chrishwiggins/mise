@@ -1,0 +1,70 @@
+#!/bin/bash
+# bus-put: write a numbered, marker-wrapped message to the /tmp/bus panel bus
+# and load it onto the clipboard, verifying the clipboard afterwards.
+#
+#   bus-put <slug> <bodyfile>     write /tmp/bus/N-<slug>.md wrapped in <bus N> ... </bus N>,
+#                                 N recomputed at write time, then pbcopy and verify
+#   bus-put --reload N            pbcopy an existing /tmp/bus/N-*.md and verify
+#   bus-put --check               print which bus number the clipboard currently holds
+#
+# Why a script: several Claude sessions share this bus and the one clipboard.
+# On 2026-09-05 two sessions both wrote a "55", one without markers, and the
+# wrong one was pasted. The number is only true at write time and the clipboard
+# is only true at paste time, so both are computed here, never by hand.
+set -euo pipefail
+BUS="${BUS_DIR:-/tmp/bus}"   # BUS_DIR exists so test/test-bus-put.sh never touches the live bus
+mkdir -p "$BUS"
+
+next_n() {
+  local n
+  n=$(/bin/ls "$BUS" 2>/dev/null | /usr/bin/sed -n 's/^\([0-9][0-9]*\)-.*/\1/p' | /usr/bin/sort -n | /usr/bin/tail -1)
+  echo $(( ${n:-0} + 1 ))
+}
+
+verify_clip() {
+  local n="$1" first last
+  first=$(/usr/bin/pbpaste | /usr/bin/head -1)
+  last=$(/usr/bin/pbpaste | /usr/bin/tail -1)
+  if [[ "$first" != "<bus $n>" || "$last" != "</bus $n>" ]]; then
+    echo "CLIPBOARD MISMATCH: first='$first' last='$last' (wanted <bus $n> ... </bus $n>)" >&2
+    exit 2
+  fi
+  echo "clipboard holds bus $n"
+}
+
+case "${1:-}" in
+  --check)
+    first=$(/usr/bin/pbpaste | /usr/bin/head -1)
+    if [[ "$first" =~ ^\<bus\ ([0-9]+)\>$ ]]; then echo "clipboard holds bus ${BASH_REMATCH[1]}"; else echo "clipboard holds no bus message (first line: ${first:0:60})"; fi
+    ;;
+  --reload)
+    n="${2:?bus number}"
+    f=$(/bin/ls "$BUS"/"$n"-*.md 2>/dev/null | /usr/bin/head -1)
+    [[ -n "$f" ]] || { echo "no /tmp/bus/$n-*.md" >&2; exit 1; }
+    /usr/bin/pbcopy < "$f"
+    echo "loaded $f"
+    verify_clip "$n"
+    ;;
+  "")
+    /usr/bin/sed -n '2,6p' "$0"; exit 1
+    ;;
+  *)
+    slug="$1"; body="${2:?bodyfile}"
+    [[ -f "$body" ]] || { echo "no such body file: $body" >&2; exit 1; }
+    # /tmp/bus is world-readable and posting also loads the clipboard, so refuse
+    # BEFORE writing: a check run after the post is a check on a message already out.
+    if /usr/bin/grep -n -i -E 'password|passwd|pwd' "$body" >&2; then
+        echo "refused: credential word in body (lines above); reword and rerun" >&2
+        exit 3
+    fi
+    n=$(next_n)
+    out="$BUS/$n-$slug.md"
+    # strip any markers already in the body so they are never doubled or stale;
+    # a literal {N} in the body becomes the real number, so the report-back line
+    # never needs a hand edit after posting
+    { echo "<bus $n>"; /usr/bin/grep -v -E '^</?bus [0-9]+>$' "$body" | /usr/bin/sed "s/{N}/$n/g"; echo "</bus $n>"; } > "$out"
+    /usr/bin/pbcopy < "$out"
+    echo "wrote $out"
+    verify_clip "$n"
+    ;;
+esac

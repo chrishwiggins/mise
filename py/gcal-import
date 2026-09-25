@@ -437,4 +437,9 @@ def main():
 
 
 if __name__ == "__main__":
+    import os as _os, sys as _sys
+    if _os.environ.get("CLAUDECODE"):
+        _sys.exit(_os.path.basename(_sys.argv[0]) + ": refusing to write to Google "
+                  "Calendar from inside Claude Code. Stage the command for Chris "
+                  "to run in his own terminal.")
     main()

@@ -1,0 +1,106 @@
+#!/usr/bin/env python3.11
+"""domain-check <domain>: is this domain real, how old is it, and who serves it.
+
+Read-only. Never connects to the domain itself; every fact comes from a third
+party (WHOIS, the local resolver, urlscan.io, crt.sh), so it is safe to run on a
+name that a network firewall has flagged.
+
+Reports, each with its source:
+  - WHOIS registrar, creation date, age in days
+  - what the local resolver answers, and whether that answer is a sinkhole
+    (a firewall rewriting DNS, in which case dig @1.1.1.1 will lie too)
+  - urlscan.io scans: time, IP, page title
+  - crt.sh certificate count, printed with the HTTP status so that an outage
+    is never read as "no certificates"
+
+Exit 0 if the domain is registered, 1 if WHOIS finds no registration.
+"""
+import json
+import re
+import subprocess
+import sys
+import urllib.request
+from datetime import datetime, timezone
+
+SINKHOLES = ("sinkhole", "blackhole", "0.0.0.0", "127.0.0.1")
+UA = {"User-Agent": "Mozilla/5.0 domain-check"}
+
+
+def run(argv):
+    out = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    return out.stdout
+
+
+def fetch(url):
+    """Return (status, body); status 0 means the request itself failed."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as err:
+        return err.code, ""
+    except Exception:
+        return 0, ""
+
+
+def whois(domain):
+    text = run(["/usr/bin/whois", domain])
+    created = re.search(r"Creation Date:\s*(\S+)", text)
+    registrar = re.search(r"Registrar:\s*(.+)", text)
+    if not created:
+        print("WHOIS     no Creation Date found (unregistered, or a registry that hides it)")
+        return False
+    when = datetime.fromisoformat(created.group(1).replace("Z", "+00:00"))
+    age = (datetime.now(timezone.utc) - when).days
+    flag = "  <-- NEW, under 90 days" if age < 90 else ""
+    print(f"WHOIS     created {when.date()} ({age} days ago){flag}")
+    print(f"WHOIS     registrar {registrar.group(1).strip() if registrar else 'unknown'}")
+    return True
+
+
+def dns(domain):
+    answer = run(["/usr/bin/dig", "+short", domain, "A"]).split()
+    if not answer:
+        print("DNS       local resolver returned nothing")
+    elif any(s in a.lower() for a in answer for s in SINKHOLES):
+        print(f"DNS       SINKHOLED by this network: {' '.join(answer)}")
+        print("DNS       other resolvers queried from here are intercepted too; trust the rows below")
+    else:
+        print(f"DNS       {' '.join(answer)}")
+
+
+def urlscan(domain):
+    status, body = fetch(f"https://urlscan.io/api/v1/search/?q=domain:{domain}")
+    if status != 200:
+        print(f"urlscan   UNVERIFIED, HTTP {status}")
+        return
+    hits = json.loads(body).get("results", [])
+    print(f"urlscan   {len(hits)} scans")
+    for hit in hits[:6]:
+        page = hit.get("page", {})
+        print(f"urlscan   {hit.get('task', {}).get('time', '')[:10]}  {page.get('ip')}  {page.get('title')}")
+
+
+def certs(domain):
+    status, body = fetch(f"https://crt.sh/?q={domain}&output=json")
+    if status != 200:
+        print(f"crt.sh    UNVERIFIED, HTTP {status} (crt.sh is often down; this is not a zero)")
+        return
+    rows = json.loads(body or "[]")
+    note = "  (an empty list on a site urlscan shows on https means crt.sh lag, not absence)" if not rows else ""
+    print(f"crt.sh    {len(rows)} certificates{note}")
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1].startswith("-"):
+        sys.exit(__doc__)
+    domain = re.sub(r"^https?://", "", sys.argv[1]).split("/")[0].removeprefix("www.")
+    print(f"domain    {domain}")
+    registered = whois(domain)
+    dns(domain)
+    urlscan(domain)
+    certs(domain)
+    sys.exit(0 if registered else 1)
+
+
+if __name__ == "__main__":
+    main()

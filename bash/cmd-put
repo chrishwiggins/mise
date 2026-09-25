@@ -1,0 +1,90 @@
+#!/bin/bash
+# cmd-put SLUG BODYFILE [TEXTFILE]
+#
+# Stage a command Claude wants Chris to run as an executable script at
+# /tmp/cmd/NR-SLUG.sh, where NR = 1 + the largest NR already present in
+# /tmp/cmd/*.sh (1 if none). Chris then runs it with `bash /tmp/cmd/NR-SLUG.sh`
+# without needing to paste multi-line text (the harness clipboard mangles \n).
+#
+# BODYFILE is a file Claude wrote (with the Write tool) holding the exact
+# command(s). It is copied in with a shebang.
+#
+# TEXTFILE (optional) is the editable message payload for the command (an email
+# body, a Slack message). It is written to /tmp/doc/NR-SLUG.sh.txt, RIGHT NEXT to
+# the script by number and slug, so Chris can edit the text in a well-named file
+# before running the script. In BODYFILE, write the placeholder {TXT} wherever
+# the payload path goes; cmd-put substitutes the real /tmp/doc/NR-SLUG.sh.txt
+# path. This keeps the load-bearing text out of a garbage scratchpad path.
+#
+# Prints, on success, the script path, the editable text path (if any), and the
+# `bash <path>` line to hand Chris.
+set -euo pipefail
+
+dir=/tmp/cmd
+docdir=/tmp/doc
+mkdir -p "$dir" "$docdir"
+
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+    echo "usage: cmd-put SLUG BODYFILE [TEXTFILE]" >&2
+    exit 2
+fi
+slug=$1
+body=$2
+textfile=${3:-}
+
+if [ ! -f "$body" ]; then
+    echo "cmd-put: body file not found: $body" >&2
+    exit 2
+fi
+if [ -n "$textfile" ] && [ ! -f "$textfile" ]; then
+    echo "cmd-put: text file not found: $textfile" >&2
+    exit 2
+fi
+
+# slug sanity: short, memorable, filename-safe
+if ! printf '%s' "$slug" | grep -qE '^[a-z0-9][a-z0-9-]{0,39}$'; then
+    echo "cmd-put: slug must be lowercase a-z0-9 and dashes, <=40 chars: $slug" >&2
+    exit 2
+fi
+
+# NR = 1 + largest leading integer among /tmp/cmd/<n>-*.sh
+max=0
+for f in "$dir"/*.sh; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    n=${base%%-*}
+    if printf '%s' "$n" | grep -qE '^[0-9]+$'; then
+        [ "$n" -gt "$max" ] && max=$n
+    fi
+done
+nr=$((max + 1))
+
+out="$dir/$nr-$slug.sh"
+txtout=""
+
+# If a text payload was given, place it beside the script by NR+slug and make
+# the body reference it via {TXT}.
+if [ -n "$textfile" ]; then
+    txtout="$docdir/$nr-$slug.sh.txt"
+    cp "$textfile" "$txtout"
+    # substitute {TXT} in the body with the real editable-text path
+    bodytext=$(sed "s#{TXT}#$txtout#g" "$body")
+else
+    bodytext=$(cat "$body")
+fi
+
+{
+    echo "#!/bin/bash"
+    echo "# staged by cmd-put $(date '+%Y-%m-%d %H:%M:%S') -- run: bash $out"
+    if [ -n "$txtout" ]; then
+        echo "# editable message text: $txtout  (edit this, then run the script)"
+    fi
+    printf '%s\n' "$bodytext"
+} > "$out"
+chmod +x "$out"
+
+echo "wrote $out"
+if [ -n "$txtout" ]; then
+    echo "edit text: $txtout"
+fi
+echo "run it:  bash $out"

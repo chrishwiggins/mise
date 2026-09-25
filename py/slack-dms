@@ -1,0 +1,211 @@
+#!/usr/bin/env python3.11
+"""Dump every direct message (1:1 and group) the token's owner can see.
+
+Companion to slack-fetch (same token convention, same API helper). Where
+slack-fetch reads one channel or one thread, this enumerates all of them:
+users.conversations with types=im,mpim, then conversations.history per
+conversation with cursor pagination, then conversations.replies for any
+message that has a thread. Threads are inlined under their parent.
+
+Usage:
+    slack-dms --out DIR [--token-file PATH] [--since YYYY-MM-DD] [--quiet]
+    slack-dms --whoami [--token-file PATH]
+
+Output, under DIR:
+    index.tsv            one row per conversation: id, kind, members, messages, first, last
+    <slug>.md            one file per conversation, chronological, "date time  name: text"
+    raw/<id>.json        the messages exactly as Slack returned them (threads inlined)
+    users.json           id -> {name, real_name} for everyone referenced
+
+Reruns are safe: files are rewritten from a full pull. --since narrows the
+pull to messages on or after that date (for a mid-semester refresh).
+
+Token: --token-file, else $SLACK_TOKEN, else ~/.config/slack/token. It must be
+a USER token (xoxp-) with scopes im:history, im:read, mpim:history, mpim:read,
+users:read. Mint one at https://api.slack.com/apps: create an app in the
+workspace, add those under "User Token Scopes", install, copy the token that
+starts with xoxp-. A bot token sees no DMs at all.
+
+Caught 2026-09-14 (seminar f2026): 64 seniors were asked to answer a question
+by DM in Slack; the free plan's export omits DMs, so this is the only way to
+read them all without scrolling the client.
+"""
+import argparse
+import datetime as dt
+import json
+import os
+import pathlib
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+API = "https://slack.com/api/"
+TOKEN = None
+
+
+def load_token(path):
+    global TOKEN
+    if path:
+        p = pathlib.Path(path).expanduser()
+        if not p.exists():
+            sys.exit(f"no token file at {p}\nsee the header of this file for how to mint one")
+        TOKEN = p.read_text().splitlines()[0].strip()
+    elif os.environ.get("SLACK_TOKEN"):
+        TOKEN = os.environ["SLACK_TOKEN"].strip()
+    else:
+        p = pathlib.Path("~/.config/slack/token").expanduser()
+        if not p.exists():
+            sys.exit("no token: pass --token-file, set $SLACK_TOKEN, or create ~/.config/slack/token\n"
+                     "see the header of this file for how to mint one")
+        TOKEN = p.read_text().splitlines()[0].strip()
+    if TOKEN.startswith("/"):
+        sys.exit("that token file holds a PATH, not a token (a `pwd >` accident?)")
+    if not TOKEN.startswith("xoxp-"):
+        sys.exit("token must be a USER token (xoxp-); a bot token (xoxb-) cannot read DMs")
+
+
+def call(method, **params):
+    """One API call with Slack's rate limit honored (HTTP 429 + Retry-After)."""
+    url = API + method + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + TOKEN})
+    for attempt in range(6):
+        try:
+            r = json.load(urllib.request.urlopen(req, timeout=30))
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                time.sleep(int(e.headers.get("Retry-After", "5")))
+                continue
+            raise
+        if r.get("ok"):
+            return r
+        err = r.get("error", "unknown")
+        if err == "ratelimited":
+            time.sleep(5 * (attempt + 1))
+            continue
+        msg = f"slack api error on {method}: {err}"
+        if r.get("needed"):
+            msg += f"\n  needs scope: {r['needed']} (add it under User Token Scopes, REINSTALL the app, copy the new token)"
+        sys.exit(msg)
+    sys.exit(f"gave up on {method} after repeated rate limits")
+
+
+def paged(method, key, **params):
+    """Yield every item across cursor pages."""
+    cursor = None
+    while True:
+        r = call(method, **params, **({"cursor": cursor} if cursor else {}))
+        yield from r.get(key, [])
+        cursor = (r.get("response_metadata") or {}).get("next_cursor") or None
+        if not cursor:
+            return
+
+
+def users():
+    out = {}
+    for u in paged("users.list", "members", limit=200):
+        out[u["id"]] = {"name": u.get("name", ""), "real_name": u.get("real_name") or u.get("profile", {}).get("real_name", "")}
+    return out
+
+
+def display(uid, umap):
+    u = umap.get(uid)
+    if not u:
+        return uid
+    return u["real_name"] or u["name"] or uid
+
+
+def render_text(text, umap):
+    text = re.sub(r"<@([A-Z0-9]+)(?:\|[^>]*)?>", lambda m: "@" + display(m.group(1), umap), text or "")
+    text = re.sub(r"<(https?://[^|>]+)\|([^>]*)>", r"\2 (\1)", text)
+    text = re.sub(r"<(https?://[^>]+)>", r"\1", text)
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
+def history(cid, oldest):
+    msgs = list(paged("conversations.history", "messages", channel=cid, limit=200, **({"oldest": oldest} if oldest else {})))
+    msgs.sort(key=lambda m: float(m["ts"]))
+    for m in msgs:
+        if m.get("reply_count"):
+            replies = list(paged("conversations.replies", "messages", channel=cid, ts=m["ts"], limit=200))
+            m["thread"] = [x for x in replies if x["ts"] != m["ts"]]
+    return msgs
+
+
+def stamp(ts):
+    return dt.datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+
+
+def slugify(s):
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "unnamed"
+
+
+def write_md(path, title, msgs, umap):
+    lines = [f"# DM: {title}", ""]
+    for m in msgs:
+        who = display(m.get("user", ""), umap) if m.get("user") else m.get("username", m.get("bot_id", "?"))
+        lines.append(f"{stamp(m['ts'])}  {who}: {render_text(m.get('text'), umap)}")
+        for f in m.get("files", []) or []:
+            lines.append(f"    [file] {f.get('name', f.get('id'))}")
+        for t in m.get("thread", []):
+            twho = display(t.get("user", ""), umap)
+            lines.append(f"    {stamp(t['ts'])}  {twho}: {render_text(t.get('text'), umap)}")
+    path.write_text("\n".join(lines) + "\n")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--out", help="output directory")
+    ap.add_argument("--token-file")
+    ap.add_argument("--since", help="YYYY-MM-DD; only messages on or after this date")
+    ap.add_argument("--whoami", action="store_true")
+    ap.add_argument("--quiet", action="store_true")
+    a = ap.parse_args()
+    load_token(a.token_file)
+
+    me = call("auth.test")
+    if a.whoami:
+        print(json.dumps({k: me[k] for k in ("team", "team_id", "user", "user_id", "url") if k in me}, indent=2))
+        return
+    if not a.out:
+        ap.error("--out DIR is required")
+
+    out = pathlib.Path(a.out).expanduser()
+    (out / "raw").mkdir(parents=True, exist_ok=True)
+    oldest = str(dt.datetime.strptime(a.since, "%Y-%m-%d").timestamp()) if a.since else None
+
+    umap = users()
+    (out / "users.json").write_text(json.dumps(umap, indent=1, sort_keys=True))
+
+    convs = list(paged("users.conversations", "channels", types="im,mpim", limit=200, exclude_archived="false"))
+    rows = []
+    for c in convs:
+        cid = c["id"]
+        if c.get("is_im"):
+            kind, members = "im", [c["user"]]
+        else:
+            kind = "mpim"
+            members = [u for u in call("conversations.members", channel=cid)["members"] if u != me["user_id"]]
+        title = ", ".join(display(u, umap) for u in members)
+        msgs = history(cid, oldest)
+        (out / "raw" / f"{cid}.json").write_text(json.dumps(msgs, indent=1))
+        slug = slugify(title)
+        if kind == "mpim":
+            slug = "group-" + slug
+        write_md(out / f"{slug}.md", title, msgs, umap)
+        rows.append((cid, kind, title, len(msgs), stamp(msgs[0]["ts"]) if msgs else "", stamp(msgs[-1]["ts"]) if msgs else ""))
+        if not a.quiet:
+            print(f"{cid}  {kind:4}  {len(msgs):4} msgs  {title}", file=sys.stderr)
+
+    rows.sort(key=lambda r: r[5], reverse=True)
+    with open(out / "index.tsv", "w") as fh:
+        fh.write("channel\tkind\tmembers\tmessages\tfirst\tlast\n")
+        for r in rows:
+            fh.write("\t".join(str(x) for x in r) + "\n")
+    print(f"{len(rows)} conversations, {sum(r[3] for r in rows)} messages -> {out}")
+
+
+if __name__ == "__main__":
+    main()

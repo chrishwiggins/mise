@@ -1,0 +1,144 @@
+#!/usr/bin/env python3.11
+"""Report crontab entries whose command cannot be found on disk.
+
+A cron job that names a nonexistent path fails every run, and because most
+entries end in `> /dev/null 2>&1` the failure is invisible: no output, no
+mail, no exit code anyone reads. Found 2026-09-17, when
+`*/30 * * * * /bin/bash /mise/bash/process_voicememos` turned out to be
+missing its /Users/wiggins prefix and had been silently dead.
+
+Exit 0 when every entry resolves, 1 when any does not, 2 on usage error.
+"""
+
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+# Words that introduce the real command rather than being it.
+WRAPPERS = {
+    "/bin/bash", "/bin/sh", "/bin/zsh", "/bin/tcsh", "/bin/csh",
+    "bash", "sh", "zsh", "tcsh", "csh", "env", "nohup", "exec",
+}
+
+# Leading `VAR=value` assignments, and flags, that precede a command.
+ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# A cron schedule is five fields, or one @-keyword.
+SCHEDULE = re.compile(r"^\s*(@\w+|(?:\S+\s+){5})")
+
+# Redirections: 2>&1, >/dev/null, >> file, < file.
+REDIRECT = re.compile(r"\d*>>?\s*&?\s*\S+|\d*<\s*\S+")
+
+
+def split_unquoted(text):
+    """Split on ; & | that fall outside quotes.
+
+    A naive re.split breaks the wget entry in Chris's crontab, whose URL
+    contains & inside single quotes.
+    """
+    out, buf, quote = [], [], None
+    for ch in text:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            buf.append(ch)
+        elif ch in ";&|":
+            out.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    out.append("".join(buf))
+    return out
+
+
+def commands(entry):
+    """Yield each candidate command path in one crontab line.
+
+    Handles `cd X; foo; bar` chains by splitting on ; and &&, and skips
+    shell builtins and wrapper binaries to reach the real script.
+    """
+    body = SCHEDULE.sub("", entry, count=1)
+    # Strip redirections first: `2>&1` would otherwise split at the & and
+    # leave a bare `1` that looks like a missing command.
+    body = REDIRECT.sub(" ", body)
+    for piece in split_unquoted(body):
+        try:
+            tokens = shlex.split(piece) if piece.strip() else []
+        except ValueError:
+            # Unbalanced quotes in one segment: nothing reliable to check.
+            continue
+        idx = 0
+        # Step past VAR=value assignments and wrapper commands.
+        while idx < len(tokens):
+            tok = tokens[idx]
+            if ASSIGN.match(tok) or tok in WRAPPERS:
+                idx += 1
+                continue
+            # A timeout wrapper takes a duration argument before the command.
+            if os.path.basename(tok) == "timeout":
+                idx += 2
+                continue
+            break
+        if idx < len(tokens):
+            yield tokens[idx]
+
+
+def resolvable(cmd):
+    """True when cmd exists as a file, or is findable on PATH."""
+    if "/" in cmd:
+        return os.path.exists(os.path.expanduser(cmd))
+    # Bare name: a builtin or something on PATH.
+    if cmd in {"cd", "echo", "true", "false", ":", "test"}:
+        return True
+    from shutil import which
+    return which(cmd) is not None
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] in {"-h", "--help"}:
+        print("usage: cron-path-check   # lint the current user's crontab")
+        return 2
+
+    try:
+        out = subprocess.run(
+            ["crontab", "-l"], capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"cron-path-check: cannot read crontab: {exc}", file=sys.stderr)
+        return 2
+
+    if out.returncode != 0:
+        # No crontab at all is not an error worth failing on.
+        print("cron-path-check: no crontab for this user")
+        return 0
+
+    broken, checked = [], 0
+    for raw in out.stdout.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not SCHEDULE.match(line):
+            continue  # an environment assignment like MAILTO=
+        for cmd in commands(line):
+            checked += 1
+            if not resolvable(cmd):
+                broken.append((cmd, line))
+
+    if not broken:
+        print(f"All {checked} cron command path(s) resolve.")
+        return 0
+
+    print(f"{len(broken)} of {checked} cron command path(s) DO NOT EXIST:\n")
+    for cmd, line in broken:
+        print(f"  missing: {cmd}")
+        print(f"    entry: {line}\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

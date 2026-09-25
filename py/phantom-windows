@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""
+phantom-windows - list yabai windows that no app is actually showing.
+
+yabai's window list includes records the window server still holds but
+nothing draws: an Electron app's window after close-to-tray (Slack,
+Bitwarden), a tooltip (AXHelpTag), a record with an empty role. Mission
+Control does not draw them, so a desktop holding only phantoms looks empty
+on screen while asplode/trim count it as occupied (2026-09-07, two desktops).
+
+For each yabai window this prints its id, space, app, role/subrole, and
+how many windows System Events reports for the app. A window is flagged
+PHANTOM when its subrole is not AXStandardWindow or its app has zero
+accessibility windows. yabai's is-hidden/is-visible and CoreGraphics'
+kCGWindowIsOnscreen cannot make this distinction for a window on a
+non-visible desktop; the accessibility count can.
+
+Usage:
+    phantom-windows          table of every window, phantoms marked
+    phantom-windows -q       ids of phantoms only, one per line
+"""
+
+import json
+import subprocess
+import sys
+
+
+def yabai_windows():
+    out = subprocess.run(["yabai", "-m", "query", "--windows"],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit("phantom-windows: yabai is not running")
+    return json.loads(out.stdout)
+
+
+def ax_window_count(app):
+    # One process per call: `every process whose name is in {...}` errors
+    # out on System Events and dumps every process name (2026-09-07).
+    script = (f'tell application "System Events" to tell process "{app}" '
+              'to count windows')
+    out = subprocess.run(["osascript", "-e", script],
+                         capture_output=True, text=True)
+    try:
+        return int(out.stdout.strip())
+    except ValueError:
+        return 0
+
+
+def main():
+    quiet = "-q" in sys.argv[1:]
+    counts = {}
+    rows = []
+    for w in sorted(yabai_windows(), key=lambda w: (w["space"], w["id"])):
+        app = w.get("app", "")
+        if app not in counts:
+            counts[app] = ax_window_count(app)
+        role = f'{w.get("role") or "-"}/{w.get("subrole") or "-"}'
+        phantom = (w.get("subrole") != "AXStandardWindow"
+                   or counts[app] == 0)
+        rows.append((w["id"], w["space"], app, role, counts[app], phantom))
+
+    if quiet:
+        for r in rows:
+            if r[5]:
+                print(r[0])
+        return
+    print(f'{"id":>8} {"space":>5} {"ax":>3}  {"role/subrole":28} app')
+    for wid, space, app, role, n, phantom in rows:
+        mark = "PHANTOM" if phantom else ""
+        print(f"{wid:>8} {space:>5} {n:>3}  {role:28} {app}  {mark}")
+
+
+if __name__ == "__main__":
+    main()

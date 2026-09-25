@@ -1,0 +1,185 @@
+#!/bin/bash
+# rl - reading list: capture things to read/parse later, from the terminal.
+#
+# Usage:
+#   rl <url>                 add a URL (best-effort fetches its <title>)
+#   rl <free text note>      add a note (anything that is not a bare URL)
+#   rl <url> -- <note>       add a URL with your own note/why
+#   echo "..." | rl          add from stdin (e.g. pbpaste | rl)
+#   rl                       list pending (unparsed) items, newest last
+#   rl ls [-a]               list pending; -a lists all including parsed
+#   rl count                 print how many pending items
+#   rl path                  print the queue file path
+#   rl edit                  open the queue file in $EDITOR
+#
+# Storage: append-only JSONL, one item per line, at
+#   $READING_LIST_DIR/queue.jsonl   (default ~/gd/local/reading-list)
+# so a later Claude session can parse it deterministically. Each line:
+#   {"ts":"2026-09-22T14:03:00-04:00","type":"url|note","url":...,"title":...,
+#    "note":...,"source":"rl","parsed":false}
+# Nothing here is ever rewritten in place by capture; "parsed" is flipped by
+# whoever processes the list. See README.md next to the queue file.
+
+set -euo pipefail
+
+DIR="${READING_LIST_DIR:-$HOME/gd/local/reading-list}"
+QUEUE="$DIR/queue.jsonl"
+PY=/usr/local/bin/python3.11
+[ -x "$PY" ] || PY=/opt/homebrew/bin/python3.11
+[ -x "$PY" ] || PY=python3
+
+mkdir -p "$DIR"
+[ -f "$QUEUE" ] || : > "$QUEUE"
+
+sub="${1:-}"
+
+# If no args AND stdin is a pipe/file (not a terminal), this is a capture from
+# stdin, not a list. Only treat truly-empty invocation (no args, tty stdin) as list.
+if [ "$#" -eq 0 ] && [ ! -t 0 ]; then
+  sub="__stdin__"
+fi
+
+case "$sub" in
+  __stdin__) : ;;  # fall through to capture path below
+  path) echo "$QUEUE"; exit 0 ;;
+  edit) exec "${EDITOR:-vim}" "$QUEUE" ;;
+  count)
+    "$PY" - "$QUEUE" <<'PY'
+import json,sys
+n=0
+for line in open(sys.argv[1]):
+    line=line.strip()
+    if not line: continue
+    try: o=json.loads(line)
+    except Exception: continue
+    if not o.get("parsed"): n+=1
+print(n)
+PY
+    exit 0 ;;
+  ls|list|"")
+    allflag=""
+    [ "${2:-}" = "-a" ] && allflag="all"
+    # bare `rl` with no args AND an empty-ish queue still just lists (nothing)
+    "$PY" - "$QUEUE" "$allflag" <<'PY'
+import json,sys
+q,allflag=sys.argv[1],sys.argv[2]
+rows=[]
+for line in open(q):
+    line=line.strip()
+    if not line: continue
+    try: o=json.loads(line)
+    except Exception: continue
+    rows.append(o)
+shown=[o for o in rows if allflag=="all" or not o.get("parsed")]
+if not shown:
+    print("reading list empty" if allflag=="all" else "no pending items (rl ls -a to see all)")
+    sys.exit(0)
+for i,o in enumerate(shown,1):
+    ts=o.get("ts","")[:10]
+    mark="x" if o.get("parsed") else " "
+    if o.get("type")=="url":
+        head=o.get("title") or o.get("url","")
+        line=f"[{mark}] {i:>3}. {ts}  {head}"
+        if o.get("title") and o.get("url"): line+=f"\n            {o['url']}"
+    else:
+        line=f"[{mark}] {i:>3}. {ts}  {o.get('note','')}"
+    if o.get("note") and o.get("type")=="url":
+        line+=f"\n            note: {o['note']}"
+    print(line)
+PY
+    exit 0 ;;
+esac
+
+# ----- capture path -----
+# Gather the raw argument text: either the args, or stdin if no args.
+if [ "$#" -eq 0 ]; then
+  raw="$(cat)"
+else
+  # support:  rl <url> -- <note>
+  note=""
+  args=()
+  seen_sep=0
+  for a in "$@"; do
+    if [ "$seen_sep" -eq 1 ]; then
+      note="${note:+$note }$a"
+    elif [ "$a" = "--" ]; then
+      seen_sep=1
+    else
+      args+=("$a")
+    fi
+  done
+  raw="${args[*]:-}"
+fi
+
+# trim whitespace
+raw="$(printf '%s' "$raw" | "$PY" -c 'import sys;print(sys.stdin.read().strip())')"
+if [ -z "$raw" ]; then
+  # Empty capture (e.g. piped empty input, or no args): fall back to listing
+  # rather than erroring, so no invocation is a dead end.
+  exec "$0" ls
+fi
+
+# Hand everything to python: classify url vs note, best-effort title fetch, append one JSON line.
+NOTE="${note:-}" RAW="$raw" QUEUE="$QUEUE" "$PY" - <<'PY'
+import os,sys,json,re,datetime,socket
+
+raw=os.environ["RAW"].strip()
+note=os.environ.get("NOTE","").strip()
+queue=os.environ["QUEUE"]
+
+# a "bare url" is a single token starting with http(s)://
+is_url = bool(re.match(r'^https?://\S+$', raw)) and (' ' not in raw.strip())
+ts=datetime.datetime.now().astimezone().replace(microsecond=0).isoformat()
+
+item={"ts":ts,"source":"rl","parsed":False}
+if is_url:
+    item["type"]="url"; item["url"]=raw
+    if note: item["note"]=note
+else:
+    item["type"]="note"; item["note"]=raw
+
+# CAPTURE FIRST: write the item to disk immediately, before any network, so a
+# slow or dead host can never lose or delay the capture.
+line=json.dumps(item, ensure_ascii=False)
+with open(queue,"a") as f:
+    f.write(line+"\n")
+
+# NETWORK SECOND (best effort, hard-bounded): try to fetch the <title> and, on
+# success within the timeout, rewrite just this one line to include it.
+title=None
+if is_url:
+    try:
+        import urllib.request, html
+        socket.setdefaulttimeout(5)   # applies to connect AND each read
+        req=urllib.request.Request(raw, headers={"User-Agent":"Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            ctype=r.headers.get("Content-Type","")
+            if "html" in ctype or ctype=="":
+                data=r.read(200000).decode("utf-8","replace")
+                m=re.search(r"<title[^>]*>(.*?)</title>", data, re.S|re.I)
+                if m:
+                    title=html.unescape(re.sub(r"\s+"," ",m.group(1)).strip())[:300]
+    except Exception:
+        title=None
+    if title:
+        item["title"]=title
+        newline=json.dumps(item, ensure_ascii=False)
+        # rewrite only the last matching line (the one just appended)
+        try:
+            lines=open(queue).read().splitlines()
+            for i in range(len(lines)-1,-1,-1):
+                if lines[i]==line:
+                    lines[i]=newline
+                    break
+            with open(queue,"w") as f:
+                f.write("\n".join(lines)+"\n")
+        except Exception:
+            pass  # the item is already saved without a title; that is fine
+
+# friendly echo
+if item["type"]=="url":
+    print("added:", item.get("title") or item["url"])
+    if item.get("title"): print("       "+item["url"])
+else:
+    print("added note:", item["note"])
+PY

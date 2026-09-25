@@ -17,6 +17,8 @@ Usage:
     gcal-list +1 desc 2                Show tomorrow's event #2 description
     gcal-list desc 2 "notes here"      Set description on event #2
     gcal-list +1 desc 2 -a "SSW 1004"  Append to tomorrow's event #2
+    gcal-list --all                    Today across every authorized account
+    gcal-list --all +2                 Two days out, every authorized account
 """
 
 import argparse
@@ -34,10 +36,79 @@ from google_auth import get_credentials
 
 LOCAL_TZ = ZoneInfo("America/New_York")
 
+TOKEN_DIR = Path("~/.config/google-tokens").expanduser()
 
-def get_calendar_service():
-    creds = get_credentials(service="calendar", scopes="calendar")
+# The bare calendar.pickle default is already authorized as this account, so it
+# must reuse that token rather than open a second OAuth flow for a
+# calendar-chris-wiggins-at-gmail-com.pickle that has never existed. Same
+# special case as gcal-solo's DEFAULT_TOKEN_ACCOUNT.
+DEFAULT_TOKEN_ACCOUNT = "chris.wiggins@gmail.com"
+
+# Short labels for the merged listing. An account with no entry here prints the
+# part of its address before the @.
+ACCOUNT_LABELS = {
+    "chris.wiggins@gmail.com": "g",
+    "chw2@columbia.edu": "u",
+    "chris@hackny.org": "h",
+}
+
+# Calendars that exist but cannot be read through this tool, so a merged
+# listing never implies coverage it does not have. CNN is Outlook/Exchange
+# behind SSO: there is no ICS feed on disk and no Graph credential anywhere,
+# and `cnn-cal` is a shell alias that opens Outlook in Chrome profile 39.
+UNREADABLE = [("CNN", "Outlook, no API credential here; run the cnn-cal alias")]
+
+
+def token_name_for(account):
+    """Token filename stem for an account, matching gcal-invite's convention."""
+    return f"calendar-{account.replace('@', '-at-').replace('.', '-')}"
+
+
+def token_path_for(account):
+    """Where this account's pickle lives, whether or not it exists."""
+    if account == DEFAULT_TOKEN_ACCOUNT:
+        return TOKEN_DIR / "calendar.pickle"
+    return TOKEN_DIR / f"{token_name_for(account)}.pickle"
+
+
+def authorized_accounts():
+    """Accounts whose calendar token is already on disk, personal first.
+
+    Existence of the pickle is the gate: google_auth.get_credentials opens a
+    browser and blocks on a local redirect server when a token is missing, so
+    an all-accounts listing must never call it speculatively.
+    """
+    if not TOKEN_DIR.exists():
+        return []
+    accounts = []
+    if (TOKEN_DIR / "calendar.pickle").exists():
+        accounts.append(DEFAULT_TOKEN_ACCOUNT)
+    for token_file in sorted(TOKEN_DIR.glob("calendar-*-at-*.pickle")):
+        account = token_file.stem[len("calendar-"):]
+        account = account.replace("-at-", "@").replace("-", ".")
+        if account.count("@") == 1 and account != DEFAULT_TOKEN_ACCOUNT:
+            accounts.append(account)
+    return accounts
+
+
+def account_label(account):
+    return ACCOUNT_LABELS.get(account, account.split("@")[0])
+
+
+def get_calendar_service(account=None):
+    kwargs = {"service": "calendar", "scopes": "calendar"}
+    if account and account != DEFAULT_TOKEN_ACCOUNT:
+        kwargs["token_name"] = token_name_for(account)
+        kwargs["login_hint"] = account
+    creds = get_credentials(**kwargs)
     return build("calendar", "v3", credentials=creds)
+
+
+def _sort_key(ev):
+    start = ev.get("start", {})
+    if "date" in start:
+        return (0, start["date"])
+    return (1, start.get("dateTime", ""))
 
 
 def fetch_events(service, target_date):
@@ -54,15 +125,37 @@ def fetch_events(service, target_date):
     ).execute()
 
     events = result.get("items", [])
-
-    def sort_key(ev):
-        start = ev.get("start", {})
-        if "date" in start:
-            return (0, start["date"])
-        return (1, start.get("dateTime", ""))
-
-    events.sort(key=sort_key)
+    events.sort(key=_sort_key)
     return events
+
+
+def fetch_all_accounts(target_date, accounts=None):
+    """Merge one day across every authorized account, newest sort order kept.
+
+    Returns (events, errors). Each event carries "_account" so the listing can
+    say which calendar it came from; the caller must not mutate these, since
+    the numbering spans accounts and each id is only valid against its own
+    service.
+    """
+    if accounts is None:
+        accounts = authorized_accounts()
+    merged = []
+    errors = []
+    for account in accounts:
+        try:
+            service = get_calendar_service(account)
+            events = fetch_events(service, target_date)
+        except HttpError as e:
+            errors.append((account, f"API error: {e}"))
+            continue
+        except Exception as e:  # a corrupt or revoked token should not kill the rest
+            errors.append((account, str(e)))
+            continue
+        for ev in events:
+            ev["_account"] = account
+        merged.extend(events)
+    merged.sort(key=_sort_key)
+    return merged, errors
 
 
 def _fmt_time(dt):
@@ -139,7 +232,7 @@ def _event_flags(event):
     )
 
 
-def display_events(events, target_date):
+def display_events(events, target_date, show_accounts=False):
     if not events:
         print(f"No events on {target_date.strftime('%A, %B %-d')}.")
         return
@@ -162,12 +255,17 @@ def display_events(events, target_date):
             end_dt = datetime.fromisoformat(event["end"]["dateTime"])
             when = f"{_fmt_time(start_dt)}-{_fmt_time(end_dt)}"
 
-        print(f"  {i:2d}. {when:17s} {summary:32s}  {flags}")
+        if show_accounts:
+            who = account_label(event.get("_account", ""))
+            print(f"  {i:2d}. [{who:1.1s}] {when:17s} {summary:28s}  {flags}")
+        else:
+            print(f"  {i:2d}. {when:17s} {summary:32s}  {flags}")
 
     print()
     if any_flags:
         print("  flags: @ attendees/emails   P place   U url   D description")
-        print(f"  (gcal-list {'<offset> ' if target_date != date.today() else ''}N  shows full details of event N)")
+        if not show_accounts:
+            print(f"  (gcal-list {'<offset> ' if target_date != date.today() else ''}N  shows full details of event N)")
         print()
 
 
@@ -425,11 +523,23 @@ listing flags (shown after each event):
   @ attendees/emails   P place   U url   D description
 
 options:
-  -h, --help                Show this help message and exit"""
+  -h, --help                Show this help message and exit
+  --all                     List every authorized account together (g/u/h),
+                            one letter per row saying which. Read-only:
+                            move/delete/desc/N are refused in this mode,
+                            because the numbering spans calendars. Accounts
+                            without a token on disk are named and skipped;
+                            CNN is Outlook and is never included."""
 
 
 def main():
     argv = sys.argv[1:]
+
+    all_accounts = False
+    for flag in ("--all", "-a"):
+        while flag in argv:
+            argv.remove(flag)
+            all_accounts = True
 
     if not argv:
         offset = 0
@@ -457,6 +567,30 @@ def main():
             rest = argv[1:] if argv else []
 
     target_date = date.today() + timedelta(days=offset)
+
+    if all_accounts:
+        # Every mutator indexes a flat list and patches calendarId="primary" on
+        # one service, so a merged listing would send edits to whichever account
+        # the tool happens to be authenticated as. Refuse rather than guess.
+        if cmd is not None:
+            print(f"gcal-list: --all is read-only; run '{cmd}' without --all so the "
+                  "event number refers to one calendar", file=sys.stderr)
+            sys.exit(1)
+        accounts = authorized_accounts()
+        if not accounts:
+            print(f"gcal-list: no calendar tokens in {TOKEN_DIR}", file=sys.stderr)
+            sys.exit(1)
+        events, errors = fetch_all_accounts(target_date, accounts)
+        display_events(events, target_date, show_accounts=True)
+        print("  read: " + ", ".join(f"{account_label(a)}={a}" for a in accounts))
+        for name, why in UNREADABLE:
+            print(f"  not read: {name} ({why})")
+        for account, why in errors:
+            print(f"  FAILED: {account} ({why})", file=sys.stderr)
+        if errors:
+            sys.exit(1)
+        return
+
     service = get_calendar_service()
     events = fetch_events(service, target_date)
 

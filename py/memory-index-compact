@@ -1,0 +1,73 @@
+#!/usr/bin/env python3.11
+"""Shorten the hooks in a Claude Code MEMORY.md index until the file fits a byte budget.
+
+    memory-index-compact <MEMORY.md> [--budget 16900] [--dry-run]
+
+One row per entry is kept and the markdown link is never touched; only the text after
+the link is cut, at a word boundary, to the longest cap that fits. The detail belongs in
+the topic file each row links to. Before writing, the original is copied to
+<parent of memory dir>/MEMORY.md.bak-<date>, outside memory/ so it is not loaded as a memory.
+Exit 0 on success or when the file already fits, 1 when no cap fits.
+"""
+import argparse
+import datetime
+import re
+import shutil
+import sys
+from pathlib import Path
+
+ROW = re.compile(r"^(- \[[^\]]+\]\([^)]+\))(\s*:?\s*)(.*)$")
+
+
+def cut(row, cap):
+    hit = ROW.match(row)
+    if not hit:
+        return row
+    head, sep, hook = hit.groups()
+    if len(hook) <= cap:
+        return row
+    short = hook[:cap].rsplit(" ", 1)[0].rstrip(" ,;:(")
+    return f"{head}{sep}{short} ..."
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("index", type=Path)
+    ap.add_argument("--budget", type=int, default=16900, help="target size in bytes")
+    ap.add_argument("--dry-run", action="store_true", help="report the cap and size, write nothing")
+    args = ap.parse_args()
+
+    text = args.index.read_text()
+    before = len(text.encode())
+    if before <= args.budget:
+        print(f"{args.index}: {before} bytes, already within {args.budget}")
+        return 0
+    rows = text.splitlines()
+    for cap in range(400, 20, -5):
+        out = "\n".join(cut(x, cap) for x in rows) + "\n"
+        if len(out.encode()) <= args.budget:
+            break
+    else:
+        print(f"no hook cap down to 25 chars fits {args.budget} bytes; merge or drop rows", file=sys.stderr)
+        return 1
+
+    new_rows = out.splitlines()
+    assert len(new_rows) == len(rows), "row count changed"
+    for a, b in zip(rows, new_rows):
+        if ROW.match(a):
+            assert ROW.match(b) and ROW.match(a).group(1) == ROW.match(b).group(1), f"link changed: {a[:60]}"
+
+    after = len(out.encode())
+    if args.dry_run:
+        print(f"dry run: cap {cap} chars would take {before} -> {after} bytes over {len(rows)} rows")
+        return 0
+    bak = args.index.resolve().parent.parent / f"MEMORY.md.bak-{datetime.date.today().isoformat()}"
+    if not bak.exists():
+        shutil.copy2(args.index, bak)
+    args.index.write_text(out)
+    print(f"cap {cap} chars; {before} -> {after} bytes; {len(rows)} rows; backup {bak}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
