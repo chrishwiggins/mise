@@ -802,8 +802,8 @@ def save_attachments(raw_bytes, output_dir):
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
     saved = []
 
-    for part, filename in iter_attachment_parts(msg):
-        att_path = output_dir / filename
+    for part, filename, disk_name in attachment_disk_names(iter_attachment_parts(msg)):
+        att_path = output_dir / disk_name
         if att_path.exists():
             print(f"Attachment already exists, skipping: {att_path}", file=sys.stderr)
             continue
@@ -814,6 +814,37 @@ def save_attachments(raw_bytes, output_dir):
             saved.append(att_path)
 
     return saved
+
+
+def attachment_disk_names(parts):
+    """Yield (part, filename, disk_name) for (part, filename) pairs.
+
+    filename is what the sender called the file, and stays the name used
+    anywhere a message is rebuilt (forward carry reads iter_attachment_parts
+    directly and never comes here). disk_name is the shell-safe name from
+    fname_norm, the same normalizer as unspace-mvit, so a saved file never
+    carries the sender's spaces, `&`, `/` and the like.
+
+    Two parts that normalize to one name get -v2, -v3 (versioned_path's
+    style), assigned in part order so the same message always yields the same
+    names and a rerun of -A still finds and skips files it already wrote.
+    Compared case-insensitively, since the macOS filesystem is.
+    """
+    # Local import: top-level imports stay minimal for startup latency.
+    # The sibling-module import relies on sys.path[0] being this script's
+    # real directory, as the google_auth import does.
+    from fname_norm import normalize_basename
+
+    used = set()
+    for part, filename in parts:
+        name = normalize_basename(filename, placeholder="attachment")
+        stem, suffix = os.path.splitext(name)
+        n = 1
+        while name.lower() in used:
+            n += 1
+            name = f"{stem}-v{n}{suffix}"
+        used.add(name.lower())
+        yield part, filename, name
 
 
 def open_attachments_interactively(raw_bytes):
@@ -829,11 +860,11 @@ def open_attachments_interactively(raw_bytes):
     msg = email.message_from_bytes(raw_bytes, policy=email.policy.default)
     attachments = []
 
-    for part, filename in iter_attachment_parts(msg):
+    for part, filename, disk_name in attachment_disk_names(iter_attachment_parts(msg)):
         payload = part.get_payload(decode=True)
         if payload:
             # Save to attachments directory
-            att_path = att_dir / filename
+            att_path = att_dir / disk_name
             att_path.write_bytes(payload)
             attachments.append((filename, att_path))
 
