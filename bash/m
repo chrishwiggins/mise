@@ -454,13 +454,38 @@ _parse_after_time() {
                 ;;
         esac
         target_time=$((now + seconds))
+    elif [[ "$time_spec" =~ ^(today\ |tomorrow\ )?([0-9]{1,2})(:([0-9]{2}))?\ ?([aApP][mM])$ ]]; then
+        # Clock time with am/pm, optionally "today"/"tomorrow": 2:30pm, 9 am,
+        # tomorrow 6:15pm. Handled here, BEFORE the BSD `date -f "%H:%M"` try
+        # below, because that parses "2:30pm" as 02:30 and silently ignores
+        # the trailing "pm" (2026-09-29: `--after 11:55pm` at 20:43 was
+        # refused as "in the past", parsed as 11:55).
+        local day_word="${BASH_REMATCH[1]}" hour="${BASH_REMATCH[2]}"
+        local minute="${BASH_REMATCH[4]:-00}" meridiem
+        meridiem=$(printf '%s' "${BASH_REMATCH[5]}" | tr 'AMP' 'amp')
+        hour=$((10#$hour)); minute=$((10#$minute))
+        if (( hour < 1 || hour > 12 || minute > 59 )); then
+            log_error "Invalid time '$time_spec'. Use e.g. 9am, 2:30pm, tomorrow 6:15pm"
+            return 1
+        fi
+        (( hour == 12 )) && hour=0
+        [[ "$meridiem" == pm ]] && hour=$((hour + 12))
+        local day
+        if [[ "$day_word" == "tomorrow " ]]; then
+            day=$(date -v+1d "+%Y-%m-%d")
+        else
+            day=$(date "+%Y-%m-%d")
+        fi
+        target_time=$(date -j -f "%Y-%m-%d %H:%M:%S" \
+            "$(printf '%s %02d:%02d:00' "$day" "$hour" "$minute")" +%s) || return 1
     else
         # Try to parse with date command
         # BSD date (macOS) approach: try common patterns first
         if target_time=$(date -j -f "%Y-%m-%d %H:%M:%S" "$time_spec" +%s 2>/dev/null); then
             : # parsed successfully
-        elif target_time=$(date -j -f "%H:%M" "$time_spec" +%s 2>/dev/null); then
-            : # parsed as time today
+        elif [[ "$time_spec" =~ ^[0-9]{1,2}:[0-9]{2}$ ]] \
+            && target_time=$(date -j -f "%H:%M:%S" "$time_spec:00" +%s 2>/dev/null); then
+            : # parsed as time today (exact H:MM only, seconds zeroed)
         elif target_time=$(date -j -f "%Y-%m-%d %H:%M" "$time_spec" +%s 2>/dev/null); then
             : # parsed as date and time
         else
