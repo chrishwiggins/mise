@@ -2885,8 +2885,8 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
 # Trash mode
 # ---------------------------------------------------------------------------
 
-def do_trash(service, indices, count, query, account=None):
-    """Move one or more messages to trash by 1-based index."""
+def do_trash(service, indices, count, query, account=None, dry_run=False):
+    """Move one or more messages to trash by 1-based index (dry_run: name them only)."""
     for index in indices:
         msg_id = _resolve_batch_id(service, index, indices, count, query, account=account)
         if msg_id is None:
@@ -2900,6 +2900,10 @@ def do_trash(service, indices, count, query, account=None):
         sender = parse_sender(get_header(headers, "From"))
         subject = get_header(headers, "Subject") or "(no subject)"
 
+        if dry_run:
+            print(f"[DRY RUN] Would trash: From={sender} Subject={subject}",
+                  file=sys.stderr)
+            continue
         service.users().messages().trash(userId="me", id=msg_id).execute()
         print(f"Trashed: From={sender} Subject={subject}", file=sys.stderr)
 
@@ -2911,31 +2915,50 @@ def do_trash(service, indices, count, query, account=None):
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Standing auto-archive filters (archive ... --always) -- PURE HELPERS ONLY
+# Standing per-sender filters (archive/trash ... --always)
 # ---------------------------------------------------------------------------
 #
-# `--always` archives the indexed message NOW (unchanged do_archive behavior)
-# and ALSO creates a Gmail filter that skips the inbox for all FUTURE mail from
-# that message's sender. It does NOT bulk-archive the existing backlog: only the
-# one indexed message is touched now; the filter governs future mail only. The
-# sender match is the full email ADDRESS from the From header (never the display
-# name, never a bare domain), which is the precise, non-over-catching default.
+# `archive INDEX --always` archives the indexed message NOW and creates a Gmail
+# filter that skips the inbox for all FUTURE mail from that message's sender.
+# It does NOT archive the existing backlog.
 #
-# Only the PURE, network-free construction/dedupe helpers live here. The code
-# that acquires the gmail.settings.basic OAuth scope and actually creates the
-# filter is intentionally NOT wired yet (see report): adding credential-scope
-# acquisition + standing-rule creation is a persistence-class change gated by
-# the permission system.
+# `trash INDEX --always` is the purge: it trashes EVERY existing message from
+# that sender (all mail, not just the inbox), after a y/N confirmation on the
+# tty, and creates a filter sending all FUTURE mail from the sender to Trash
+# (Gmail's "Delete it"). Trash is recoverable for 30 days; nothing here deletes
+# permanently.
+#
+# The sender match is the full email ADDRESS from the From header (never the
+# display name, never a bare domain), which is the precise, non-over-catching
+# default. Filter creation needs gmail.settings.basic (verified 2026-09-29 on
+# developers.google.com .../users.settings.filters/create), minted as its own
+# per-account token (gmail-settings-<acct>.pickle) on first live use; Chris
+# authorized adding that scope on 2026-09-29. addLabelIds TRASH as the
+# "Delete it" action is from Google's filter_settings guide.
 
 # The Gmail filter action for "Skip the Inbox (Archive it)".
 _ARCHIVE_FILTER_ACTION = {"removeLabelIds": ["INBOX"]}
+# The Gmail filter action for "Delete it" (send to Trash).
+_TRASH_FILTER_ACTION = {"addLabelIds": ["TRASH"]}
+# messages.batchModify accepts at most 1000 ids per request.
+_BATCH_MODIFY_MAX = 1000
 
 
 def build_archive_filter(from_header):
-    """Build the Gmail filter dict that auto-archives future mail from a sender.
+    """Filter body auto-archiving future mail from a sender (see build_sender_filter)."""
+    return build_sender_filter(from_header, _ARCHIVE_FILTER_ACTION)
+
+
+def build_trash_filter(from_header):
+    """Filter body sending future mail from a sender to Trash (see build_sender_filter)."""
+    return build_sender_filter(from_header, _TRASH_FILTER_ACTION)
+
+
+def build_sender_filter(from_header, action):
+    """Build a Gmail filter dict matching one sender address, with `action`.
 
     Pure: no network, no service. Takes a raw From header, returns a filter
-    body {criteria:{from:<addr>}, action:{removeLabelIds:[INBOX]}} keyed on the
+    body {criteria:{from:<addr>}, action:<copy of action>} keyed on the
     full email ADDRESS extracted via parseaddr. Returns None when no usable
     address can be extracted (e.g. a display-name-only or malformed From), so
     the caller declines to create a garbage domain-less filter rather than
@@ -2955,41 +2978,275 @@ def build_archive_filter(from_header):
         return None
     return {
         "criteria": {"from": addr},
-        "action": dict(_ARCHIVE_FILTER_ACTION),
+        "action": {k: list(v) for k, v in action.items()},
     }
 
 
 def _filter_matches(existing, want):
-    """True if an existing Gmail filter is equivalent to `want`.
+    """True if an existing Gmail filter already does what `want` does.
 
-    Compares the from: criterion (case-insensitive on the address) and the
-    skip-inbox action, so a duplicate is detected regardless of any other
-    fields Gmail attaches to the stored filter.
+    Compares the from: criterion (case-insensitive on the address) and requires
+    every label `want` adds or removes to be added or removed by `existing` too,
+    so a duplicate is detected regardless of any other fields Gmail attaches to
+    the stored filter.
     """
     ecrit = existing.get("criteria", {}) or {}
     eaction = existing.get("action", {}) or {}
     wcrit = want["criteria"]
     if (ecrit.get("from", "") or "").strip().lower() != wcrit["from"].strip().lower():
         return False
-    if "INBOX" not in (eaction.get("removeLabelIds") or []):
-        return False
+    for key in ("addLabelIds", "removeLabelIds"):
+        have = eaction.get(key) or []
+        if any(label not in have for label in want["action"].get(key, [])):
+            return False
     return True
 
 
+def _describe_filter_action(action):
+    """Human wording for a filter action dict, for previews and reports."""
+    if "TRASH" in (action.get("addLabelIds") or []):
+        return "addLabelIds=['TRASH'] (Delete it)"
+    if "INBOX" in (action.get("removeLabelIds") or []):
+        return "removeLabelIds=['INBOX'] (Skip the Inbox / Archive)"
+    return repr(action)
+
+
+def _chunks(seq, size):
+    """Split seq into consecutive lists of at most `size` items."""
+    return [list(seq[i:i + size]) for i in range(0, len(seq), size)]
+
+
+def ensure_sender_filter(settings_service, want):
+    """Create filter `want` unless an equivalent one exists.
+
+    Returns ("exists", existing_filter) or ("created", new_filter).
+    """
+    filters = settings_service.users().settings().filters()
+    existing = filters.list(userId="me").execute().get("filter", []) or []
+    for f in existing:
+        if _filter_matches(f, want):
+            return "exists", f
+    return "created", filters.create(userId="me", body=want).execute()
+
+
+def _report_filter(status, want):
+    """Print the outcome of ensure_sender_filter."""
+    addr = want["criteria"]["from"]
+    what = _describe_filter_action(want["action"])
+    if status == "exists":
+        print(f"Filter already present: from={addr} -> {what}; none created.",
+              file=sys.stderr)
+    else:
+        print(f"Filter created: from={addr} -> {what}", file=sys.stderr)
+
+
+def _list_all_ids(service, q):
+    """Every message id matching Gmail query q, following pageTokens."""
+    ids, token = [], None
+    while True:
+        kw = {"userId": "me", "q": q, "maxResults": 500}
+        if token:
+            kw["pageToken"] = token
+        resp = service.users().messages().list(**kw).execute()
+        ids.extend(m["id"] for m in resp.get("messages", []) or [])
+        token = resp.get("nextPageToken")
+        if not token:
+            return ids
+
+
+def _tty_ask(prompt):
+    """Ask on the controlling terminal; return the stripped answer, or None with no tty.
+
+    The tty is opened once for writing and once for reading: a text-mode "r+"
+    open of a character device raises (not seekable), which read as "no
+    terminal" and refused every confirm.
+    """
+    try:
+        with open("/dev/tty", "w") as out, open("/dev/tty") as inp:
+            out.write(prompt)
+            out.flush()
+            return inp.readline().strip()
+    except OSError:
+        return None
+
+
+def _confirm_on_tty(prompt):
+    """Ask y/N on the controlling terminal. No tty means no."""
+    answer = _tty_ask(prompt)
+    if answer is None:
+        print("🛑 No terminal to confirm on; nothing changed.", file=sys.stderr)
+        return False
+    return answer.lower() in ("y", "yes")
+
+
+def _trash_ids(service, ids):
+    """Move ids to Trash in batchModify chunks; per-message trash on a batch error."""
+    from googleapiclient.errors import HttpError
+    for chunk in _chunks(ids, _BATCH_MODIFY_MAX):
+        try:
+            service.users().messages().batchModify(
+                userId="me", body={"ids": chunk, "addLabelIds": ["TRASH"]},
+            ).execute()
+        except HttpError as e:
+            print(f"⚠️  batchModify refused ({e.resp.status}); trashing "
+                  f"{len(chunk)} one at a time.", file=sys.stderr)
+            for msg_id in chunk:
+                service.users().messages().trash(userId="me", id=msg_id).execute()
+
+
+def do_trash_sender(service, index, count, query, account=None,
+                    dry_run=False, settings_factory=None, make_filter=True,
+                    older_than=None):
+    """Purge one sender: trash its whole backlog, then filter future mail to Trash.
+
+    The sender is taken from message `index` of `query`. Order matters: count
+    and preview first, confirm on the tty, acquire the settings token (which may
+    open a browser consent the first time) BEFORE changing anything, then trash,
+    re-count, and create the filter. make_filter=False (`trash --all-from`) is
+    the backlog-only purge: no filter, no settings token, future mail untouched.
+    older_than ("7d", "2m", "1y": Gmail's older_than: units) spares recent mail
+    by narrowing the sweep query; the filter, when made, is unaffected.
+    """
+    msg_id = _resolve_batch_id(service, index, [index], count, query, account=account)
+    if msg_id is None:
+        return
+    meta = service.users().messages().get(
+        userId="me", id=msg_id, format="metadata", metadataHeaders=["From"],
+    ).execute()
+    from_header = get_header(meta.get("payload", {}).get("headers", []), "From")
+    want = build_trash_filter(from_header)
+    if want is None:
+        print(f"🛑 --always: could not extract a sender address from From: "
+              f"{from_header!r}; nothing changed.", file=sys.stderr)
+        sys.exit(1)
+    addr = want["criteria"]["from"]
+    backlog_q = f"from:{addr} -in:trash"
+    if older_than:
+        backlog_q += f" older_than:{older_than}"
+    ids = _list_all_ids(service, backlog_q)
+
+    prefix = "[DRY RUN] " if dry_run else ""
+    print(f"{prefix}{len(ids)} message(s) from {addr} outside Trash "
+          f"(query: {backlog_q})", file=sys.stderr)
+    for sample_id in ids[:5]:
+        s = service.users().messages().get(
+            userId="me", id=sample_id, format="metadata",
+            metadataHeaders=["Date", "Subject"],
+        ).execute()
+        h = s.get("payload", {}).get("headers", [])
+        print(f"   {get_header(h, 'Date') or '?'}  "
+              f"{get_header(h, 'Subject') or '(no subject)'}", file=sys.stderr)
+    if len(ids) > 5:
+        print(f"   ... and {len(ids) - 5} more", file=sys.stderr)
+    if make_filter:
+        print(f"{prefix}Filter: from={addr} -> {_describe_filter_action(want['action'])}",
+              file=sys.stderr)
+    else:
+        print(f"{prefix}No filter: future mail from {addr} keeps arriving normally.",
+              file=sys.stderr)
+    if older_than:
+        print(f"{prefix}Sparing mail from the last {older_than}.", file=sys.stderr)
+    if dry_run:
+        print("[DRY RUN] Nothing trashed, no filter created.", file=sys.stderr)
+        return
+
+    question = (f"Trash these {len(ids)} and send future mail from {addr} to Trash? [y/N] "
+                if make_filter else
+                f"Trash these {len(ids)} (future mail from {addr} is NOT filtered)? [y/N] ")
+    if not _confirm_on_tty(question):
+        print("Cancelled; nothing changed.", file=sys.stderr)
+        return
+
+    settings = settings_factory() if make_filter else None
+    if ids:
+        _trash_ids(service, ids)
+    _cache_path(account).unlink(missing_ok=True)
+    remaining = len(_list_all_ids(service, backlog_q))
+    print(f"Trashed {len(ids) - remaining} of {len(ids)}; {remaining} still "
+          f"outside Trash.", file=sys.stderr)
+    if make_filter:
+        status, _ = ensure_sender_filter(settings, want)
+        _report_filter(status, want)
+
+
+# ---------------------------------------------------------------------------
+# filters: list and delete the account's standing Gmail filters
+# ---------------------------------------------------------------------------
+#
+# `m <acct> filters` prints every filter, numbered in the order Gmail returns
+# them. `m <acct> filters rm N` shows filter N, asks y/N on the tty, deletes it
+# by id, and re-lists. It exists because --always can create a filter and m had
+# no way to remove one (2026-09-29: an unwanted nytdirect Delete-it filter had
+# to be deleted by hand-written API call). Uses the gmail-settings token.
+
+def _format_filter(f, label_names=None):
+    """One-line 'criteria -> action' rendering of a Gmail filter dict. Pure."""
+    names = label_names or {}
+    crit = f.get("criteria", {}) or {}
+    act = f.get("action", {}) or {}
+    crit_s = " ".join(f"{k}:{v}" for k, v in sorted(crit.items())) or "(no criteria)"
+    parts = []
+    for label in act.get("addLabelIds") or []:
+        parts.append({"TRASH": "delete", "STARRED": "star", "IMPORTANT": "mark important",
+                      "SPAM": "mark spam"}.get(label, f"label {names.get(label, label)}"))
+    for label in act.get("removeLabelIds") or []:
+        parts.append({"INBOX": "skip inbox", "UNREAD": "mark read", "SPAM": "never spam",
+                      "IMPORTANT": "never important"}.get(label, f"unlabel {names.get(label, label)}"))
+    if act.get("forward"):
+        parts.append(f"forward to {act['forward']}")
+    return f"{crit_s} -> {', '.join(parts) or '(no action)'}"
+
+
+def _filters_and_labels(settings_service):
+    """(filters list, {label_id: name}) for the account behind the settings token."""
+    filters = settings_service.users().settings().filters().list(
+        userId="me").execute().get("filter", []) or []
+    labels = settings_service.users().labels().list(userId="me").execute().get("labels", []) or []
+    return filters, {lab["id"]: lab.get("name", lab["id"]) for lab in labels}
+
+
+def do_filters_list(settings_service):
+    filters, names = _filters_and_labels(settings_service)
+    if not filters:
+        print("No filters.")
+        return
+    for n, f in enumerate(filters, 1):
+        print(f"{n:3}. {_format_filter(f, names)}")
+
+
+def do_filters_rm(settings_service, index, dry_run=False):
+    """Delete filter number `index` (1-based, as listed) after a y/N on the tty."""
+    filters, names = _filters_and_labels(settings_service)
+    if not 1 <= index <= len(filters):
+        print(f"🛑 No filter #{index}; there are {len(filters)}. Run `m <acct> filters` to list them.",
+              file=sys.stderr)
+        sys.exit(1)
+    f = filters[index - 1]
+    desc = _format_filter(f, names)
+    if dry_run:
+        print(f"[DRY RUN] Would delete filter #{index}: {desc}", file=sys.stderr)
+        return
+    if not _confirm_on_tty(f"Delete filter #{index}: {desc} ? [y/N] "):
+        print("Cancelled; nothing changed.", file=sys.stderr)
+        return
+    settings_service.users().settings().filters().delete(userId="me", id=f["id"]).execute()
+    remaining = settings_service.users().settings().filters().list(
+        userId="me").execute().get("filter", []) or []
+    gone = all(x.get("id") != f["id"] for x in remaining)
+    print(f"{'Deleted' if gone else '⚠️  Still present after delete:'} {desc} "
+          f"({len(remaining)} filter(s) remain)", file=sys.stderr)
+
+
 def do_archive(service, indices, count, query, account=None,
-               always=False, dry_run=False):
+               always=False, dry_run=False, settings_factory=None):
     """Archive one or more messages (remove from inbox, keep in All Mail).
 
-    With always=True, ALSO surface a standing auto-archive filter for the
+    With always=True, ALSO create a standing auto-archive filter for the
     sender of the LAST message archived in this call (the one the user named);
     only that sender, and only FUTURE mail (the existing backlog is untouched).
     dry_run previews that filter and makes no settings API call.
-
-    NOTE: live filter creation (the gmail.settings.basic scope + filters().create
-    call) is NOT yet wired -- it is a persistence-class change gated by the
-    permission system. always=True currently ALWAYS runs the dry-run-style
-    preview path via build_archive_filter (pure, no API call) so the plumbing,
-    sender extraction, and the exact filter body are all exercised and visible.
+    settings_factory() returns a gmail.settings.basic service; it is called
+    only on the live --always path.
     """
     last_from = None
     for index in indices:
@@ -3022,18 +3279,19 @@ def do_archive(service, indices, count, query, account=None,
                   f"{last_from!r}; no filter would be created.", file=sys.stderr)
             return
         addr = want["criteria"]["from"]
-        # Preview only. Live creation is intentionally not wired (see docstring).
-        prefix = "[DRY RUN] " if dry_run else "[PREVIEW] "
-        print(f"{prefix}--always filter for future mail from this sender:",
+        if not dry_run:
+            status, _ = ensure_sender_filter(settings_factory(), want)
+            _report_filter(status, want)
+            print("   (future mail only; the existing backlog was not archived)",
+                  file=sys.stderr)
+            return
+        print("[DRY RUN] --always filter for future mail from this sender:",
               file=sys.stderr)
         print(f"           criteria: from={addr}", file=sys.stderr)
         print(f"           action:   removeLabelIds=['INBOX'] "
               f"(Skip the Inbox / Archive)", file=sys.stderr)
         print(f"           (future mail only; no backlog archived, no API call made)",
               file=sys.stderr)
-        if not dry_run:
-            print(f"           NOTE: live filter creation is not yet wired; "
-                  f"run again once the settings scope is enabled.", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -4761,9 +5019,17 @@ def parse_list_get_args(argv):
     # bare archive never sees it. --dry-run previews the filter without any
     # settings API call. Both are inert for every other mode.
     parser.add_argument("--always", action="store_true",
-                        help="archive: also create a Gmail filter auto-archiving future mail from this sender")
+                        help="archive: also create a Gmail filter auto-archiving future mail from this sender; "
+                             "trash: trash ALL mail from this sender (confirms first) and filter future mail to Trash")
+    parser.add_argument("--all-from", action="store_true",
+                        help="trash: trash ALL existing mail from this message's sender "
+                             "(confirms first); no filter, future mail arrives normally")
+    parser.add_argument("--older-than", default=None, metavar="N[dmy]",
+                        help="trash --all-from/--always: only sweep mail older than N "
+                             "days/months/years (e.g. 7d), sparing recent mail")
     parser.add_argument("--dry-run", action="store_true",
-                        help="archive --always: print the filter that would be created; make no API call")
+                        help="archive/trash --always: print the count and filter, change nothing; "
+                             "bare trash: name what would be trashed")
     return parser.parse_args(argv)
 
 
@@ -4790,6 +5056,10 @@ Commands:
   gmail-api-rw trash INDEX [INDEX ...]        Move message(s) to trash
   gmail-api-rw archive INDEX [INDEX ...]      Archive (remove from inbox)
   gmail-api-rw archive INDEX --always         Archive + auto-archive future mail from sender (single index)
+  gmail-api-rw trash INDEX --always           Trash ALL mail from sender (y/N) + filter future mail to Trash
+  gmail-api-rw filters [rm N]                 List Gmail filters, or delete filter N after y/N
+  gmail-api-rw trash INDEX --all-from         Trash ALL existing mail from sender (y/N); no filter
+  gmail-api-rw trash INDEX --all-from --older-than 7d   Same, sparing the last 7 days (d/m/y)
   gmail-api-rw unarchive INDEX [INDEX ...]    Un-archive (add back to inbox; indexes archived mail)
   gmail-api-rw read INDEX [INDEX ...]         Mark message(s) as read
   gmail-api-rw unread INDEX [INDEX ...]       Mark message(s) as unread
@@ -4869,6 +5139,7 @@ Manage messages:
   gmail-api-rw archive 3                      Archive message #3 (remove from inbox)
   gmail-api-rw archive 1-3                    Archive a range
   gmail-api-rw archive 3 --always            Archive #3 + filter future mail from its sender
+  gmail-api-rw trash 3 --always --dry-run    Count #3's sender's mail, preview the Trash filter
   gmail-api-rw unarchive 1                    Un-archive #1 of archived mail (add back to inbox)
   gmail-api-rw read 3                         Mark message #3 as read
   gmail-api-rw unread 3                       Mark message #3 as unread
@@ -5444,6 +5715,10 @@ def main():
         if arg in ("-F", "--config", "-e", "--email", "-n", "--count", "-q", "--query"):
             skip_next = True  # next arg is the flag's value
             continue
+        if arg == "filters":
+            mode = arg
+            mode_index = i
+            break
         if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "unarchive", "open", "thread", "read", "unread", "inbox", "urls", "unsub", "meets", "pdf"):
             mode = arg
             mode_index = i
@@ -5592,13 +5867,44 @@ def main():
         # --always creates a per-sender standing filter, which targets ONE
         # sender, so it must target exactly one message. Refuse any multi-index
         # or range and make NO archive and NO filter. Plain archive (no --always)
-        # keeps taking multi-index lists unchanged. Guarded to the archive mode
-        # so nothing else is affected.
-        if mode == "archive" and getattr(args, "always", False) and len(indices) != 1:
+        # keeps taking multi-index lists unchanged. trash --always (the sender
+        # purge) takes the same single-index rule.
+        if (mode in ("archive", "trash") and getattr(args, "always", False)
+                and len(indices) != 1):
             print("🛑 --always creates a per-sender filter and targets one "
-                  "message; give a single index (e.g. `m j 2 e --always`), "
+                  f"message; give a single index (e.g. `m j 2 {mode} --always`), "
                   f"not {indices}.", file=sys.stderr)
             sys.exit(1)
+        # trash --all-from: the same sender sweep with NO filter. It names one
+        # sender, so one index; and it is the opposite of --always's filter, so
+        # the two together are refused rather than silently picking one.
+        if getattr(args, "all_from", False):
+            if mode != "trash":
+                print(f"🛑 --all-from works with trash only, not {mode}.", file=sys.stderr)
+                sys.exit(1)
+            if getattr(args, "always", False):
+                print("🛑 --all-from (no filter) and --always (filter) contradict; "
+                      "pick one.", file=sys.stderr)
+                sys.exit(1)
+            if len(indices) != 1:
+                print("🛑 --all-from trashes one sender's mail and targets one message; "
+                      f"give a single index (e.g. `m u 2 trash --all-from`), not {indices}.",
+                      file=sys.stderr)
+                sys.exit(1)
+        # --older-than N[dmy] narrows a sender sweep to mail older than N; it
+        # means nothing without one, and a malformed value would reach Gmail as
+        # a search term that silently matches everything or nothing.
+        ot = getattr(args, "older_than", None)
+        if ot is not None:
+            if not re.fullmatch(r"[1-9]\d*[dmy]", ot):
+                print(f"🛑 --older-than takes N followed by d, m or y (e.g. 7d, 2m, 1y), "
+                      f"not {ot!r}.", file=sys.stderr)
+                sys.exit(1)
+            if not (mode == "trash" and (getattr(args, "always", False)
+                                         or getattr(args, "all_from", False))):
+                print("🛑 --older-than narrows a sender sweep; use it with "
+                      "`trash --all-from` or `trash --always`.", file=sys.stderr)
+                sys.exit(1)
         # trash/archive/unarchive/read/unread need write access; open and thread
         # only need read
         scope = ("gmail-modify"
@@ -5616,12 +5922,26 @@ def main():
             query = "-in:inbox"
         elif not query:
             query = "in:inbox"
-        if mode == "trash":
-            do_trash(service, indices, args.count, query, account=login_hint)
+        # The settings-scope token (filter creation) is separate and minted on
+        # first live --always use, so build it lazily and never on a dry run.
+        def settings_factory():
+            return _authenticated_service(args, "gmail-settings",
+                                          handle_show_account=False)[0]
+        always = getattr(args, "always", False)
+        dry_run = getattr(args, "dry_run", False)
+        if mode == "trash" and (always or getattr(args, "all_from", False)):
+            do_trash_sender(service, indices[0], args.count, query,
+                            account=login_hint, dry_run=dry_run,
+                            settings_factory=settings_factory,
+                            make_filter=always,
+                            older_than=getattr(args, "older_than", None))
+        elif mode == "trash":
+            do_trash(service, indices, args.count, query, account=login_hint,
+                     dry_run=dry_run)
         elif mode == "archive":
             do_archive(service, indices, args.count, query, account=login_hint,
-                       always=getattr(args, "always", False),
-                       dry_run=getattr(args, "dry_run", False))
+                       always=always, dry_run=dry_run,
+                       settings_factory=settings_factory)
         elif mode == "unarchive":
             do_unarchive(service, indices, args.count, query, account=login_hint)
         elif mode == "read":
@@ -5726,6 +6046,23 @@ def main():
         elif not query:
             query = "in:inbox"
         do_unsub(service, msg_index, args.count, query, account=login_hint)
+    elif mode == "filters":
+        # `filters` lists; `filters rm N` deletes one after a y/N. Both use the
+        # gmail-settings token (filters live in settings, not the mailbox).
+        mode_rest = [a for a in rest if a != mode]
+        sub = "rm" if any(a in ("rm", "delete") for a in mode_rest) else "list"
+        indices, filtered_rest = collect_indices(
+            [a for a in mode_rest if a not in ("rm", "delete")])
+        args = parse_list_get_args(filtered_rest)
+        settings, _ = _authenticated_service(args, "gmail-settings")
+        if sub == "list":
+            do_filters_list(settings)
+        elif len(indices) != 1:
+            print("Usage: m <acct> filters rm N   (one filter number, from `m <acct> filters`)",
+                  file=sys.stderr)
+            sys.exit(1)
+        else:
+            do_filters_rm(settings, indices[0], dry_run=getattr(args, "dry_run", False))
     elif mode == "meets":
         mode_rest = [a for a in rest if a != mode]
         args = parse_list_get_args(mode_rest)

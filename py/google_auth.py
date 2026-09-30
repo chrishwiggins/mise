@@ -51,6 +51,13 @@ SCOPE_PRESETS = {
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.compose",
     ],
+    # archive/trash --always in gmail-api-rw: modify (archive, batch trash)
+    # plus settings.basic (create a standing filter). Separate token per
+    # account (gmail-settings-<acct>.pickle); never minted implicitly.
+    "gmail-settings": [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.settings.basic",
+    ],
 }
 
 # ---------------------------------------------------------------------------

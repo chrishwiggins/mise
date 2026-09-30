@@ -2124,6 +2124,8 @@ parse_action_args() {
 # This eliminates the need for the external send script
 
 ACTIONS_SHORT="i out sent q d x urls unsub meets scheduled"
+# filters: list / `filters rm N` delete standing Gmail filters (settings token)
+ACTIONS_SHORT="$ACTIONS_SHORT filters"
 ACTIONS_SEND="send c"
 # `e` is a bare ALIAS for `archive`, matching Gmail's keyboard shortcut (e =
 # archive). It is only RECOGNIZED here (and in the i|q handler's action_words);
@@ -2197,6 +2199,8 @@ READING
     d         drafts                 View drafts (web only)
     x         spam                   Check spam folder
     meets                            Scan cached list for Zoom/Meet links; pick one to open
+    filters                          List the account's Gmail filters, numbered
+    filters rm N                     Delete filter N after y/N (--dry-run names it)
 
     INDEX        Read one message (e.g. m 3)
     START-END    List those index rows (e.g. m 45-67) — listing, not bodies
@@ -2229,6 +2233,9 @@ MESSAGE ACTIONS
                                      compose a draft. fwd/sreply/sfwd too.
     open INDEX                      Open in Gmail web UI
     trash INDEX                     Move to trash
+    trash INDEX --always            Trash ALL mail from its sender (asks y/N) + filter future mail to Trash
+    trash INDEX --all-from          Trash ALL existing mail from its sender (asks y/N); no filter
+      --older-than 7d               ...only mail older than 7 days (d/m/y), sparing recent mail
     archive INDEX                   Archive message (removes from inbox)
     archive INDEX --always          Archive + auto-archive future mail from sender (single index)
     unarchive INDEX                 Un-archive: add back to inbox (indexes archived mail)
@@ -2372,6 +2379,9 @@ REPLYING & FORWARDING
 
 MANAGING MESSAGES
     m 3 trash                             Move message #3 to trash
+    m u q "from:news" 1 trash --always    Purge that sender: backlog to Trash + standing filter
+    m u q "from:news" 1 trash --all-from  Purge that sender's backlog only; future mail still arrives
+    m u 1 trash --all-from --older-than 7d  Same for #1's sender, keeping the last week
     m 1-5 archive                         Archive messages 1-5
     m 2 e --always                        Archive #2 + auto-archive future mail from its sender
     m 1 unarchive                         Un-archive #1 of archived mail (put back in inbox)
@@ -2401,6 +2411,7 @@ ADVANCED WORKFLOWS
     m q shapiro 7 urls 2                  Open the 2nd URL in message #7 directly (no menu)
     m 3 unsub                            Print unsubscribe commands for message #3 (never sends/fires)
     m h meets                            Scan cached list for Zoom/Meet links, pick one to open
+    m u filters rm 3                     Delete Columbia filter #3 (asks y/N)
 EOF
             ;;
         *)
@@ -3005,8 +3016,10 @@ case "$action" in
                 # and is not in PA_TRAILING_ARGS. Re-inject it for the archive
                 # action ONLY, so the backend previews the auto-archive filter
                 # (no settings API call). The backend ignores --dry-run for
-                # archive unless --always is also present.
-                if [[ "$action_word" == "archive" ]] && (( dry_run )); then
+                # archive unless --always is also present. trash gets it too:
+                # `trash --always --dry-run` counts the sender's backlog and
+                # previews the filter, and a bare `trash --dry-run` trashes nothing.
+                if [[ "$action_word" == "archive" || "$action_word" == "trash" ]] && (( dry_run )); then
                     PA_TRAILING_ARGS+=("--dry-run")
                 fi
                 exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
@@ -4024,8 +4037,10 @@ case "$action" in
         # in rest to the backend. Re-inject it for the archive path ONLY, where
         # the backend uses it to PREVIEW the auto-archive filter it would create
         # (no settings API call). Harmless for archive without --always: the
-        # backend only reads --dry-run when --always is also present.
-        if [[ "$action" == "archive" ]] && (( dry_run )); then
+        # backend only reads --dry-run when --always is also present. trash
+        # gets it too, so `trash --always --dry-run` previews and a bare
+        # `trash --dry-run` trashes nothing.
+        if [[ "$action" == "archive" || "$action" == "trash" ]] && (( dry_run )); then
             rest+=("--dry-run")
         fi
         # Compose/send verbs must NOT be re-scoped: the read-scope fix leaves
@@ -4061,6 +4076,12 @@ case "$action" in
         # Render one PDF per selected message into /tmp/spool/pdf/. The backend
         # does all index/range parsing and fan-out (e.g. `m 1-4,5 pdf`).
         exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "${scope_qargs[@]+"${scope_qargs[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        ;;
+    filters)
+        # List the account's Gmail filters, or `filters rm N` to delete one
+        # after a y/N. --dry-run is consumed at top level, so re-inject it.
+        (( dry_run )) && rest+=("--dry-run")
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     meets)
         # Scan the most recently cached message list for Zoom/Meet links
