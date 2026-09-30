@@ -1,0 +1,51 @@
+#!/usr/bin/env python3.11
+"""passcode-extract: print the one-time passcode in an email, and nothing else.
+
+Usage:
+  passcode-extract FILE.eml        read a raw message file
+  passcode-extract < FILE.eml      read stdin
+  passcode-extract -v FILE.eml     also name the deciding rule on stderr
+
+stdout carries only the code, so $(passcode-extract x.eml) is safe.
+Exit 0: one code found. Exit 2: ambiguous or none found (candidates on
+stderr); a wrong code is never printed. Exit 1: unreadable input.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from passcode_extract import extract  # noqa: E402
+
+
+def main(argv):
+    verbose = "-v" in argv
+    args = [a for a in argv if a != "-v"]
+    if args and args[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    try:
+        if args and args[0] != "-":
+            with open(args[0], "rb") as f:
+                raw = f.read()
+        else:
+            raw = sys.stdin.buffer.read()
+    except OSError as e:
+        print(f"passcode-extract: {e}", file=sys.stderr)
+        return 1
+    r = extract(raw)
+    if r.code:
+        print(r.code)
+        if verbose:
+            print(f"rule: {r.rule}", file=sys.stderr)
+        return 0
+    if r.ambiguous:
+        print(f"passcode-extract: ambiguous ({r.rule}): {', '.join(r.candidates)}",
+              file=sys.stderr)
+    else:
+        print("passcode-extract: no passcode found", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

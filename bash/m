@@ -2091,7 +2091,7 @@ parse_action_args() {
         # m is the user-forgiving layer: default missing index to 1 for actions that need one
         if [[ ${#PA_MESSAGE_NUMBERS[@]} -eq 0 ]]; then
             case "$PA_ACTION_WORD" in
-                reply|reply-all|fwd|sfwd|sreply|sreply-all|draft|open|thread|urls|unsub)
+                reply|reply-all|fwd|sfwd|sreply|sreply-all|draft|open|thread|urls|unsub|otp-add)
                     log_warn "no index given for '$PA_ACTION_WORD'; assuming message #1"
                     PA_MESSAGE_NUMBERS=("1")
                     ;;
@@ -2123,7 +2123,7 @@ parse_action_args() {
 # smart_send() function removed - logic consolidated into direct_send()
 # This eliminates the need for the external send script
 
-ACTIONS_SHORT="i out sent q d x urls unsub meets scheduled"
+ACTIONS_SHORT="i out sent q d x urls unsub otp otp-add meets scheduled"
 # filters: list / `filters rm N` delete standing Gmail filters (settings token)
 ACTIONS_SHORT="$ACTIONS_SHORT filters"
 ACTIONS_SEND="send c"
@@ -2410,6 +2410,9 @@ ADVANCED WORKFLOWS
     m 3 --urls-slug                      Same menu, each URL labelled with an LLM-learned short slug
     m q shapiro 7 urls 2                  Open the 2nd URL in message #7 directly (no menu)
     m 3 unsub                            Print unsubscribe commands for message #3 (never sends/fires)
+    m otp                                Passcode from the newest code mail (g, gv, u; last 15 min), copied
+    m gv 2 otp                           Passcode from gv message #2 only (stdout is just the code)
+    m gv 2 otp-add                       Save gv #2 to $PASSCODE_CORPUS with a confirmed label
     m h meets                            Scan cached list for Zoom/Meet links, pick one to open
     m u filters rm 3                     Delete Columbia filter #3 (asks y/N)
 EOF
@@ -2801,7 +2804,7 @@ fi
 # Read-intent flags recognized here: -p/--peek, -x/--headers, -A and the
 # attachment savers, -S/--save; read action words: the compose/read verbs.
 _pg_read_flags=" -p --peek -x --headers -A --save-attachments-only --open-attachments -S --save -t --text "
-_pg_read_actions=" reply reply-all fwd forward draft open trash archive unarchive thread read unread sfwd sreply sreply-all urls unsub pdf grep peek "
+_pg_read_actions=" reply reply-all fwd forward draft open trash archive unarchive thread read unread sfwd sreply sreply-all urls unsub otp otp-add pdf grep peek "
 page_offset=""; page_size=10; filtered_rest=(); index_after_page=0; _seen_pp=0
 for r in "${rest[@]+"${rest[@]}"}"; do
     if [[ "$r" =~ ^pp([0-9]+)$ ]]; then
@@ -2901,9 +2904,9 @@ case "$action" in
             # `e` is included as the archive alias; it is normalized to
             # `archive` right after parse_action_args returns (see below), so
             # nothing downstream of that point sees the bare `e`.
-            action_words="reply reply-all fwd draft open trash archive unarchive e thread read unread sfwd sreply sreply-all urls unsub pdf grep"
+            action_words="reply reply-all fwd draft open trash archive unarchive e thread read unread sfwd sreply sreply-all urls unsub otp otp-add pdf grep"
             if [[ "$has_trailing_open" == "1" ]]; then
-                action_words="reply reply-all fwd draft trash archive unarchive e thread read unread sfwd sreply sreply-all urls unsub pdf grep"
+                action_words="reply reply-all fwd draft trash archive unarchive e thread read unread sfwd sreply sreply-all urls unsub otp otp-add pdf grep"
             fi
 
             # Delegate arg parsing to the shared helper; q-action treats rest[0] as query.
@@ -3811,7 +3814,7 @@ case "$action" in
         done
         if (( ${#rest[@]} >= _sg + 2 )) \
            && [[ "${rest[_sg]}" =~ ^[0-9]+$ ]] \
-           && [[ " reply reply-all fwd forward draft open trash archive unarchive thread read unread urls unsub " == *" ${rest[_sg+1]} "* ]]; then
+           && [[ " reply reply-all fwd forward draft open trash archive unarchive thread read unread urls unsub otp otp-add " == *" ${rest[_sg+1]} "* ]]; then
             _idx="${rest[_sg]}"; _act="${rest[_sg+1]}"; _tail=("${rest[@]:_sg+2}")
             case "$_act" in
                 fwd|forward) _suggest="m out ${_idx} fwd ${_tail[*]}  (or: m sfwd ${_idx} ${_tail[*]})" ;;
@@ -4070,6 +4073,14 @@ case "$action" in
         # Find one message's unsubscribe options and PRINT the commands to run.
         # Read-only: the backend parses List-Unsubscribe headers (body-link
         # fallback) and prints a ranked menu; it never sends or fires anything.
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "${scope_qargs[@]+"${scope_qargs[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+        ;;
+    otp|otp-add)
+        # otp: print ONLY the passcode (stdout) from message N, or with no index
+        # from the newest passcode mail of the last 15 min (-w MIN), and pbcopy
+        # it. With no account it searches g, gv and u. otp-add: save message N
+        # to the $PASSCODE_CORPUS training set with a confirmed label. Both are
+        # read-only on the mailbox.
         exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "${scope_qargs[@]+"${scope_qargs[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     pdf)

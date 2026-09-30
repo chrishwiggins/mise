@@ -4334,6 +4334,250 @@ def render_unsub_commands(options, sender, eml_writer=None):
     return rows
 
 
+# ---------------------------------------------------------------------------
+# otp / otp-add -- one-time passcodes out of mail (extractor: passcode_extract.py)
+# ---------------------------------------------------------------------------
+#
+# `m otp` prints ONLY the code on stdout (so $(m otp) is safe), copies it, and
+# puts sender/age/account on stderr. With no index it searches recent mail in
+# every account in _OTP_DEFAULT_ACCOUNTS (or just -e's account) and takes the
+# newest message the extractor reads confidently. It never prints a guessed
+# code: an ambiguous extraction exits 2 with the candidates on stderr.
+# `m N otp-add` saves message N to the private training corpus at
+# $PASSCODE_CORPUS (dat/eml + dat/labels.tsv) after a y/typed-label confirm.
+
+_OTP_DEFAULT_ACCOUNTS = ("g", "gv", "u")
+_OTP_DEFAULT_WITHIN_MIN = 15
+# after:<epoch seconds> is prepended at search time so only in-window mail is fetched.
+_OTP_QUERY = ('(code OR passcode OR passcodes OR verification OR '
+              '"one-time" OR OTP OR "security code" OR "sign in" OR "log in" OR 2FA)')
+
+
+def _otp_raw(service, msg_id):
+    import base64
+    raw_msg = _retry_api_call(lambda: service.users().messages().get(
+        userId="me", id=msg_id, format="raw").execute())
+    return base64.urlsafe_b64decode(raw_msg["raw"]), int(raw_msg.get("internalDate", 0))
+
+
+def _otp_extract(raw):
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    from passcode_extract import extract, message_parts
+    return extract(raw), message_parts(raw)[0]
+
+
+def _otp_sender(raw):
+    from email import message_from_bytes, policy
+    from email.utils import parseaddr
+    msg = message_from_bytes(raw, policy=policy.default)
+    name, addr = parseaddr(str(msg.get("From", "")))
+    return addr or name or "(unknown sender)"
+
+
+def _otp_slug_for_email(email_addr):
+    config = _load_accounts_config() or {}
+    for slug, info in (config.get("accounts") or {}).items():
+        addr = info.get("email") if isinstance(info, dict) else info
+        if addr and email_addr and addr.lower() == email_addr.lower():
+            return slug
+    return email_addr or "?"
+
+
+def _otp_email_for_slug(slug):
+    config = _load_accounts_config() or {}
+    info = (config.get("accounts") or {}).get(slug)
+    return info.get("email") if isinstance(info, dict) else info
+
+
+def _otp_emit(result, raw, internal_ms, account_email, copy_clip=True):
+    """Print the code (stdout) plus provenance (stderr); return the exit status."""
+    import subprocess
+    sender = _otp_sender(raw)
+    age = max(0, int((time.time() * 1000 - internal_ms) / 60000)) if internal_ms else None
+    where = (f"from {sender}, {age} min ago, account {_otp_slug_for_email(account_email)}"
+             if age is not None else f"from {sender}")
+    if result.code:
+        print(result.code)
+        if copy_clip:
+            try:
+                subprocess.run(["pbcopy"], input=result.code.encode(), check=True)
+                where += "; copied"
+            except (OSError, subprocess.CalledProcessError):
+                where += "; clipboard copy FAILED"
+        print(where, file=sys.stderr)
+        return 0
+    if result.ambiguous:
+        print(f"🛑 ambiguous ({result.rule}): {', '.join(result.candidates)} ({where}); "
+              f"nothing printed or copied.", file=sys.stderr)
+    else:
+        print(f"🛑 no passcode found ({where}).", file=sys.stderr)
+    return 2
+
+
+def do_otp_index(service, index, count, query, account=None, copy_clip=True):
+    """otp for one message by index."""
+    msg_id = _resolve_message_id(service, index, count, query, account=account)
+    raw, internal_ms = _otp_raw(service, msg_id)
+    result, _ = _otp_extract(raw)
+    sys.exit(_otp_emit(result, raw, internal_ms, account, copy_clip))
+
+
+def _otp_scan_account(args, email_addr, cutoff_ms):
+    """In-window candidate messages for one account: [(internal_ms, raw, login_hint)].
+
+    Returns None when the account cannot be opened. One list call plus ONE
+    batched raw fetch, since each round trip costs most of a second.
+    """
+    import base64
+    import copy as _copy
+    a = _copy.copy(args)
+    a.email = email_addr
+    try:
+        service, login_hint = _authenticated_service(a, "gmail-readonly",
+                                                     handle_show_account=False)
+    except SystemExit:
+        return None
+    q = f"after:{int(cutoff_ms / 1000)} {_OTP_QUERY}"
+    resp = _retry_api_call(lambda: service.users().messages().list(
+        userId="me", q=q, maxResults=20).execute())
+    ids = [m["id"] for m in resp.get("messages", []) or []]
+    if not ids:
+        return []
+    got = {}
+
+    def _collect(request_id, response, exception):
+        if exception is None:
+            got[request_id] = response
+
+    batch = service.new_batch_http_request(callback=_collect)
+    for msg_id in ids:
+        batch.add(service.users().messages().get(userId="me", id=msg_id, format="raw"),
+                  request_id=msg_id)
+    _retry_api_call(batch.execute)
+    found = []
+    for msg_id in ids:
+        r = got.get(msg_id)
+        if r is None:
+            continue
+        internal_ms = int(r.get("internalDate", 0))
+        if internal_ms >= cutoff_ms:
+            found.append((internal_ms, base64.urlsafe_b64decode(r["raw"]), login_hint))
+    return found
+
+
+def do_otp_newest(args, account_emails, within_min, copy_clip=True):
+    """otp with no index: newest confidently-read code across accounts."""
+    from concurrent.futures import ThreadPoolExecutor
+    cutoff_ms = (time.time() - within_min * 60) * 1000
+    found, searched, failed = [], [], []
+    with ThreadPoolExecutor(max_workers=max(1, len(account_emails))) as pool:
+        results = list(pool.map(lambda e: _otp_scan_account(args, e, cutoff_ms),
+                                account_emails))
+    for email_addr, rows in zip(account_emails, results):
+        if rows is None:
+            failed.append(_otp_slug_for_email(email_addr))
+        else:
+            searched.append(_otp_slug_for_email(email_addr))
+            found.extend(rows)
+    found.sort(key=lambda t: t[0], reverse=True)
+    skipped, first_ambiguous = [], None
+
+    def _report_skipped():
+        # Name what was passed over, so a missed code can be fed to otp-add.
+        if skipped:
+            print(f"⚠️  skipped {len(skipped)} newer message(s) with no readable code:",
+                  file=sys.stderr)
+            for line in skipped[:5]:
+                print(f"     {line}", file=sys.stderr)
+
+    for internal_ms, raw, login_hint in found:
+        result, subject = _otp_extract(raw)
+        if result.code:
+            _report_skipped()
+            sys.exit(_otp_emit(result, raw, internal_ms, login_hint, copy_clip))
+        if result.ambiguous and first_ambiguous is None:
+            first_ambiguous = (result, raw, internal_ms, login_hint)
+        skipped.append(f"{_otp_slug_for_email(login_hint)}: {_otp_sender(raw)}: "
+                       f"{subject[:60]}")
+    _report_skipped()
+    scope = f"accounts {','.join(searched) or 'none'}, last {within_min} min"
+    if failed:
+        scope += f"; could not open {','.join(failed)}"
+    if first_ambiguous:
+        result, raw, internal_ms, login_hint = first_ambiguous
+        print(f"({scope})", file=sys.stderr)
+        sys.exit(_otp_emit(result, raw, internal_ms, login_hint, copy_clip))
+    print(f"🛑 no passcode found in {len(found)} candidate message(s) ({scope}).",
+          file=sys.stderr)
+    sys.exit(1)
+
+
+def _otp_corpus_name(raw, directory):
+    import re
+    from email import message_from_bytes, policy
+    from email.utils import parsedate_to_datetime
+    msg = message_from_bytes(raw, policy=policy.default)
+    try:
+        day = parsedate_to_datetime(str(msg.get("Date"))).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        day = time.strftime("%Y-%m-%d")
+    local = _otp_sender(raw).split("@")[0]
+    subject = re.sub(r"[^A-Za-z0-9]+", "-", str(msg.get("Subject", "") or "")).strip("-")
+    if len(subject) > 40:
+        subject = subject[:40].rsplit("-", 1)[0]
+    stem = "-".join(p for p in (day, re.sub(r"[^A-Za-z0-9]+", "-", local).strip("-"),
+                                subject) if p)
+    path = directory / f"{stem}.eml"
+    n = 2
+    while path.exists():
+        path = directory / f"{stem}-v{n}.eml"
+        n += 1
+    return path
+
+
+def do_otp_add(service, index, count, query, account=None):
+    """Save message N to the $PASSCODE_CORPUS training set with a confirmed label."""
+    corpus = os.environ.get("PASSCODE_CORPUS")
+    if not corpus:
+        print("🛑 PASSCODE_CORPUS is not set; nothing saved. Set it to the corpus "
+              "directory (the one holding dat/eml and dat/labels.tsv).", file=sys.stderr)
+        sys.exit(1)
+    eml_dir = Path(corpus).expanduser() / "dat" / "eml"
+    labels = Path(corpus).expanduser() / "dat" / "labels.tsv"
+    if not eml_dir.is_dir() or not labels.exists():
+        print(f"🛑 {corpus} has no dat/eml/ or dat/labels.tsv; nothing saved.",
+              file=sys.stderr)
+        sys.exit(1)
+    msg_id = _resolve_message_id(service, index, count, query, account=account)
+    raw, _ = _otp_raw(service, msg_id)
+    result, subject = _otp_extract(raw)
+    print(f"From: {_otp_sender(raw)}\nSubject: {subject}", file=sys.stderr)
+    if result.code:
+        guess = f"extractor says {result.code} ({result.rule})"
+    elif result.ambiguous:
+        guess = f"extractor is unsure: {', '.join(result.candidates)}"
+    else:
+        guess = "extractor found no code"
+    print(guess, file=sys.stderr)
+    prompt = ("Enter = accept, or type the right code, x = no code in this message: "
+              if result.code else "Type the right code, or x = no code in this message: ")
+    while True:
+        answer = _tty_ask(prompt)
+        if answer is None:
+            print("🛑 No terminal to confirm the label on; nothing saved.",
+                  file=sys.stderr)
+            sys.exit(1)
+        if answer or result.code:
+            break
+    label = answer or result.code
+    path = _otp_corpus_name(raw, eml_dir)
+    path.write_bytes(raw)
+    with labels.open("a") as f:
+        f.write(f"{path.name}\t{label}\t{_otp_slug_for_email(account)}\n")
+    verdict = "agrees" if label == result.code else "DISAGREES (a new test failure to fix)"
+    print(f"Saved {path}\nLabel {label!r}; extractor {verdict}.", file=sys.stderr)
+
+
 def do_unsub(service, index, count, query, account=None):
     """Find ONE message's unsubscribe options and PRINT the commands to run.
 
@@ -5719,7 +5963,7 @@ def main():
             mode = arg
             mode_index = i
             break
-        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "unarchive", "open", "thread", "read", "unread", "inbox", "urls", "unsub", "meets", "pdf"):
+        if arg in ("send", "draft", "reply", "reply-all", "fwd", "trash", "archive", "unarchive", "open", "thread", "read", "unread", "inbox", "urls", "unsub", "otp", "otp-add", "meets", "pdf"):
             mode = arg
             mode_index = i
             break
@@ -6046,6 +6290,36 @@ def main():
         elif not query:
             query = "in:inbox"
         do_unsub(service, msg_index, args.count, query, account=login_hint)
+    elif mode in ("otp", "otp-add"):
+        # otp: passcode only on stdout; otp-add: grow the labeled corpus.
+        # --within MIN and --no-copy are otp's own flags, pulled out before the
+        # shared parser (which does not know them). -w is --web elsewhere.
+        mode_rest = [a for a in rest if a != mode]
+        within, copy_clip, kept = _OTP_DEFAULT_WITHIN_MIN, True, []
+        it = iter(mode_rest)
+        for a in it:
+            if a == "--within":
+                within = int(next(it, _OTP_DEFAULT_WITHIN_MIN))
+            elif a.startswith("--within="):
+                within = int(a.split("=", 1)[1])
+            elif a == "--no-copy":
+                copy_clip = False
+            else:
+                kept.append(a)
+        indices, filtered_rest = collect_indices(kept)
+        args = parse_list_get_args(filtered_rest)
+        if mode == "otp" and not indices and not args.query:
+            emails = ([args.email] if args.email else
+                      [e for e in map(_otp_email_for_slug, _OTP_DEFAULT_ACCOUNTS) if e])
+            do_otp_newest(args, emails, within, copy_clip)
+        service, login_hint = _authenticated_service(args, "gmail-readonly")
+        query = args.query or "in:inbox"
+        msg_index = indices[0] if indices else 1
+        if mode == "otp":
+            do_otp_index(service, msg_index, args.count, query, account=login_hint,
+                         copy_clip=copy_clip)
+        else:
+            do_otp_add(service, msg_index, args.count, query, account=login_hint)
     elif mode == "filters":
         # `filters` lists; `filters rm N` deletes one after a y/N. Both use the
         # gmail-settings token (filters live in settings, not the mailbox).
