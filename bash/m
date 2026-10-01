@@ -1287,11 +1287,30 @@ _sent_clip() {
 # Subject (e.g. `m send /tmp/w`, a mutt-style draft with `Subject: wake/dep`).
 # Anchored to a real header line and requires at least one non-space char after
 # the colon, so a bare `Subject:` (empty value) still prompts. Cheap grep, no
-# body scan needed for correctness (a "Subject:" appearing later in the body is
-# a false positive, but only suppresses a prompt, never sends anything blank).
+# body scan: only the header block counts (see _header_subject_state).
 _file_has_subject() {
+    [[ "$(_header_subject_state "$1")" == ok ]]
+}
+
+# Prints one word describing the Subject of header file $1, reading ONLY the
+# header block (everything before the first empty line):
+#   ok        - a non-empty Subject: is in the header block
+#   misplaced - no header Subject, but a Subject: line appears in the body
+#   missing   - no Subject: anywhere
+# Motivating case 2026-09-29: a Cc: line was added by hand followed by a blank
+# line, which ended the headers; the Subject: line below it became the first
+# line of the body and the message went to a department administrator as
+# "(no subject)". The -H send path had no subject check at all.
+_header_subject_state() {
     local _f="$1"
-    [[ -f "$_f" ]] && grep -qiE '^Subject:[[:space:]]*[^[:space:]]' "$_f"
+    [[ -f "$_f" ]] || { echo missing; return; }
+    awk '
+        BEGIN { inhdr = 1; state = "missing" }
+        inhdr && /^[[:space:]]*\r?$/ { inhdr = 0; next }
+        inhdr && tolower($0) ~ /^subject:[[:space:]]*[^[:space:]]/ { state = "ok"; exit }
+        !inhdr && tolower($0) ~ /^subject:/ { state = "misplaced"; exit }
+        END { print state }
+    ' "$_f"
 }
 
 # True when $1 should be sent as a mutt-style header file (routed via -H), not
@@ -1459,6 +1478,17 @@ direct_send() {
                 fi
 
                 local abspath="$(cd "$(dirname "$arg")" && pwd)/$(basename "$arg")"
+
+                # Refuse a draft whose header block has no Subject. See
+                # _header_subject_state for the 2026-09-29 motivating case.
+                case "$(_header_subject_state "$abspath")" in
+                    misplaced)
+                        log_error "$abspath: Subject: is below the first blank line, so it would go out as body text with no subject. Remove the blank line inside the headers."
+                        return 1 ;;
+                    missing)
+                        log_error "$abspath: no Subject: header. Add one first."
+                        return 1 ;;
+                esac
 
                 # Weekday/date sanity: warn (never block) when the body calls a
                 # date by the wrong weekday. 2026-09-07: two guest-speaker
@@ -3050,7 +3080,19 @@ case "$action" in
                 if [[ "$action_word" == "archive" || "$action_word" == "trash" ]] && (( dry_run )); then
                     PA_TRAILING_ARGS+=("--dry-run")
                 fi
-                exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
+                # Pass the same -n the listing used. The backend caches the
+                # listing's message ids keyed on (count, query, account); with
+                # no -n it defaults to 20, the key misses on every action after a
+                # 10-row listing, and it re-fetches the list, so "#1" is whatever
+                # is newest NOW (or, for the default account, whatever is newest
+                # in the mailbox the send-scope token happens to hold; caught
+                # 2026-09-29 replying to a Columbia message after a personal
+                # listing). Page N listings fetched N*page_size rows.
+                _act_count="$page_size"
+                if [[ -n "$page_offset" ]]; then
+                    _act_count=$(( ( page_offset / page_size + 1 ) * page_size ))
+                fi
+                exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$_act_count" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
             fi
 
             # Parse remaining arguments to find peek flags, verbose flags, meta flag, and message numbers
@@ -3517,7 +3559,13 @@ case "$action" in
 
             # If we found an action word, route to gmail-api-rw immediately
             if [[ -n "$action_word" ]]; then
-                exec gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
+                # Same -n as the sent listing, so the backend's index cache
+                # hits (see the i|q action exec for why this matters).
+                _act_count="$page_size"
+                if [[ -n "$page_offset" ]]; then
+                    _act_count=$(( ( page_offset / page_size + 1 ) * page_size ))
+                fi
+                exec gmail-api-rw sent "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$_act_count" ${query_string:+-q "$query_string"} "${message_numbers[@]+"${message_numbers[@]}"}" "$action_word" "${PA_TRAILING_ARGS[@]+"${PA_TRAILING_ARGS[@]}"}"
             fi
 
             # Parse remaining arguments to find peek flags, verbose flags, meta flag, and message numbers
@@ -3975,6 +4023,18 @@ case "$action" in
                     fi
                 done
 
+                # Refuse a -H draft whose header block has no Subject (see
+                # _header_subject_state). --draft saves are exempt.
+                if [[ " ${fixed_args[*]+${fixed_args[*]}} " != *" --draft "* ]]; then
+                    for (( _ci=0; _ci<${#fixed_args[@]}-1; _ci++ )); do
+                        [[ "${fixed_args[_ci]}" == -H ]] || continue
+                        _hf="${fixed_args[_ci+1]}"
+                        case "$(_header_subject_state "$_hf")" in
+                            misplaced) log_error "$_hf: Subject: is below the first blank line, so it would go out as body text with no subject. Remove the blank line inside the headers."; exit 1 ;;
+                            missing)   log_error "$_hf: no Subject: header. Add one first."; exit 1 ;;
+                        esac
+                    done
+                fi
                 if (( dry_run )); then
                     echo "DRY-RUN: gmail-api-rw ${gmail_acct[*]+${gmail_acct[*]}} send --via-send ${fixed_args[*]+${fixed_args[*]}}"
                     exit 0
@@ -4085,9 +4145,15 @@ case "$action" in
         # Special handling for reply/fwd actions: default to message #1 if no index provided
         if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all)$ ]] && [[ ${#rest[@]} -eq 0 ]]; then
             log_warn "No message index provided, assuming message #1"
-            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "$action" "1"
+            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$page_size" "$action" "1"
         else
-            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" "${_sq[@]+"${_sq[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+            # Same -n as the inbox listing the index came from, so the
+            # backend's index cache hits instead of re-fetching (2026-09-29).
+            _act_count="$page_size"
+            if [[ -n "$page_offset" ]]; then
+                _act_count=$(( ( page_offset / page_size + 1 ) * page_size ))
+            fi
+            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$_act_count" "${_sq[@]+"${_sq[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         fi
         ;;
     urls)
