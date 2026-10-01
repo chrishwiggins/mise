@@ -16,16 +16,32 @@
 # the payload path goes; cmd-put substitutes the real /tmp/doc/NR-SLUG.sh.txt
 # path. This keeps the load-bearing text out of a garbage scratchpad path.
 #
-# Prints, on success, the script path, the editable text path (if any), and the
-# `bash <path>` line to hand Chris.
+# RECEIPT: every staged script tees its stdout and stderr, bracketed by a start
+# line and an exit-status line, to /tmp/out/NR-SLUG.out. That lets Claude read
+# what actually went out (a Slack ts, a sent message id, an error) after Chris
+# runs it, and check that against the destination, instead of trusting that it
+# ran. --no-receipt skips this for scripts that open an interactive program
+# (vim, a pager), which misbehaves when stdout is a pipe.
+#
+# Prints, on success, the script path, the editable text path (if any), the
+# receipt path, and the `bash <path>` line to hand Chris.
+#
+# CMD_DIR, CMD_DOC_DIR, CMD_OUT_DIR override the three directories (for tests).
 set -euo pipefail
 
-dir=/tmp/cmd
-docdir=/tmp/doc
-mkdir -p "$dir" "$docdir"
+dir=${CMD_DIR:-/tmp/cmd}
+docdir=${CMD_DOC_DIR:-/tmp/doc}
+outdir=${CMD_OUT_DIR:-/tmp/out}
+mkdir -p "$dir" "$docdir" "$outdir"
+
+receipt=1
+if [ "${1:-}" = "--no-receipt" ]; then
+    receipt=0
+    shift
+fi
 
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then
-    echo "usage: cmd-put SLUG BODYFILE [TEXTFILE]" >&2
+    echo "usage: cmd-put [--no-receipt] SLUG BODYFILE [TEXTFILE]" >&2
     exit 2
 fi
 slug=$1
@@ -60,6 +76,7 @@ done
 nr=$((max + 1))
 
 out="$dir/$nr-$slug.sh"
+rcpt="$outdir/$nr-$slug.out"
 txtout=""
 
 # If a text payload was given, place it beside the script by NR+slug and make
@@ -79,12 +96,31 @@ fi
     if [ -n "$txtout" ]; then
         echo "# editable message text: $txtout  (edit this, then run the script)"
     fi
-    printf '%s\n' "$bodytext"
+    if [ "$receipt" = 1 ]; then
+        # Run the body in a subshell piped through tee, so the receipt is
+        # complete when the script returns (macOS bash 3.2 cannot wait on an
+        # exec'd process substitution). stdin stays the terminal.
+        echo "# receipt: $rcpt"
+        echo "__rcpt=$rcpt"
+        echo 'echo "=== start $(date '"'"'+%Y-%m-%d %H:%M:%S'"'"') $0 ===" >> "$__rcpt"'
+        echo '('
+        printf '%s\n' "$bodytext"
+        echo ') 2>&1 | tee -a "$__rcpt"'
+        echo '__rc=${PIPESTATUS[0]}'
+        echo 'echo "=== exit $__rc $(date '"'"'+%Y-%m-%d %H:%M:%S'"'"') ===" >> "$__rcpt"'
+        echo 'echo "receipt: $__rcpt"'
+        echo 'exit $__rc'
+    else
+        printf '%s\n' "$bodytext"
+    fi
 } > "$out"
 chmod +x "$out"
 
 echo "wrote $out"
 if [ -n "$txtout" ]; then
     echo "edit text: $txtout"
+fi
+if [ "$receipt" = 1 ]; then
+    echo "receipt: $rcpt"
 fi
 echo "run it:  bash $out"

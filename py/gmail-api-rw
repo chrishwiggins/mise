@@ -1023,6 +1023,11 @@ _VERIFIED_ACCOUNT_CACHE = CACHE_DIR / ".gmail-api-rw-verified-accounts.json"
 # wrong-mailbox send token goes undetected.
 _DEFAULT_TOKEN_KEY = "__default__"
 
+# Mailbox behind the most recently authenticated service (set by
+# _authenticated_service). Compose paths fall back to it for the From: line
+# when no login_hint exists (default account), instead of "Unknown account".
+_VERIFIED_IDENTITY = None
+
 
 def _verified_key(token_name, scope=None):
     """Cache key for a verified identity.
@@ -1036,18 +1041,74 @@ def _verified_key(token_name, scope=None):
     return f"{_DEFAULT_TOKEN_KEY}:{scope}" if scope else _DEFAULT_TOKEN_KEY
 
 
+# Token pickles live here (mirrors google_auth.TOKEN_DIR). The file behind a
+# (token_name, scope) pair is <token_name>.pickle for a named account and
+# <scope>.pickle for the default account (google_auth._scope_key maps a preset
+# scope list back to its preset name).
+_TOKEN_DIR = Path("~/.config/google-tokens").expanduser()
+
+
+def _token_fingerprint(token_name, scope=None):
+    """Return a string that changes whenever the token pickle's identity may have.
+
+    A verified (token -> mailbox) pairing is only as durable as the pickle it
+    was checked against. A re-minted default send token (browser logged into
+    the wrong account) swaps the mailbox behind the SAME cache key, and the
+    cross-scope guard in _authenticated_service then compares against a stale
+    email and lets the wrong mailbox through. Caught 2026-09-29: gmail-send.pickle
+    was re-minted as chw2@columbia.edu at 22:40, the cache still said
+    chris.wiggins@gmail.com from 22:37, and `m q Mostov reply` listed the
+    personal inbox then drafted a reply to a Columbia message.
+
+    Fingerprint on the refresh token, which survives the hourly access-token
+    refresh (so the cache still saves the getProfile round-trip) but is new on
+    every re-mint. Fall back to the file's mtime when the pickle has no refresh
+    token. None when the pickle cannot be read: callers then re-verify live.
+    """
+    if not token_name and not scope:
+        return None
+    path = _TOKEN_DIR / f"{token_name or scope}.pickle"
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    refresh_token = None
+    try:
+        import pickle
+        with open(path, "rb") as fh:
+            creds = pickle.load(fh)
+        refresh_token = getattr(creds, "refresh_token", None)
+    except Exception:
+        refresh_token = None
+    if refresh_token:
+        import hashlib
+        return "rt:" + hashlib.sha256(refresh_token.encode()).hexdigest()[:16]
+    return f"mtime:{st.st_mtime_ns}"
+
+
 def _load_verified_email(token_name, scope=None):
-    """Return the previously-verified email for token_name, or None."""
+    """Return the previously-verified email for token_name, or None.
+
+    None also when the cached entry predates the current token pickle (legacy
+    bare-string entries, or a fingerprint that no longer matches), so a
+    re-minted token is re-verified live instead of trusted from cache.
+    """
     key = _verified_key(token_name, scope)
     try:
         data = json.loads(_VERIFIED_ACCOUNT_CACHE.read_text())
-        return data.get(key)
+        entry = data.get(key)
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(entry, dict):
+        return None  # legacy string entry: no fingerprint, re-verify once
+    current = _token_fingerprint(token_name, scope)
+    if current is None or entry.get("fp") != current:
+        return None
+    return entry.get("email") or None
 
 
 def _store_verified_email(token_name, email, scope=None):
-    """Persist a verified (token_name -> email) pairing."""
+    """Persist a verified (token_name -> email) pairing with the token's fingerprint."""
     if not email:
         return
     key = _verified_key(token_name, scope)
@@ -1057,7 +1118,7 @@ def _store_verified_email(token_name, email, scope=None):
             data = json.loads(_VERIFIED_ACCOUNT_CACHE.read_text())
         except (OSError, json.JSONDecodeError):
             data = {}
-        data[key] = email
+        data[key] = {"email": email, "fp": _token_fingerprint(token_name, scope)}
         tmp = _VERIFIED_ACCOUNT_CACHE.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data))
         os.replace(tmp, _VERIFIED_ACCOUNT_CACHE)
@@ -1087,6 +1148,16 @@ def _default_readonly_identity():
         from googleapiclient.discovery import build
         with open(_DEFAULT_READONLY_TOKEN, "rb") as f:
             creds = pickle.load(f)
+        # A pickle read from disk is `valid` only while its access token is
+        # fresh (about an hour). Refresh it in memory so a send-first call
+        # after idle time still gets an anchor; before this, an aged-out
+        # readonly token returned None here and the guard silently did not
+        # fire (sweep 2026-09-29). Nothing is written back to disk.
+        if (creds and not getattr(creds, "valid", False)
+                and getattr(creds, "expired", False)
+                and getattr(creds, "refresh_token", None)):
+            from google.auth.transport.requests import Request
+            creds.refresh(Request())
         if not creds or not getattr(creds, "valid", False):
             return None
         svc = build("gmail", "v1", credentials=creds)
@@ -1453,6 +1524,12 @@ def _authenticated_service(args, scope, email_override=None, handle_show_account
     # Record the verified pairing only after the match check passes.
     if cached_email is None:
         _store_verified_email(token_name, actual_email, scope)
+
+    # The default account has no login_hint, so compose paths that print
+    # `account or "Unknown account"` in the From: line had nothing to show.
+    # Keep the verified mailbox so they can show what will actually send.
+    global _VERIFIED_IDENTITY
+    _VERIFIED_IDENTITY = actual_email
 
     return service, login_hint
 
@@ -2490,10 +2567,10 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
             "To": reply_addr,
             "Cc": cc_addrs,
             "Subject": re_subject,
-            "From": send_account or account or "Unknown account"
+            "From": send_account or account or _VERIFIED_IDENTITY or "Unknown account"
         }
         final_headers, body, new_account_info = edit_headers_and_body(
-            initial_headers, template, send_account or account or ""
+            initial_headers, template, send_account or account or _VERIFIED_IDENTITY or ""
         )
         if send_account and send_service is not service:
             # Outbox is fixed; do not honor any From: edits the user typed
@@ -2567,8 +2644,8 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
                 # From: shown must be the send account (matching the first-pass
                 # block above), not the read account, or the user "changes" From:
                 # to the outbox and needlessly trips the account-swap path.
-                edit_from = send_account or account or "Unknown account"
-                edit_current = send_account or account or ""
+                edit_from = send_account or account or _VERIFIED_IDENTITY or "Unknown account"
+                edit_current = send_account or account or _VERIFIED_IDENTITY or ""
                 current_headers = {
                     "To": reply_addr,
                     "Cc": cc_addrs,
@@ -2717,7 +2794,7 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
             "To": recipient,
             "Cc": fwd_cc,
             "Subject": fwd_subject,
-            "From": account or "Unknown account"
+            "From": account or _VERIFIED_IDENTITY or "Unknown account"
         }
         final_headers, body, new_account_info = edit_headers_and_body(
             initial_headers, template, account or ""
@@ -2793,7 +2870,7 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
                     "To": recipient,
                     "Cc": fwd_cc,
                     "Subject": fwd_subject,
-                    "From": account or "Unknown account"
+                    "From": account or _VERIFIED_IDENTITY or "Unknown account"
                 }
                 final_headers, body, new_account_info = edit_headers_and_body(
                     current_headers, body, account or ""

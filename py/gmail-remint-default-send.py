@@ -59,14 +59,16 @@ def main():
         SEND_TOKEN.unlink(missing_ok=True)
         sys.exit(1)
 
-    # Refresh the verified-account cache so `m` trusts the new pairing without a
-    # round-trip. The default send identity is keyed __default__:gmail-send.
+    # Drop the stale verified-account entry for the default send identity. The
+    # backend re-verifies on its next call and stores the pairing together with
+    # the new token's fingerprint; a bare string written here would be treated
+    # as a legacy entry and re-verified anyway (2026-09-29).
     import json
     try:
         data = json.loads(VERIFIED_CACHE.read_text())
     except (OSError, json.JSONDecodeError):
         data = {}
-    data["__default__:gmail-send"] = actual
+    data.pop("__default__:gmail-send", None)
     VERIFIED_CACHE.parent.mkdir(parents=True, exist_ok=True)
     VERIFIED_CACHE.write_text(json.dumps(data))
 
