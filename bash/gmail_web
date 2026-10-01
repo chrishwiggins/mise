@@ -36,5 +36,12 @@ else
     URL="${BASE}#search/${SEARCH_ENCODED}"
 fi
 
+# Background the binary and send its output to a log, as chrome-profile-open
+# does. In the foreground, a cold start made THIS process the browser: Chrome's
+# and GoogleUpdater's logging streamed into the terminal, and the command
+# blocked until Chrome quit, so `mmw` stalled after its first account.
+LOG_DIR="/tmp/chrome-log"
+mkdir -p "$LOG_DIR"
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-    --profile-directory="$PROFILE_DIRECTORY" "$URL"
+    --profile-directory="$PROFILE_DIRECTORY" "$URL" \
+    >"${LOG_DIR}/gmail_web.$$" 2>&1 &
