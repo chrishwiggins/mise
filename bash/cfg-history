@@ -1,0 +1,76 @@
+#!/bin/bash
+# cfg-history: local-only git history of a config directory, so that any
+# writer (an editor, a script, a Claude Code rewind) that clobbers a shared
+# file leaves a recoverable version behind. Nothing is ever pushed.
+#
+# The work tree is the config dir itself; the git dir lives elsewhere so the
+# tree's own .gitignore and any other repo rooted there are untouched. Files
+# are added with -f, so the tree's .gitignore does not apply here.
+#
+#   cfg-history snapshot          commit any change (run from cron)
+#   cfg-history log [FILE]        versions, newest first
+#   cfg-history diff A B [FILE]   diff two commits (or A..HEAD)
+#   cfg-history show REV FILE     print FILE as of REV
+#   cfg-history status
+#
+# Env: CFG_HISTORY_TREE (default ~/.claude), CFG_HISTORY_GIT (default
+# ~/.claude-history.git), CFG_HISTORY_GLOBS (space-separated find -path
+# patterns relative to the tree; default covers the shared markdown and
+# scripts). A snapshot that removes SHRINK_LINES or more net lines from one
+# file posts a macOS notification, since that is what a clobber looks like.
+
+set -u
+TREE="${CFG_HISTORY_TREE:-$HOME/.claude}"
+GIT_DIR_="${CFG_HISTORY_GIT:-$HOME/.claude-history.git}"
+SHRINK_LINES="${CFG_HISTORY_SHRINK:-5}"
+g() { /usr/bin/git --git-dir="$GIT_DIR_" --work-tree="$TREE" "$@"; }
+
+tracked_files() {
+  # top-level markdown, plus commands, skills, hooks, agents
+  ( cd "$TREE" && /usr/bin/find . -maxdepth 1 -name '*.md' -type f ; \
+    /usr/bin/find ./commands ./skills ./hooks ./agents -type f \
+      \( -name '*.md' -o -name '*.sh' -o -name '*.py' -o -name '*.txt' \) 2>/dev/null ) \
+    | /usr/bin/sed 's|^\./||' | /usr/bin/grep -v '/old/' | /usr/bin/sort
+}
+
+init_if_needed() {
+  if [ ! -d "$GIT_DIR_" ]; then
+    g init -q
+    g config user.name "cfg-history"
+    g config user.email "cfg-history@localhost"
+    g config core.autocrlf false
+    echo "initialized $GIT_DIR_ over $TREE"
+  fi
+}
+
+notify() {
+  /usr/bin/osascript -e "display notification \"$2\" with title \"cfg-history: $1\"" 2>/dev/null
+}
+
+cmd="${1:-snapshot}"; shift || true
+case "$cmd" in
+  snapshot)
+    init_if_needed
+    /usr/bin/touch "$GIT_DIR_.last-run"   # heartbeat: proves cron fired even when nothing changed
+    cd "$TREE" || exit 1
+    tracked_files | while IFS= read -r f; do g add -f -- "$f"; done
+    g add -u
+    if g diff --cached --quiet; then exit 0; fi
+    # shrink check: net lines removed from any single file
+    g diff --cached --numstat | while IFS=$'\t' read -r added deleted path; do
+      case "$added$deleted" in *-*) continue ;; esac
+      net=$(( deleted - added ))
+      if [ "$net" -ge "$SHRINK_LINES" ]; then
+        notify "$path shrank" "$net net lines removed; cfg-history log $path"
+        echo "SHRINK $path -$net" >&2
+      fi
+    done
+    g commit -q -m "snapshot $(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" && \
+      g log -1 --format='%h %ad' --date=format:%H:%M:%S
+    ;;
+  log)    g log --date=format:'%Y-%m-%d %H:%M' --format='%h %ad %s' --stat "$@" ;;
+  diff)   a="${1:?commit A}"; b="${2:-HEAD}"; shift 2 2>/dev/null || shift; g diff "$a" "$b" -- "$@" ;;
+  show)   g show "${1:?rev}:${2:?file}" ;;
+  status) g status --short ;;
+  *) echo "usage: cfg-history snapshot|log|diff|show|status" >&2; exit 2 ;;
+esac
