@@ -1490,6 +1490,27 @@ direct_send() {
                         return 1 ;;
                 esac
 
+                # Refuse a draft that still carries a TK placeholder or ruling
+                # marker in its own text (quoted lines starting with ">" are
+                # ignored). 2026-10-01: "TK: RULING. Pick one block below and
+                # delete the rest of this block." went out to a student after
+                # the options under it were trimmed. Matches uppercase TK as a
+                # word and [tk] in any case. Override: M_ALLOW_TK=1.
+                if [[ -z "${M_ALLOW_TK:-}" ]]; then
+                    local _tk_hits
+                    _tk_hits=$(/usr/bin/awk 'NR>1 && /^$/ && !body {body=1; next} body && !/^>/' "$abspath" \
+                        | /usr/bin/grep -n -E '(^|[^A-Za-z])TK([^A-Za-z]|$)|\[[tT][kK]\]' | /usr/bin/head -5) || true
+                    # `|| true`: grep exits 1 on a clean draft, and under
+                    # set -euo pipefail that silently killed every send.
+                    if [[ -n "$_tk_hits" ]]; then
+                        log_error "$abspath: still contains a TK placeholder (body line numbers):"
+                        printf '%s\n' "$_tk_hits" >&2
+                        log_error "Remove it, or rerun with M_ALLOW_TK=1 if the TK is meant to be there."
+                        return 1
+                    fi
+                    unset _tk_hits
+                fi
+
                 # Weekday/date sanity: warn (never block) when the body calls a
                 # date by the wrong weekday. 2026-09-07: two guest-speaker
                 # emails went out saying "September 12 ... a Monday" (a
