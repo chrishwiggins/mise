@@ -1,0 +1,122 @@
+#!/usr/bin/env python3.11
+"""Remove Bash allow rules that carry a `*` before the end of the command.
+
+Claude Code saves an exact command as an allow rule when you pick "don't ask
+again". If that command contained a literal `*` (a glob, a regex like `.*`),
+Claude Code reads the `*` as a wildcard, so the rule approves commands you
+never saw, and it warns about it at startup. These rules are one-off
+approvals; deleting one costs at most a permission prompt next time.
+
+Kept: rules whose only `*` is a trailing ` *` or `:*` (the intended prefix
+form, e.g. `Bash(git log *)`), and every non-Bash rule (Read/Edit globs are
+legitimate). Only `.claude/settings.local.json` files are touched, since those
+are the ones Claude Code writes on approval; settings.json is left alone.
+
+Usage:
+  claude-perms-clean [--apply] FILE...          specific settings files
+  claude-perms-clean [--apply] --all            every settings.local.json under
+                                                ~/gd/local, ~/mise, ~/Projects, ~
+  claude-perms-clean --hook                     SessionStart hook: reads the
+                                                event JSON on stdin, cleans
+                                                <cwd>/.claude/settings.local.json,
+                                                prints one line if it removed any
+
+Dry run unless --apply (--hook always applies). Every changed file is backed
+up first to ~/.claude/perm-backups/<timestamp>/<path>.
+"""
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+BACKUP_ROOT = HOME / ".claude" / "perm-backups"
+ROOTS = [HOME / "gd" / "local", HOME / "mise", HOME / "Projects"]
+SKIP_DIRS = {"node_modules", ".git", ".venv", "__pycache__", ".playwright-mcp"}
+
+
+def mid_star(rule):
+    """True for a Bash rule with a `*` anywhere but a trailing ` *` / `:*`."""
+    if not (rule.startswith("Bash(") and rule.endswith(")")):
+        return False
+    body = re.sub(r"(?: |:)\*$", "", rule[5:-1])
+    return "*" in body
+
+
+def find_all():
+    found = []
+    home_local = HOME / ".claude" / "settings.local.json"
+    if home_local.is_file():
+        found.append(home_local)
+    for root in ROOTS:
+        if not root.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            if Path(dirpath).name == ".claude" and "settings.local.json" in filenames:
+                found.append(Path(dirpath) / "settings.local.json")
+            # a project's .claude dir holds nothing deeper we need
+            if Path(dirpath).name == ".claude":
+                dirnames[:] = []
+    return found
+
+
+def clean(path, apply, stamp):
+    try:
+        text = path.read_text()
+        data = json.loads(text)
+    except (OSError, ValueError) as exc:
+        print(f"SKIP {path}: {exc}", file=sys.stderr)
+        return 0
+    allow = data.get("permissions", {}).get("allow", [])
+    bad = [r for r in allow if isinstance(r, str) and mid_star(r)]
+    if not bad or not apply:
+        return len(bad)
+    backup = BACKUP_ROOT / stamp / str(path).lstrip("/")
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    backup.write_text(text)
+    gone = set(bad)
+    data["permissions"]["allow"] = [r for r in allow if r not in gone]
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    os.replace(tmp, path)
+    return len(bad)
+
+
+def main(argv):
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    if "--hook" in argv:
+        try:
+            cwd = json.load(sys.stdin).get("cwd") or os.getcwd()
+        except ValueError:
+            cwd = os.getcwd()
+        path = Path(cwd) / ".claude" / "settings.local.json"
+        if path.is_file():
+            n = clean(path, True, stamp)
+            if n:
+                print(f"claude-perms-clean: removed {n} one-off allow rule(s) with a "
+                      f"mid-command * from {path} (backup in {BACKUP_ROOT}/{stamp})")
+        return 0
+    apply = "--apply" in argv
+    args = [a for a in argv if not a.startswith("--")]
+    files = find_all() if "--all" in argv else [Path(a) for a in args]
+    if not files:
+        print(__doc__)
+        return 2
+    total = touched = 0
+    for f in files:
+        n = clean(f, apply, stamp)
+        if n:
+            touched += 1
+            total += n
+            print(f"{n:4d}  {f}")
+    verb = "removed" if apply else "would remove"
+    print(f"{verb} {total} rule(s) from {touched} of {len(files)} file(s)"
+          + (f"; backups in {BACKUP_ROOT}/{stamp}" if apply and total else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
