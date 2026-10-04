@@ -203,16 +203,38 @@ def get_credentials(service=None, scopes=None, creds_path=None, token_name=None,
                         print(f"Token refresh failed ({e}), retrying ({attempt+1}/3)...", file=sys.stderr)
                         time.sleep(1)
                     else:
-                        print(f"Token refresh failed after 3 attempts ({e}), re-authenticating...", file=sys.stderr)
-                        token_path.unlink(missing_ok=True)
-                        creds = None
+                        # A network failure is not a bad token. Deleting a valid
+                        # refresh token here sent headless callers into the browser
+                        # flow below; keep the token and fail instead.
+                        print(f"Token refresh failed after 3 attempts ({e}); token kept, "
+                              f"not re-authenticating on a transient error.", file=sys.stderr)
+                        raise
 
         if not creds:
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), scopes_list)
             kwargs = {"port": 0}
             if login_hint:
                 kwargs["login_hint"] = login_hint
-            creds = flow.run_local_server(**kwargs)
+            who = login_hint or token_name or "default account"
+            print(f"google_auth: browser consent needed for {who} ({token_path.name})",
+                  file=sys.stderr, flush=True)
+            # With no terminal on stdin (a subprocess, a Claude Bash call) nobody
+            # may be at the browser, and run_local_server would wait forever on
+            # 127.0.0.1. Caught 2026-10-04: gmails children from 2026-09-26 were
+            # still listening eight days later, hanging sent-verify and last-with.
+            if not sys.stdin.isatty():
+                kwargs["timeout_seconds"] = int(os.environ.get("GOOGLE_AUTH_FLOW_TIMEOUT", "120"))
+            try:
+                creds = flow.run_local_server(**kwargs)
+            except Exception as e:
+                if "timeout_seconds" not in kwargs:
+                    raise
+                raise RuntimeError(
+                    f"google_auth: no browser consent for {who} within "
+                    f"{kwargs['timeout_seconds']}s (headless caller); run the tool once "
+                    f"in a terminal to re-authorize") from e
+            if not creds:
+                raise RuntimeError(f"google_auth: browser consent for {who} returned no credentials")
 
         with open(token_path, "wb") as f:
             pickle.dump(creds, f)

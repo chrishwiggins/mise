@@ -13,17 +13,53 @@ usage: last-with <fragment> [days]
 
 Prints, per distinct account, the inbound and outbound listings that gmails
 returns for from:<fragment> and to:<fragment>. Read-only.
+
+Each gmails call is abandoned after $GMAILS_TIMEOUT seconds (default 60). An
+account whose query times out is reported as "TIMED OUT after Ns, result
+unknown" and its remaining queries are skipped, so the worst case is one
+timeout per account.
+
+exit codes:
+  0  every account answered (whatever the result)
+  1  gmails -E listed no accounts
+  2  usage
+  3  at least one account TIMED OUT: the listing is incomplete, and no
+     "nothing to or from" verdict is printed. Never read 3 as silence.
 """
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 GMAILS = str(Path(__file__).resolve().parent / "gmails")
+EXIT_TIMEOUT = 3
+TIMEOUT = float(os.environ.get("GMAILS_TIMEOUT", "60"))
+
+
+class GmailsTimeout(Exception):
+    pass
+
+
+def run_gmails(args):
+    """Run gmails with a hard deadline (2026-10-04: a child stuck in a browser
+    OAuth flow blocked last-with past a 90s outer limit, printing nothing)."""
+    try:
+        return subprocess.run([GMAILS] + args, capture_output=True, text=True,
+                              timeout=TIMEOUT, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise GmailsTimeout()
+
+
+def say(msg):
+    """Print, and repeat on stderr when piped so grep/head cannot delete it."""
+    print(msg, flush=True)
+    if not sys.stdout.isatty():
+        print(msg, file=sys.stderr)
 
 
 def accounts():
     """Distinct accounts from `gmails -E`, first alias wins per address."""
-    out = subprocess.run([GMAILS, "-E"], capture_output=True, text=True).stdout
+    out = run_gmails(["-E"]).stdout
     seen, result = set(), []
     for line in out.splitlines():
         if ":" not in line:
@@ -37,11 +73,11 @@ def accounts():
 
 
 def listing(alias, query, outbound):
-    cmd = [GMAILS, "-e", alias]
+    cmd = ["-e", alias]
     if outbound:
         cmd.append("out")
     cmd += ["-q", query]
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    res = run_gmails(cmd)
     rows = [l for l in res.stdout.splitlines() if l.strip()]
     return rows
 
@@ -52,14 +88,24 @@ def main():
         return 0 if len(sys.argv) >= 2 else 2
     frag = sys.argv[1]
     days = sys.argv[2] if len(sys.argv) > 2 else "7"
-    accts = accounts()
+    try:
+        accts = accounts()
+    except GmailsTimeout:
+        say(f"gmails -E TIMED OUT after {TIMEOUT:g}s: accounts unknown, result unknown")
+        return EXIT_TIMEOUT
     if not accts:
         print("last-with: gmails -E listed no accounts", file=sys.stderr)
         return 1
     total = 0
+    timed_out = []
     for alias, addr in accts:
-        inbound = listing(alias, f"from:{frag} newer_than:{days}d", False)
-        outbound = listing(alias, f"to:{frag} newer_than:{days}d", True)
+        try:
+            inbound = listing(alias, f"from:{frag} newer_than:{days}d", False)
+            outbound = listing(alias, f"to:{frag} newer_than:{days}d", True)
+        except GmailsTimeout:
+            say(f"## {alias} ({addr}): TIMED OUT after {TIMEOUT:g}s, result unknown")
+            timed_out.append(alias)
+            continue
         hits = [r for r in inbound + outbound if "No messages found" not in r]
         if not hits:
             continue
@@ -73,6 +119,13 @@ def main():
             for r in outbound:
                 print("   ", r)
         total += 1
+    if timed_out:
+        # A partial listing cannot support "nothing to or from" or "no messages
+        # ever", so print neither; say what is unknown and exit 3.
+        say(f"INCOMPLETE: {', '.join(timed_out)} TIMED OUT after {TIMEOUT:g}s. "
+            f"Messages in {'that account' if len(timed_out) == 1 else 'those accounts'} "
+            "are UNKNOWN; do NOT report absence. Rerun, or check gmails auth there.")
+        return EXIT_TIMEOUT
     if total == 0:
         # A zero here is a claim Chris may act on ("she has not written"), and the
         # likeliest cause is a WRONG FRAGMENT rather than real silence. So prove the
@@ -80,10 +133,16 @@ def main():
         # fine and the silence is real; if a year is also empty, say the fragment
         # matches nothing ever, which is a different finding and usually a typo.
         ever = 0
-        for alias, _addr in accts:
-            rows = listing(alias, f"from:{frag} newer_than:365d", False)
-            rows += listing(alias, f"to:{frag} newer_than:365d", True)
-            ever += sum(1 for r in rows if "No messages found" not in r)
+        try:
+            for alias, _addr in accts:
+                rows = listing(alias, f"from:{frag} newer_than:365d", False)
+                rows += listing(alias, f"to:{frag} newer_than:365d", True)
+                ever += sum(1 for r in rows if "No messages found" not in r)
+        except GmailsTimeout:
+            say(f"UNKNOWN: the {days}d window came back empty for '{frag}', but the 365d "
+                f"fragment check TIMED OUT after {TIMEOUT:g}s in {alias}, result unknown. "
+                "Cannot tell a wrong fragment from real quiet; do NOT report silence.")
+            return EXIT_TIMEOUT
         acct_list = ", ".join(a for a, _ in accts)
         if ever:
             print(f"nothing to or from '{frag}' in the last {days}d, "

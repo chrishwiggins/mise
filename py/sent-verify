@@ -4,11 +4,22 @@
 Given a draft file with To:/Subject: headers, search the Gmail sent archive of
 one or more configured accounts (via gmails -e <acct> out -q ...) for a message
 with that exact subject, download the newest hit, and diff its body against the
-draft body. Exit 0 = found (and prints IDENTICAL or a unified diff), exit 1 =
-not found in any searched account, exit 2 = usage/tool error.
+draft body.
+
+Exit codes:
+  0  found (prints IDENTICAL or a unified diff)
+  1  not found in ANY searched account, and every account answered
+  2  usage/tool error
+  3  no hit where answered, but at least one account TIMED OUT, so the result
+     is UNKNOWN. Never read 3 as "not sent".
+
+Each gmails call is abandoned after --timeout seconds (default 60, or
+$GMAILS_TIMEOUT). Added 2026-10-04: gmails children sat for 72 minutes (and two
+others for 8 days) waiting on a browser OAuth consent nobody would give, and
+sent-verify printed nothing the whole time.
 
 Usage:
-  sent-verify DRAFT.eml [-e ACCT ...] [--days N]
+  sent-verify DRAFT.eml [-e ACCT ...] [--days N] [--timeout SECONDS]
 
 Accounts default to every account listed by `gmails -E`. Search scope is
 printed explicitly so a "not found" carries its scope with it.
@@ -17,12 +28,28 @@ import argparse
 import difflib
 import email
 import email.policy
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 GMAILS = Path.home() / "mise/py/gmails"
+EXIT_TIMEOUT = 3
+TIMEOUT = float(os.environ.get("GMAILS_TIMEOUT", "60"))
+
+
+class GmailsTimeout(Exception):
+    pass
+
+
+def run_gmails(args):
+    """Run gmails with a hard deadline; subprocess.run kills the child on expiry."""
+    try:
+        return subprocess.run([str(GMAILS)] + args, capture_output=True, text=True,
+                              timeout=TIMEOUT, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise GmailsTimeout()
 
 
 def parse_draft(path: Path):
@@ -42,7 +69,7 @@ def parse_draft(path: Path):
 
 
 def list_accounts():
-    out = subprocess.run([str(GMAILS), "-E"], capture_output=True, text=True).stdout
+    out = run_gmails(["-E"]).stdout
     accts = []
     seen = set()
     for line in out.splitlines():
@@ -55,15 +82,13 @@ def list_accounts():
 
 def search(acct: str, subject: str, days: int):
     q = f'subject:"{subject}" newer_than:{days}d'
-    r = subprocess.run([str(GMAILS), "-e", acct, "out", "-q", q, "-n", "5"],
-                       capture_output=True, text=True)
+    r = run_gmails(["-e", acct, "out", "-q", q, "-n", "5"])
     hits = [l for l in r.stdout.splitlines() if re.match(r"\s*\d+\.\s", l)]
     return hits, q
 
 
 def download(acct: str, q: str):
-    r = subprocess.run([str(GMAILS), "-e", acct, "out", "-q", q, "1"],
-                       capture_output=True, text=True)
+    r = run_gmails(["-e", acct, "out", "-q", q, "1"])
     m = re.search(r"Saved:\s+(\S+\.eml)", r.stdout + r.stderr)
     return Path(m.group(1)) if m else None
 
@@ -130,11 +155,16 @@ def norm(s: str):
 
 
 def main():
+    global TIMEOUT
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("draft", type=Path)
     ap.add_argument("-e", "--account", action="append", help="gmails account key; repeatable")
     ap.add_argument("--days", type=int, default=3, help="newer_than window (default 3)")
+    ap.add_argument("--timeout", type=float, default=TIMEOUT,
+                    help="seconds before one gmails call is abandoned "
+                         "(default 60 or $GMAILS_TIMEOUT)")
     a = ap.parse_args()
+    TIMEOUT = a.timeout
 
     if not a.draft.exists():
         print(f"no such draft: {a.draft}", file=sys.stderr)
@@ -143,7 +173,12 @@ def main():
     if not subject:
         print("draft has no Subject: header", file=sys.stderr)
         return 2
-    accts = a.account or list_accounts()
+    try:
+        accts = a.account or list_accounts()
+    except GmailsTimeout:
+        print(f"gmails -E TIMED OUT after {TIMEOUT:g}s; accounts unknown, result unknown",
+              file=sys.stderr)
+        return EXIT_TIMEOUT
     if not accts:
         print("no gmails accounts found (gmails -E)", file=sys.stderr)
         return 2
@@ -152,13 +187,23 @@ def main():
     print(f"to:      {to}")
     print(f"subject: {subject}")
     print(f"scope:   sent mail, last {a.days}d, accounts {', '.join(accts)}")
+    timed_out = []
     for acct in accts:
-        hits, q = search(acct, subject, a.days)
+        try:
+            hits, q = search(acct, subject, a.days)
+        except GmailsTimeout:
+            print(f"  {acct}: TIMED OUT after {TIMEOUT:g}s, result unknown", flush=True)
+            timed_out.append(acct)
+            continue
         if not hits:
             print(f"  {acct}: no hit")
             continue
         print(f"  {acct}: FOUND  {hits[0].strip()}")
-        saved = download(acct, q)
+        try:
+            saved = download(acct, q)
+        except GmailsTimeout:
+            print(f"  (download TIMED OUT after {TIMEOUT:g}s; sent copy not diffed)")
+            return 0
         if not saved:
             print("  (could not download the sent copy to diff)")
             return 0
@@ -199,6 +244,14 @@ def main():
                 print("WARNING: the draft body mentions an attachment and the sent copy has none;"
                       " the -a flag was probably lost. Send the file in a follow-up.")
         return 0
+    if timed_out:
+        msg = (f"UNKNOWN: no hit in the accounts that answered, but {', '.join(timed_out)} "
+               f"TIMED OUT after {TIMEOUT:g}s. This is NOT a 'not sent' result; rerun "
+               "later or check gmails auth for that account.")
+        print(msg)
+        if not sys.stdout.isatty():
+            print(msg, file=sys.stderr)
+        return EXIT_TIMEOUT
     print("NOT FOUND in the accounts above within the window; do not mark as sent.")
     return 1
 
