@@ -32,6 +32,8 @@ read them all without scrolling the client.
 """
 import argparse
 import datetime as dt
+import gzip
+import http.client
 import json
 import os
 import pathlib
@@ -67,18 +69,41 @@ def load_token(path):
         sys.exit("token must be a USER token (xoxp-); a bot token (xoxb-) cannot read DMs")
 
 
+def fetch_json(req):
+    """GET with gzip; a big uncompressed page (users.list is ~290KB) is often cut mid-body."""
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = resp.read()
+        if resp.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+    return json.loads(body)
+
+
 def call(method, **params):
-    """One API call with Slack's rate limit honored (HTTP 429 + Retry-After)."""
+    """One API call: rate limits honored (HTTP 429 + Retry-After), and transport
+    failures (truncated body, timeout, reset, TLS handshake) retried with backoff."""
     url = API + method + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + TOKEN})
-    for attempt in range(6):
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + TOKEN,
+                                               "Accept-Encoding": "gzip"})
+    last = None
+    for attempt in range(8):
         try:
-            r = json.load(urllib.request.urlopen(req, timeout=30))
+            r = fetch_json(req)
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 time.sleep(int(e.headers.get("Retry-After", "5")))
                 continue
+            if e.code >= 500:
+                last = e
+                time.sleep(min(2 ** attempt, 30))
+                continue
             raise
+        except (http.client.HTTPException, urllib.error.URLError, OSError, EOFError, ValueError) as e:
+            # HTTPException covers IncompleteRead; OSError covers timeouts and resets;
+            # ValueError covers a truncated body that fails gzip or json decoding.
+            last = e
+            print(f"  [{method}: {type(e).__name__}: {e}; retry {attempt + 1}]", file=sys.stderr)
+            time.sleep(min(2 ** attempt, 30))
+            continue
         if r.get("ok"):
             return r
         err = r.get("error", "unknown")
@@ -89,7 +114,7 @@ def call(method, **params):
         if r.get("needed"):
             msg += f"\n  needs scope: {r['needed']} (add it under User Token Scopes, REINSTALL the app, copy the new token)"
         sys.exit(msg)
-    sys.exit(f"gave up on {method} after repeated rate limits")
+    sys.exit(f"gave up on {method} after 8 attempts (last transport error: {last!r})")
 
 
 def paged(method, key, **params):
