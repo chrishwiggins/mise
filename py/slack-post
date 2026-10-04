@@ -120,11 +120,14 @@ def open_dm(userids):
     return r["channel"]["id"]
 
 
-def confirm(target_desc, text, auto_yes):
+def confirm(target_desc, text, auto_yes, dry_run=False):
     sys.stderr.write("\n--- SLACK POST (this is not undoable) ---\n")
     sys.stderr.write("to:   %s\n" % target_desc)
     sys.stderr.write("text: %d chars\n" % len(text))
     sys.stderr.write("----- message -----\n%s\n-------------------\n" % text)
+    if dry_run:
+        sys.stderr.write("(dry run, NOT sending)\n")
+        return False
     if auto_yes:
         sys.stderr.write("(--yes given, sending)\n")
         return True
@@ -183,7 +186,7 @@ def main():
 
     if a.dry_run:
         sys.stderr.write("\n--- DRY RUN, nothing sent ---\n")
-        confirm(desc, text, auto_yes=True)
+        confirm(desc, text, auto_yes=True, dry_run=True)
         return
 
     if not confirm(desc, text, a.yes):
