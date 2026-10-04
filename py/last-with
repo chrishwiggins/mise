@@ -91,11 +91,20 @@ def main():
             print(f"  (fragment is good: {ever} message(s) in the last 365d, "
                   f"so this silence is real for this window)")
         else:
-            print(f"NO MESSAGES EVER for fragment '{frag}' in {len(accts)} accounts "
-                  f"({acct_list}), searched 365d.")
-            print("  Do NOT report this as 'they have not written'. A fragment that")
-            print("  matches nothing in a year is almost always wrong: try the")
-            print("  local-part of their actual address, or a distinctive name word.")
+            warning = (
+                f"NO MESSAGES EVER for fragment '{frag}' in {len(accts)} accounts "
+                f"({acct_list}), searched 365d.\n"
+                "  Do NOT report this as 'they have not written'. A fragment that\n"
+                "  matches nothing in a year is almost always wrong: try the\n"
+                "  local-part of their actual address, or a distinctive name word."
+            )
+            print(warning)
+            # A pipe (`last-with x | grep FROM`, `| head`) deletes the stdout copy,
+            # leaving empty output that reads as "no messages" (TSC, 2026-09-29 and
+            # again 2026-10-04). When stdout is not a terminal, repeat it on stderr,
+            # which the pipe does not touch.
+            if not sys.stdout.isatty():
+                print(warning, file=sys.stderr)
     return 0
 
 
