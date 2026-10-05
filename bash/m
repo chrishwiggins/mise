@@ -1545,8 +1545,21 @@ direct_send() {
                 else
                     _assert_smtp_capable "$muttrc" "${account:-default}" || return 1
                     echo "m: ${account:-default} via SMTP" >&2
-                    # Direct neomutt call - optimize by removing process hop
-                    echo | neomutt -e 'unset record' -e "$M_NEOMUTT_EDITOR" -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
+                    # Direct neomutt call - optimize by removing process hop.
+                    # stderr is captured (then replayed) so a rejected login
+                    # can be explained below.
+                    local smtp_err
+                    smtp_err=$(mktemp -t m-smtp-err)
+                    echo | neomutt -e 'unset record' -e "$M_NEOMUTT_EDITOR" -F "$muttrc" -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" 2>"$smtp_err" || send_rc=$?
+                    cat "$smtp_err" >&2
+                    # Gmail answers 535 BadCredentials when the app password in
+                    # the muttrc is wrong, and a Google account password change
+                    # revokes every app password (2026-10-04: g stopped sending
+                    # right after one).
+                    if (( send_rc != 0 )) && grep -qE '535|BadCredentials' "$smtp_err"; then
+                        echo "m: login rejected. If the Google account password changed recently, its app passwords were revoked: make a new one at https://myaccount.google.com/apppasswords and put it in the smtp_pass lines of $muttrc" >&2
+                    fi
+                    rm -f "$smtp_err"
                 fi
 
                 if (( send_rc != 0 )); then
