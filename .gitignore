@@ -59,3 +59,5 @@ __pycache__/
 *.wav
 mergedir_old_*/
 tmp.htm
+# wiki-tui writes an empty theme.toml into its config dir on first run
+dotfiles/wiki-tui-wiktionary/theme.toml
