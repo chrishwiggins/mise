@@ -744,35 +744,49 @@ _schedule_send() {
     local temp_eml
     temp_eml=$(mktemp /tmp/m-scheduled-XXXXXX.eml)
 
+    # Split draft_args (built by the caller as -e ACCT -s SUBJ -c CC... -b BCC...
+    # -a FILE... then recipients) into its parts. Before 2026-10-06 only the
+    # LAST bare argument became To:, -c/-b/-a were dropped, and the draft was
+    # created with no -e, so it landed on the default account while the
+    # scheduled wrapper later sent it with -e ACCT.
+    local account="" subject="" a
+    local -a to_list=() cc_list=() bcc_list=() attach_list=()
+    local i=0
+    while (( i < ${#draft_args[@]} )); do
+        a="${draft_args[i]}"
+        case "$a" in
+            -e|-s|-c|-b|-a)
+                if (( i + 1 < ${#draft_args[@]} )); then
+                    case "$a" in
+                        -e) account="${draft_args[i+1]}" ;;
+                        -s) subject="${draft_args[i+1]}" ;;
+                        -c) cc_list+=("${draft_args[i+1]}") ;;
+                        -b) bcc_list+=("${draft_args[i+1]}") ;;
+                        -a) attach_list+=(-a "${draft_args[i+1]}") ;;
+                    esac
+                fi
+                i=$((i + 2)); continue ;;
+            -*) ;;
+            *) to_list+=("$a") ;;
+        esac
+        i=$((i + 1))
+    done
+    _join_commas() { local IFS=,; printf '%s' "$*" | sed 's/,/, /g'; }
+
     # Build .eml file with headers and body from stdin
     {
-        # Extract recipient from draft_args (last argument that doesn't start with -)
-        local recipient=""
-        for arg in "${draft_args[@]}"; do
-            if [[ "$arg" != -* ]]; then
-                recipient="$arg"
-            fi
-        done
-
-        [[ -n "$recipient" ]] && printf 'To: %s\n' "$recipient"
-
-        # Extract subject from draft_args
-        local i=0
-        while [[ $i -lt ${#draft_args[@]} ]]; do
-            if [[ "${draft_args[i]}" == "-s" && $((i + 1)) -lt ${#draft_args[@]} ]]; then
-                printf 'Subject: %s\n' "${draft_args[i+1]}"
-                break
-            fi
-            i=$((i + 1))
-        done
-
+        (( ${#to_list[@]} ))  && printf 'To: %s\n'  "$(_join_commas "${to_list[@]}")"
+        (( ${#cc_list[@]} ))  && printf 'Cc: %s\n'  "$(_join_commas "${cc_list[@]}")"
+        (( ${#bcc_list[@]} )) && printf 'Bcc: %s\n' "$(_join_commas "${bcc_list[@]}")"
+        [[ -n "$subject" ]] && printf 'Subject: %s\n' "$subject"
         printf '\n'
         cat  # Body from stdin
     } > "$temp_eml"
 
-    # Create draft using the .eml file
+    # Create the draft on the SAME account the scheduled wrapper will send it from
     local draft_output
-    if ! draft_output=$(timeout 30s gmail-api-rw draft -H "$temp_eml" 2>&1); then
+    if ! draft_output=$(timeout 30s gmail-api-rw ${account:+-e "$account"} draft -H "$temp_eml" \
+            "${attach_list[@]+"${attach_list[@]}"}" 2>&1); then
         log_error "Failed to create draft (may have timed out after 30s)"
         echo "$draft_output" >&2
         rm -f "$temp_eml"
@@ -790,18 +804,7 @@ _schedule_send() {
         return 1
     fi
 
-    # Extract account from draft_args for metadata
-    local account=""
-    local i=0
-    while [[ $i -lt ${#draft_args[@]} ]]; do
-        if [[ "${draft_args[i]}" == "-e" && $((i + 1)) -lt ${#draft_args[@]} ]]; then
-            account="${draft_args[i+1]}"
-            break
-        fi
-        i=$((i + 1))
-    done
-
-    # Store metadata and create launchd job
+    # Store metadata and create launchd job ($account was parsed above)
     if ! _create_scheduled_metadata "$draft_id" "$scheduled_timestamp" "$account" "${draft_args[@]}"; then
         return 1
     fi
