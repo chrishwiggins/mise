@@ -173,4 +173,10 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
     [[ "$n" =~ ^[0-9]+$ && "$n" -gt 0 ]] && break
     sleep 0.3
 done
-_clamp_onscreen
+# A Playwright/headless Chrome answering AppleScript would get the clamp instead of this
+# window; the page itself opened in the real Chrome either way (the binary routes by profile).
+if /Users/wiggins/mise/bash/chrome-shadow; then
+    _clamp_onscreen
+else
+    echo "chrome-profile-open: page opened; window not repositioned (see above)" >&2
+fi
