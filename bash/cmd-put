@@ -52,6 +52,12 @@ if [ ! -f "$body" ]; then
     echo "cmd-put: body file not found: $body" >&2
     exit 2
 fi
+# A Slack post's text goes INSIDE the script, so Chris reads what he approves (2026-10-04: "put the text
+# IN the bash not in separate txt file"). Use: read -r -d '' MSG <<'EOF' ... EOF, then --text "$MSG".
+if /usr/bin/grep -qE 'slack-post.*--file' "$body"; then
+    echo "cmd-put: refused: slack-post --file keeps the message outside the script; put the text inline (read -r -d '' MSG <<'EOF' ... EOF; --text \"\$MSG\")" >&2
+    exit 2
+fi
 if [ -n "$textfile" ] && [ ! -f "$textfile" ]; then
     echo "cmd-put: text file not found: $textfile" >&2
     exit 2
