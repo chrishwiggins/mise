@@ -1,0 +1,48 @@
+#!/bin/bash
+# chrome-shadow: is AppleScript talking to your real Chrome?
+#
+#   chrome-shadow        exit 0 silently when it is; exit 1 with the reason on stderr when not
+#
+# `tell application "Google Chrome"` resolves to ONE running instance of the bundle, and
+# when a Playwright or headless Chrome (started with its own --user-data-dir) is also
+# running, it can be that one, whatever the launch order (2026-10-06: first a Playwright
+# Chrome launched earlier, then a hung headless one launched later). Every window/tab
+# query then sees 0 windows, so tab-finding scripts come back empty and `make new window`
+# opens in the wrong browser. The test: count windows by name, count them again with an
+# Apple Event aimed at the real Chrome's pid, and compare. Run this before any
+# AppleScript that drives Chrome.
+#
+# Test overrides (mise/test/test-chrome-shadow.sh): CHROME_SHADOW_PS replaces the process
+# listing, CHROME_SHADOW_BYNAME and CHROME_SHADOW_REAL replace the two window counts.
+set -u
+chromes=${CHROME_SHADOW_PS-$(/bin/ps -axo pid=,command=)}
+chromes=$(printf '%s\n' "$chromes" | /usr/bin/grep -E '[C]hrome\.app/Contents/MacOS/Google Chrome( |$)')
+[ -n "$chromes" ] || exit 0          # no Chrome at all is the caller's own check
+others=$(printf '%s\n' "$chromes" | /usr/bin/grep -- '--user-data-dir' | /usr/bin/awk '{print $1}' | tr '\n' ' ')
+others=${others% }
+[ -n "$others" ] || exit 0           # only the real Chrome: nothing to be confused with
+real=$(printf '%s\n' "$chromes" | /usr/bin/grep -v -- '--user-data-dir' | /usr/bin/awk 'NR==1{print $1}')
+if [ -z "$real" ]; then
+  echo "chrome-shadow: only a Playwright/headless Chrome is running (pid $others); start your real Chrome" >&2
+  exit 1
+fi
+pid_window_count() {
+  /usr/bin/osascript -l JavaScript - "$1" 2>/dev/null <<'JS'
+ObjC.import('Foundation');
+function run(argv) {   // "count windows" sent to one pid: core/cnte, kocl=cwin, direct object null
+  var ev = $.NSAppleEventDescriptor.appleEventWithEventClassEventIDTargetDescriptorReturnIDTransactionID(
+    0x636f7265, 0x636e7465, $.NSAppleEventDescriptor.descriptorWithProcessIdentifier(parseInt(argv[0])), -1, 0);
+  ev.setParamDescriptorForKeyword($.NSAppleEventDescriptor.descriptorWithTypeCode(0x6377696e), 0x6b6f636c);
+  ev.setParamDescriptorForKeyword($.NSAppleEventDescriptor.nullDescriptor, 0x2d2d2d2d);
+  var r = ev.sendEventWithOptionsTimeoutError(0x3, 10, Ref());
+  if (!r || r.isNil()) return '';
+  var d = r.paramDescriptorForKeyword(0x2d2d2d2d);
+  return d.isNil() ? '' : String(d.int32Value);
+}
+JS
+}
+byname=${CHROME_SHADOW_BYNAME-$(/usr/bin/osascript -e 'tell application "Google Chrome" to count windows' 2>/dev/null)}
+realcount=${CHROME_SHADOW_REAL-$(pid_window_count "$real")}
+[ "$byname" = "$realcount" ] && exit 0
+echo "chrome-shadow: AppleScript reaches the wrong Chrome (it sees ${byname:-?} windows, yours, pid $real, has ${realcount:-?}); another instance is answering: pid $others (Playwright/headless). Quit it (kill $others) and rerun" >&2
+exit 1
