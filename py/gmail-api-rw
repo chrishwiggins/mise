@@ -1758,6 +1758,53 @@ class AccountSwapError(Exception):
     pass
 
 
+def _mguard_or_exit(service, raw_b64=None, draft_id=None):
+    """Recipient guardrails: run `mguard check` before a message goes out.
+
+    Every Gmail API transmit calls this first. With no rules file it returns at
+    once and makes no API call. Otherwise it reads the sending identity from
+    the service itself (getProfile, so a From: swap cannot misreport it) and
+    every To/Cc/Bcc address from the finished message, or from the server-side
+    draft for a scheduled send. mguard prompts on the terminal; a refusal, or
+    any failure to run the check, exits without sending.
+    """
+    import base64
+    import email
+    import email.policy
+    import subprocess
+    rules = Path(os.environ.get("M_GUARDRAILS",
+                                Path.home() / ".config/m/guardrails.json"))
+    if not rules.exists():
+        return
+    try:
+        if draft_id is not None:
+            raw_b64 = service.users().drafts().get(
+                userId="me", id=draft_id, format="raw").execute()["message"]["raw"]
+        msg = email.message_from_bytes(base64.urlsafe_b64decode(raw_b64),
+                                       policy=email.policy.default)
+        recipients = [str(v) for h in ("To", "Cc", "Bcc")
+                      for v in msg.get_all(h, [])]
+        sender = service.users().getProfile(userId="me").execute()["emailAddress"]
+    except Exception as e:
+        print(f"🛑 mguard: could not read sender or recipients ({e}); not sent.",
+              file=sys.stderr)
+        sys.exit(1)
+    if not recipients:
+        return
+    mguard = Path(__file__).resolve().parent / "mguard"
+    cmd = [str(mguard), "check", "--from", sender]
+    for r in recipients:
+        cmd += ["--to", r]
+    try:
+        rc = subprocess.call(cmd)
+    except OSError as e:
+        print(f"🛑 mguard: cannot run {mguard} ({e}); not sent.", file=sys.stderr)
+        sys.exit(1)
+    if rc != 0:
+        print("🛑 Not sent (recipient guardrail).", file=sys.stderr)
+        sys.exit(1)
+
+
 def swap_service_account(current_service, new_token_name, new_login_hint):
     """Swap OAuth credentials to use a different account. Returns new service object.
 
@@ -2716,6 +2763,7 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
         ).execute())
         print(f"Draft reply saved: To={reply_addr} Subject={re_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
     else:
+        _mguard_or_exit(send_service, raw_b64=raw_reply)
         result = _retry_api_call(lambda: send_service.users().messages().send(
             userId="me", body={"raw": raw_reply}
         ).execute())
@@ -2948,6 +2996,7 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
         ).execute())
         print(f"Draft forward saved: To={recipient} Subject={fwd_subject} id={result.get('id', '?')}{att_suffix}", file=sys.stderr)
     else:
+        _mguard_or_exit(service, raw_b64=raw_fwd)
         result = _retry_api_call(lambda: service.users().messages().send(
             userId="me", body={"raw": raw_fwd}
         ).execute())
@@ -5187,6 +5236,7 @@ def do_send(service, args, from_addr=None):
     """Send a message via Gmail API."""
     # Handle sending existing drafts by ID (for scheduled sends)
     if getattr(args, 'draft_id', None):
+        _mguard_or_exit(service, draft_id=args.draft_id)
         try:
             # Send the existing draft
             result = _retry_api_call(lambda: service.users().drafts().send(
@@ -5207,6 +5257,7 @@ def do_send(service, args, from_addr=None):
         print_message_preview(raw_bytes)
         return
     encoded = base64.urlsafe_b64encode(raw_bytes).decode()
+    _mguard_or_exit(service, raw_b64=encoded)
     result = _retry_api_call(lambda: service.users().messages().send(
         userId="me", body={"raw": encoded}
     ).execute())

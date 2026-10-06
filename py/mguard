@@ -1,0 +1,332 @@
+#!/usr/bin/env python3.11
+"""mguard: recipient guardrails for outbound mail.
+
+Rules live in ~/.config/m/guardrails.json (override with $M_GUARDRAILS). A rule
+says: when mail goes out FROM this address TO a recipient matching one of these
+patterns, either ask for a typed confirmation or refuse outright.
+
+  mguard list
+  mguard add NAME --from ACCOUNT|ADDRESS|'*' --to PATTERN [--to PATTERN ...]
+             [--action confirm|block] [--word WORD] [--note TEXT]
+  mguard rm NAME
+  mguard edit                      open the rules file in $EDITOR, then validate it
+  mguard test --from X --to ADDR...  show which rules would fire (no prompt)
+  mguard check --from X [--to ADDR...] [--eml FILE]
+                                   enforce: used by m right before a send
+                                   (X may be 'default' = m's default account)
+
+ACCOUNT is an m account letter (h, u, g ...), resolved to its address through
+~/.config/mail-tools/accounts.json, so `h` and `hNY` are the same rule.
+PATTERN is a shell-style glob on the bare address, case-insensitive:
+`*@columbia.edu`, `*@*.columbia.edu`, `dean@*`.
+
+`confirm` rules make `check` print the rule and the matching recipients on the
+terminal and proceed only if you type the rule's word (default: the domain of
+its first pattern). `block` rules always refuse. Exit status of `check`:
+0 = send may proceed, 1 = refused, 2 = usage or rules-file error (refused).
+With no terminal to ask on, a confirm rule refuses. A rules file that exists
+but does not parse refuses every send until it is fixed.
+
+Example:
+  mguard add h-to-columbia --from h --to '*@columbia.edu' --to '*@*.columbia.edu'
+"""
+import argparse
+import fnmatch
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from email.utils import getaddresses
+from pathlib import Path
+
+RULES = Path(os.environ.get("M_GUARDRAILS",
+                            Path.home() / ".config/m/guardrails.json"))
+ACCOUNTS = Path.home() / ".config/mail-tools/accounts.json"
+ACTIONS = ("confirm", "block")
+
+
+class RulesError(Exception):
+    pass
+
+
+# --- rules file ---------------------------------------------------------------
+
+def validate(data):
+    """Raise RulesError unless data is a well-formed rules document."""
+    if not isinstance(data, dict) or not isinstance(data.get("rules"), list):
+        raise RulesError('top level must be {"rules": [...]}')
+    seen = set()
+    for i, r in enumerate(data["rules"], 1):
+        where = f"rule {i} ({r.get('name', '?') if isinstance(r, dict) else '?'})"
+        if not isinstance(r, dict):
+            raise RulesError(f"{where}: not an object")
+        for key in ("name", "from", "to", "action"):
+            if key not in r:
+                raise RulesError(f"{where}: missing '{key}'")
+        if r["name"] in seen:
+            raise RulesError(f"{where}: duplicate name")
+        seen.add(r["name"])
+        if r["action"] not in ACTIONS:
+            raise RulesError(f"{where}: action must be one of {ACTIONS}")
+        if not (isinstance(r["to"], list) and r["to"]
+                and all(isinstance(p, str) and p for p in r["to"])):
+            raise RulesError(f"{where}: 'to' must be a non-empty list of patterns")
+    return data
+
+
+def load(path=None):
+    path = Path(path or RULES)
+    if not path.exists():
+        return {"rules": []}
+    try:
+        return validate(json.loads(path.read_text()))
+    except json.JSONDecodeError as e:
+        raise RulesError(f"{path} is not valid JSON: {e}") from None
+
+
+def save(data, path=None):
+    path = Path(path or RULES)
+    validate(data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n")
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)
+
+
+# --- matching -----------------------------------------------------------------
+
+def resolve_from(value):
+    """Account letter -> address via accounts.json; addresses and '*' pass through."""
+    v = value.strip()
+    if v == "*" or "@" in v:
+        return v.lower()
+    try:
+        conf = json.loads(ACCOUNTS.read_text())
+    except (OSError, json.JSONDecodeError):
+        conf = {}
+    accts = conf.get("accounts", {})
+    if v in ("", "default"):
+        v = conf.get("default_account", "")
+    if v in accts and accts[v].get("email"):
+        return accts[v]["email"].lower()
+    raise RulesError(f"unknown account '{v}' (not in {ACCOUNTS}); give an address")
+
+
+def bare(addresses):
+    """Split header-style address strings into lowercase bare addresses."""
+    out = []
+    for _, addr in getaddresses(list(addresses)):
+        addr = addr.strip().lower()
+        if "@" in addr and addr not in out:
+            out.append(addr)
+    return out
+
+
+def matches(rules, sender, recipients):
+    """[(rule, [matching recipients]), ...] for every rule that fires."""
+    sender = sender.lower()
+    hits = []
+    for r in rules:
+        if r["from"] != "*" and r["from"].lower() != sender:
+            continue
+        hit = [a for a in recipients
+               if any(fnmatch.fnmatchcase(a, p.lower()) for p in r["to"])]
+        if hit:
+            hits.append((r, hit))
+    return hits
+
+
+def default_word(rule):
+    pat = rule["to"][0]
+    return pat.split("@", 1)[1].lstrip("*.") if "@" in pat else rule["name"]
+
+
+# --- the gate -----------------------------------------------------------------
+
+def tty_ask(prompt):
+    """Ask on the controlling terminal; None when there is none.
+
+    Two streams: a text-mode "r+" open of a tty raises (not seekable)."""
+    try:
+        with open("/dev/tty", "w") as out, open("/dev/tty") as inp:
+            out.write(prompt)
+            out.flush()
+            return inp.readline().strip()
+    except OSError:
+        return None
+
+
+def check(sender, recipients, ask=tty_ask, err=sys.stderr):
+    """True if the send may proceed. Prompts for each firing confirm rule."""
+    try:
+        sender = resolve_from(sender)
+        rules = load()["rules"]
+    except RulesError as e:
+        print(f"mguard: {e}; refusing to send.", file=err)
+        return False
+    for rule, hit in matches(rules, sender, bare(recipients)):
+        what = f"rule '{rule['name']}': {sender} -> {', '.join(hit)}"
+        if rule.get("note"):
+            what += f"  ({rule['note']})"
+        if rule["action"] == "block":
+            print(f"mguard: BLOCKED by {what}", file=err)
+            return False
+        word = rule.get("word") or default_word(rule)
+        print(f"mguard: {what}", file=err)
+        answer = ask(f"mguard: type '{word}' to send anyway, anything else cancels: ")
+        if answer is None:
+            print("mguard: no terminal to confirm on; refusing to send.", file=err)
+            return False
+        if answer != word:
+            print("mguard: not confirmed; nothing sent.", file=err)
+            return False
+    return True
+
+
+# --- CLI ----------------------------------------------------------------------
+
+COVERAGE_GAP = ("Not checked: interactive neomutt compose on SMTP accounts "
+                "(m <acct> send <addr>, mutt aliases, mlook), where recipients are "
+                "chosen inside neomutt. Draft-file sends and every Gmail API send are checked.")
+
+
+def cmd_list(_):
+    rules = load()["rules"]
+    if not rules:
+        print(f"No rules ({RULES}).")
+    for r in rules:
+        word = f" word={r.get('word') or default_word(r)}" if r["action"] == "confirm" else ""
+        note = f"  # {r['note']}" if r.get("note") else ""
+        print(f"{r['name']}: {r['action']}{word}  from {r['from']}  to {' '.join(r['to'])}{note}")
+    print(COVERAGE_GAP)
+    return 0
+
+
+def cmd_add(a):
+    data = load()
+    if any(r["name"] == a.name for r in data["rules"]):
+        raise RulesError(f"a rule named '{a.name}' exists; rm it first or use edit")
+    rule = {"name": a.name, "from": resolve_from(a.sender), "to": a.to,
+            "action": a.action}
+    if a.word:
+        rule["word"] = a.word
+    if a.note:
+        rule["note"] = a.note
+    data["rules"].append(rule)
+    save(data)
+    print(f"Added {a.name}.")
+    return cmd_list(a)
+
+
+def cmd_rm(a):
+    data = load()
+    keep = [r for r in data["rules"] if r["name"] != a.name]
+    if len(keep) == len(data["rules"]):
+        raise RulesError(f"no rule named '{a.name}'")
+    data["rules"] = keep
+    save(data)
+    print(f"Removed {a.name}.")
+    return 0
+
+
+def cmd_edit(_):
+    current = load()
+    editor = os.environ.get("EDITOR", "vi")
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        f.write(json.dumps(current, indent=2) + "\n")
+        tmp = f.name
+    try:
+        while True:
+            subprocess.call([editor, tmp])
+            try:
+                data = validate(json.loads(Path(tmp).read_text()))
+                for r in data["rules"]:
+                    r["from"] = resolve_from(r["from"])
+                break
+            except (json.JSONDecodeError, RulesError) as e:
+                again = tty_ask(f"mguard: {e}. Edit again? [Y/n] ")
+                if again is not None and again.lower().startswith("n"):
+                    print("mguard: discarded; rules unchanged.")
+                    return 1
+        if RULES.exists():
+            shutil.copy2(RULES, RULES.with_suffix(".json.bak"))
+        save(data)
+        print(f"Saved {RULES}.")
+        return cmd_list(None)
+    finally:
+        os.unlink(tmp)
+
+
+def cmd_test(a):
+    sender = resolve_from(a.sender)
+    hits = matches(load()["rules"], sender, bare(a.to))
+    if not hits:
+        print(f"No rule fires for {sender} -> {', '.join(bare(a.to))}.")
+    for r, hit in hits:
+        print(f"{r['name']} ({r['action']}): {', '.join(hit)}")
+    return 0
+
+
+def eml_recipients(path):
+    """To/Cc/Bcc header values of a draft file (.eml or header block)."""
+    from email import message_from_binary_file, policy
+    with open(path, "rb") as f:
+        msg = message_from_binary_file(f, policy=policy.default)
+    return [str(v) for h in ("To", "Cc", "Bcc") for v in msg.get_all(h, [])]
+
+
+def cmd_check(a):
+    to = list(a.to or [])
+    if a.eml:
+        try:
+            to += eml_recipients(a.eml)
+        except OSError as e:
+            print(f"mguard: cannot read {a.eml} ({e}); refusing to send.", file=sys.stderr)
+            return 1
+    return 0 if check(a.sender, to) else 1
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="mguard", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list").set_defaults(fn=cmd_list)
+    s = sub.add_parser("add")
+    s.add_argument("name")
+    s.add_argument("--from", dest="sender", required=True)
+    s.add_argument("--to", action="append", required=True)
+    s.add_argument("--action", choices=ACTIONS, default="confirm")
+    s.add_argument("--word")
+    s.add_argument("--note")
+    s.set_defaults(fn=cmd_add)
+    s = sub.add_parser("rm")
+    s.add_argument("name")
+    s.set_defaults(fn=cmd_rm)
+    sub.add_parser("edit").set_defaults(fn=cmd_edit)
+    s = sub.add_parser("test")
+    s.add_argument("--from", dest="sender", required=True)
+    s.add_argument("--to", action="append", required=True,
+                   help="recipient(s); repeatable, header-style lists allowed")
+    s.set_defaults(fn=cmd_test)
+    s = sub.add_parser("check")
+    s.add_argument("--from", dest="sender", required=True,
+                   help="account letter, address, or 'default'")
+    s.add_argument("--to", action="append",
+                   help="recipient(s); repeatable, header-style lists allowed")
+    s.add_argument("--eml", help="also take To/Cc/Bcc from this draft file")
+    s.set_defaults(fn=cmd_check)
+    a = p.parse_args(argv)
+    if a.cmd == "check" and not a.to and not a.eml:
+        p.error("check needs --to and/or --eml")
+    try:
+        return a.fn(a)
+    except RulesError as e:
+        print(f"mguard: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

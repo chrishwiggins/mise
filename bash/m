@@ -1544,6 +1544,13 @@ direct_send() {
                     gmail-api-rw ${account:+-e "$account"} send --via-send -H "$abspath" "${attach_args[@]+"${attach_args[@]}"}" || send_rc=$?
                 else
                     _assert_smtp_capable "$muttrc" "${account:-default}" || return 1
+                    # Recipient guardrails (mguard): the API paths check inside
+                    # gmail-api-rw; this batch SMTP send checks here, with the
+                    # draft's own To/Cc/Bcc. A refusal sends nothing.
+                    if ! mguard check --from "${account:-default}" --eml "$abspath"; then
+                        echo "$abspath NOT SENT (recipient guardrail)" >&2
+                        return 1
+                    fi
                     echo "m: ${account:-default} via SMTP" >&2
                     # Direct neomutt call - optimize by removing process hop.
                     # stderr is captured (then replayed) so a rejected login
