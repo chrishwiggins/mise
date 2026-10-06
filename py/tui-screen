@@ -1,0 +1,55 @@
+#!/usr/bin/env python3.11
+"""tui-screen: run a terminal UI in a pty and print its screen as plain text.
+
+usage: tui-screen SECONDS KEYS CMD [ARGS...]
+
+Waits SECONDS for the program to draw, then sends each character of KEYS
+(backslash escapes allowed, e.g. "\\r" for Enter, "" for none) with an
+8-second pause after each, and prints the final 120x40 screen. Used to
+verify wiki-tui output without a human looking at a terminal.
+
+Needs pyte: python3.11 -m pip install pyte (or --target DIR and set
+PYTHONPATH=DIR).
+"""
+import fcntl, os, pty, select, signal, struct, sys, termios, time
+
+try:
+    import pyte
+except ImportError:
+    sys.exit("tui-screen: pyte not installed; run: python3.11 -m pip install pyte")
+
+if len(sys.argv) < 4:
+    sys.exit(__doc__)
+
+secs = float(sys.argv[1])
+keys = sys.argv[2].encode().decode("unicode_escape")
+cmd = sys.argv[3:]
+cols, rows = 120, 40
+screen = pyte.Screen(cols, rows)
+stream = pyte.ByteStream(screen)
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm-256color"
+    os.environ["COLUMNS"], os.environ["LINES"] = str(cols), str(rows)
+    os.execvp(cmd[0], cmd)
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+
+def pump(t):
+    end = time.time() + t
+    while time.time() < end:
+        ready, _, _ = select.select([fd], [], [], 0.1)
+        if ready:
+            try:
+                stream.feed(os.read(fd, 65536))
+            except OSError:
+                return
+
+
+pump(secs)
+for k in keys:
+    os.write(fd, k.encode())
+    pump(8)
+print("\n".join(line.rstrip() for line in screen.display))
+os.kill(pid, signal.SIGKILL)
