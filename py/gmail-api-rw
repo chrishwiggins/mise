@@ -2484,6 +2484,12 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
     to service / account (single-account case). When set, the From: header is
     fixed to send_account and in-editor From: editing is disabled.
     """
+    # A fixed outbox (--outbox) pins the sender. Otherwise the reply sends as
+    # the reading account, and an in-editor From: change must carry the SEND
+    # identity with it: before 2026-10-06 only service/account were swapped, so
+    # the reply went out from the original account while the prompt showed
+    # the new one.
+    outbox_fixed = send_service is not None
     if send_service is None:
         send_service = service
     if send_account is None:
@@ -2636,6 +2642,8 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
             service, account = _swap_or_recover(
                 service, new_account_info, "reply", body, final_headers
             )
+            if not outbox_fixed:
+                send_service, send_account = service, account
 
     if not body.strip():
         print("Empty body, aborting.", file=sys.stderr)
@@ -2720,6 +2728,8 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
                     service, account = _swap_or_recover(
                         service, new_account_info, "reedit", body, final_headers
                     )
+                    if not outbox_fixed:
+                        send_service, send_account = service, account
                 continue
             else:
                 print("Please answer y(es), n(o), e(dit), or a(ttachments).", file=sys.stderr)
