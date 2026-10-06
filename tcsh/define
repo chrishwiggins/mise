@@ -1,7 +1,26 @@
 #!/bin/tcsh -f #-X -V
-#% wraps around site, turns + into quotes
-#% turns spaces into URL spaces (%22)
+#% define: look a word up on Wiktionary in the terminal with wiki-tui
+#% -w opens Wiktionary in the browser instead
+#% in -w mode: + wraps a phrase in quotes (%22), spaces become URL spaces
 
-set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
-echo $str
-open 'https://en.wiktionary.org/wiki/Special:Search?search='$str
+if ( $#argv < 1 ) then
+    echo 'usage: define [-w] word [more words]'
+    echo '       -w  open Wiktionary in the browser instead of wiki-tui'
+    exit 1
+endif
+
+if ( "$1" == "-w" ) then
+    shift
+    set str=`echo $* | sed -e 's/+/%22/g' | sed -e 's/ /+/g' `
+    echo $str
+    open 'https://en.wiktionary.org/wiki/Special:Search?search='$str
+    exit 0
+endif
+
+if ( $?WIKI_TUI ) then
+    set wikitui=$WIKI_TUI
+else
+    set wikitui=$HOME/.cargo/bin/wiki-tui
+endif
+setenv WIKI_TUI_CONFIG $HOME/mise/dotfiles/wiki-tui-wiktionary
+exec $wikitui "$*"

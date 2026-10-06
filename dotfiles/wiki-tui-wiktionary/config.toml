@@ -1,0 +1,6 @@
+# wiki-tui config that points it at Wiktionary instead of Wikipedia.
+# Used by tcsh/define via WIKI_TUI_CONFIG. The API endpoint is
+# pre_language + language + post_language.
+[api]
+pre_language = "https://"
+post_language = ".wiktionary.org/w/api.php"
