@@ -1,0 +1,43 @@
+diff --git a/src/components/search_bar.rs b/src/components/search_bar.rs
+index 9ec7272..f026c8a 100644
+--- a/src/components/search_bar.rs
++++ b/src/components/search_bar.rs
+@@ -17,9 +17,28 @@ use crate::{
+ 
+ use super::Component;
+ 
+-const EMPTY_PROMPT: &str = "Search Wikipedia";
+ const SEARCH_BAR_X: u16 = 50;
+ 
++/// Name the site being searched from the endpoint host, so a config pointing at
++/// en.wiktionary.org reads "Search Wiktionary" rather than "Search Wikipedia".
++fn empty_prompt(config: &Config) -> String {
++    let site = config
++        .api
++        .endpoint
++        .host_str()
++        .and_then(|host| host.split('.').rev().nth(1))
++        .map(|name| {
++            let mut chars = name.chars();
++            match chars.next() {
++                Some(first) => first.to_uppercase().chain(chars).collect(),
++                None => String::new(),
++            }
++        })
++        .filter(|name| !name.is_empty())
++        .unwrap_or_else(|| "Wikipedia".to_string());
++    format!("Search {}", site)
++}
++
+ pub const SEARCH_BAR_HEIGTH: u16 = 3;
+ 
+ #[derive(Default)]
+@@ -86,7 +105,7 @@ impl Component for SearchBarComponent {
+ 
+         let input = if value.is_empty() {
+             self.theme.default_paragraph(Text::styled(
+-                EMPTY_PROMPT,
++                empty_prompt(&self.config),
+                 Style::default()
+                     .fg(Color::Gray)
+                     .add_modifier(Modifier::ITALIC),
