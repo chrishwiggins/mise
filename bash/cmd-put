@@ -23,6 +23,10 @@
 # ran. --no-receipt skips this for scripts that open an interactive program
 # (vim, a pager), which misbehaves when stdout is a pipe.
 #
+# RUN ONCE: a script with a receipt refuses to run if its receipt already has a
+# "=== start" line (exit 3), so a command pasted into a second window cannot
+# post or send twice. FORCE=1 bash /tmp/cmd/NR-SLUG.sh overrides.
+#
 # Prints, on success, the script path, the editable text path (if any), the
 # receipt path, and the `bash <path>` line to hand Chris.
 #
@@ -56,6 +60,12 @@ fi
 # IN the bash not in separate txt file"). Use: read -r -d '' MSG <<'EOF' ... EOF, then --text "$MSG".
 if /usr/bin/grep -qE 'slack-post.*--file' "$body"; then
     echo "cmd-put: refused: slack-post --file keeps the message outside the script; put the text inline (read -r -d '' MSG <<'EOF' ... EOF; --text \"\$MSG\")" >&2
+    exit 2
+fi
+# slack-post reads $SLACK_TOKEN, else ~/.config/slack/token; a workspace-specific token must be
+# exported in the script itself, or Chris runs it and gets "no token" (2026-10-06: two staged posts died this way).
+if /usr/bin/grep -q 'slack-post' "$body" && ! /usr/bin/grep -q 'SLACK_TOKEN=' "$body"; then
+    echo "cmd-put: refused: script calls slack-post but never sets SLACK_TOKEN; add export SLACK_TOKEN=\"\$(head -1 <token file>)\"" >&2
     exit 2
 fi
 if [ -n "$textfile" ] && [ ! -f "$textfile" ]; then
@@ -108,6 +118,12 @@ fi
         # exec'd process substitution). stdin stays the terminal.
         echo "# receipt: $rcpt"
         echo "__rcpt=$rcpt"
+        # Run once: a receipt with a start line means this script already ran. 2026-10-09: 145 was run in
+        # two windows two minutes apart and a student got four Slack posts twice. FORCE=1 overrides.
+        echo 'if [ -f "$__rcpt" ] && /usr/bin/grep -q "^=== start" "$__rcpt" && [ "${FORCE:-}" != 1 ]; then'
+        echo '    echo "REFUSED: $0 already ran ($(/usr/bin/grep "^=== start" "$__rcpt" | tail -1)). To run it again anyway: FORCE=1 bash $0" >&2'
+        echo '    exit 3'
+        echo 'fi'
         echo 'echo "=== start $(date '"'"'+%Y-%m-%d %H:%M:%S'"'"') $0 ===" >> "$__rcpt"'
         echo '('
         printf '%s\n' "$bodytext"
