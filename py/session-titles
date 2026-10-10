@@ -1,0 +1,95 @@
+#!/usr/bin/env python3.11
+"""List Claude Code session names (/rename titles) across all projects, or check one.
+
+Claude Code stores a session's /rename name as a {"type":"custom-title","customTitle":...}
+record in ~/.claude/projects/<mangled-cwd>/<session-id>.jsonl; the latest record wins.
+That format is internal and may change (code.claude.com/docs/en/sessions.md).
+
+A full grep of ~/.claude/projects takes ~30s (4 GB on 2026-10-10), so results are cached
+per transcript in ~/.cache/session-titles.json and only files whose size or mtime changed
+are rescanned.
+
+Usage:
+  session-titles                 list every named session, newest first
+  session-titles --check SLUG    exit 0 if SLUG is free, 1 if taken (prints who has it)
+  session-titles --similar WORD  list names containing WORD
+"""
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path.home() / ".claude" / "projects"
+CACHE = Path.home() / ".cache" / "session-titles.json"
+NEEDLE = '"type":"custom-title"'
+
+
+def titles_in(path):
+    """Return the custom titles in one transcript, in file order."""
+    out = subprocess.run(["/usr/bin/grep", "-F", NEEDLE, str(path)],
+                         capture_output=True, text=True).stdout
+    found = []
+    for line in out.splitlines():
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("type") == "custom-title" and rec.get("customTitle"):
+            found.append(rec["customTitle"])
+    return found
+
+
+def load():
+    try:
+        cache = json.loads(CACHE.read_text())
+    except (OSError, json.JSONDecodeError):
+        cache = {}
+    fresh = {}
+    for path in ROOT.glob("*/*.jsonl"):
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        key = str(path)
+        sig = [st.st_size, int(st.st_mtime)]
+        hit = cache.get(key)
+        if hit and hit["sig"] == sig:
+            fresh[key] = hit
+        else:
+            fresh[key] = {"sig": sig, "titles": titles_in(path)}
+    CACHE.parent.mkdir(parents=True, exist_ok=True)
+    CACHE.write_text(json.dumps(fresh))
+    return fresh
+
+
+def rows(cache):
+    """One row per session that has a name: (mtime, current name, project, session id)."""
+    out = []
+    for key, v in cache.items():
+        if v["titles"]:
+            p = Path(key)
+            out.append((v["sig"][1], v["titles"][-1], p.parent.name, p.stem))
+    return sorted(out, reverse=True)
+
+
+def main(argv):
+    cache = load()
+    rs = rows(cache)
+    if len(argv) >= 2 and argv[0] == "--check":
+        slug = argv[1]
+        taken = [r for r in rs if r[1] == slug]
+        for _, name, proj, sid in taken:
+            print(f"TAKEN {name}  {proj}  {sid}")
+        if not taken:
+            print(f"FREE {slug} (checked {len(rs)} named sessions)")
+        return 1 if taken else 0
+    if len(argv) >= 2 and argv[0] == "--similar":
+        rs = [r for r in rs if argv[1].lower() in r[1].lower()]
+    for _, name, proj, sid in rs:
+        print(f"{name}\t{proj}\t{sid}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
