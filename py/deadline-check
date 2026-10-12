@@ -211,7 +211,12 @@ def main():
     )
     ap.add_argument("--quiet", action="store_true", help="print nothing when nothing is due")
     ap.add_argument("--today", help="override today's date as YYYY-MM-DD (for testing)")
+    # A bare path is the file to check: `deadline-check doc/NEXT.md` used to exit 2 on "unrecognized
+    # arguments", which a caller's `>/dev/null; echo rc` reads as items due.
+    ap.add_argument("path", nargs="?", help="same as --file")
     a = ap.parse_args()
+    if a.path:
+        a.file = a.path
 
     if not os.path.exists(a.file):
         if not a.quiet:
