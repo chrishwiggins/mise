@@ -26,8 +26,15 @@ SHRINK_LINES="${CFG_HISTORY_SHRINK:-5}"
 g() { /usr/bin/git --git-dir="$GIT_DIR_" --work-tree="$TREE" "$@"; }
 
 tracked_files() {
-  # top-level markdown, plus commands, skills, hooks, agents
-  ( cd "$TREE" && /usr/bin/find . -maxdepth 1 -name '*.md' -type f ; \
+  # top-level markdown and settings, plus commands, skills, hooks, agents.
+  #
+  # settings.json belongs here and was missing until 2026-10-11: the top-level
+  # glob was '*.md' only, so the ONE file that wires every hook had no history
+  # at all while CLAUDE.md named this tool as the recovery route for clobbered
+  # shared config. It is also the file most often edited by several sessions at
+  # once, which is exactly what this repo exists to make recoverable.
+  ( cd "$TREE" && /usr/bin/find . -maxdepth 1 -type f \
+      \( -name '*.md' -o -name 'settings.json' -o -name 'settings.local.json' \) ; \
     /usr/bin/find ./commands ./skills ./hooks ./agents -type f \
       \( -name '*.md' -o -name '*.sh' -o -name '*.py' -o -name '*.txt' \) 2>/dev/null ) \
     | /usr/bin/sed 's|^\./||' | /usr/bin/grep -v '/old/' | /usr/bin/sort

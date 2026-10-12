@@ -75,6 +75,49 @@ def yabai_cmd(*args):
     return subprocess.run([YABAI, "-m"] + list(args), capture_output=True, text=True)
 
 
+def sa_failure_hint():
+    """
+    Say WHICH scripting-addition failure this is, rather than guessing.
+
+    Two causes give identical symptoms and opposite fixes:
+
+      1. A Dock restart dropped the payload. The addition lives inside Dock.app
+         and dies with it while yabai keeps running, so `--load-sa` fixes it.
+      2. macOS outran the payload, which patches byte patterns per macOS POINT
+         release. Then `--load-sa` fails with no output and there is NOTHING
+         local to fix. Caught 2026-10-11 on macOS 26.7, where this function's
+         predecessor told Chris to run --load-sa (exits 1 silently) and blamed
+         a Dock restart that had not happened.
+
+    The decisive probe: if the addition can be reloaded, it was merely dropped.
+    """
+    reload_works = False
+    try:
+        p = subprocess.run(["sudo", "-n", YABAI, "--load-sa"],
+                           capture_output=True, text=True, timeout=15)
+        reload_works = p.returncode == 0
+    except Exception:
+        pass
+
+    if reload_works:
+        return ("  the addition had been dropped and has just been reloaded;\n"
+                "  rerun disperse and it should work. It lives inside Dock.app\n"
+                "  and dies when Dock restarts.")
+
+    build = ""
+    try:
+        build = subprocess.run(["sw_vers", "-productVersion"],
+                               capture_output=True, text=True).stdout.strip()
+    except Exception:
+        pass
+    return ("  the addition cannot be loaded at all, and reloading it just\n"
+            "  failed, so this is NOT a Dock restart and --load-sa will not\n"
+            f"  help. macOS {build} has almost certainly outrun the payload,\n"
+            "  which is built per macOS POINT release.\n"
+            "  Diagnose: ~/gd/local/seiton/tooling/yabai/yabai-sa-doctor\n"
+            "  Context:  ~/gd/local/seiton/tooling/yabai/doc/NEXT.md")
+
+
 def main():
     if "-h" in sys.argv or "--help" in sys.argv:
         print(HELP)
@@ -105,14 +148,18 @@ def main():
 
     created = 0
     while n_spaces < n_needed:
-        r = yabai_cmd("space", "--create")
-        if r.returncode != 0:
-            print(f"Could not create space {n_spaces + 1} "
-                  f"(yabai scripting addition may not be loaded; it dies when\n"
-                  "  Dock restarts). Fix: sudo /opt/homebrew/bin/yabai --load-sa\n"
-                  "  Diagnose: ~/gd/local/seiton/tooling/yabai/yabai-sa-doctor")
+        # Never trust the exit code here. Without a working scripting addition
+        # `space --create` exits 0 and creates NOTHING, so an exit-code check
+        # loops to the limit printing nothing at all; count the spaces instead.
+        # Caught 2026-10-11 on macOS 26.7, where that was the actual behaviour.
+        yabai_cmd("space", "--create")
+        after = len(yabai_query("query", "--spaces"))
+        if after <= n_spaces:
+            print(f"Could not create space {n_spaces + 1}: yabai reported "
+                  "success but no space appeared.")
+            print(sa_failure_hint())
             break
-        n_spaces += 1
+        n_spaces = after
         created += 1
 
     if created:
