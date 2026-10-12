@@ -1,0 +1,99 @@
+#!/usr/bin/env python3.11
+"""gfetch: download or export a Google Drive / Docs / Slides / Sheets file AS A CHOSEN ACCOUNT.
+
+Files shared "inside the organization only" (e.g. Columbia) return Google's sign-in page to an
+anonymous download and 404 to a token from a different account, so the account must be picked.
+
+Usage:
+  gfetch -A u <url-or-id>                 # export to ./<title>.<ext> (Slides/Docs -> pdf, Sheets -> xlsx)
+  gfetch -A u <url> -t txt                # Slides/Docs as plain text
+  gfetch -A u <url> -o out.pdf            # explicit output path (format from extension if -t not given)
+  gfetch -A u --whoami                    # print which account the token belongs to (first use opens a browser)
+  gfetch -A u <url> --info                # print title, type, owner, modified time; download nothing
+
+Accounts: u = chw2@columbia.edu, g = chris.wiggins@gmail.com, h = chris@hackny.org.
+Read-only scope; token ~/.config/google-tokens/drive-readonly-<account>.pickle. The script asserts
+that the token's account is the one asked for, so a wrong-account token can never pass as "not found".
+"""
+import argparse, io, re, sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+ACCOUNTS = {"u": "chw2@columbia.edu", "g": "chris.wiggins@gmail.com", "h": "chris@hackny.org"}
+EXPORT = {  # google-native mimeType -> {format: export mimeType}
+    "application/vnd.google-apps.presentation": {"pdf": "application/pdf", "txt": "text/plain",
+                                                  "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+    "application/vnd.google-apps.document": {"pdf": "application/pdf", "txt": "text/plain", "md": "text/markdown",
+                                              "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    "application/vnd.google-apps.spreadsheet": {"xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                 "pdf": "application/pdf", "csv": "text/csv"},
+}
+DEFAULT = {"application/vnd.google-apps.presentation": "pdf", "application/vnd.google-apps.document": "pdf",
+           "application/vnd.google-apps.spreadsheet": "xlsx"}
+
+
+def file_id(s):
+    for pat in (r"/d/([A-Za-z0-9_-]{20,})", r"[?&]id=([A-Za-z0-9_-]{20,})", r"/drive/([A-Za-z0-9_-]{20,})", r"^([A-Za-z0-9_-]{20,})$"):
+        m = re.search(pat, s)
+        if m:
+            return m.group(1)
+    sys.exit(f"gfetch: no file id in {s!r}")
+
+
+def service(acct):
+    from google_auth import get_credentials
+    from googleapiclient.discovery import build
+    email = ACCOUNTS[acct]
+    token = "drive-readonly-" + email.replace("@", "-at-").replace(".", "-")
+    creds = get_credentials(service="drive", scopes="drive-readonly", token_name=token, login_hint=email)
+    svc = build("drive", "v3", credentials=creds)
+    who = svc.about().get(fields="user(emailAddress)").execute()["user"]["emailAddress"]
+    if who.lower() != email:
+        sys.exit(f"gfetch: token {token} belongs to {who}, not {email}; delete ~/.config/google-tokens/{token}.pickle and rerun")
+    return svc, who
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("target", nargs="?")
+    ap.add_argument("-A", "--account", choices=ACCOUNTS, default="u")
+    ap.add_argument("-t", "--to", help="export format: pdf, txt, md, docx, pptx, xlsx, csv")
+    ap.add_argument("-o", "--out", type=Path)
+    ap.add_argument("--whoami", action="store_true")
+    ap.add_argument("--info", action="store_true")
+    a = ap.parse_args()
+    svc, who = service(a.account)
+    if a.whoami:
+        print(who)
+        return
+    if not a.target:
+        ap.error("target required")
+    fid = file_id(a.target)
+    meta = svc.files().get(fileId=fid, fields="name,mimeType,modifiedTime,owners(emailAddress)", supportsAllDrives=True).execute()
+    mt, name = meta["mimeType"], meta["name"]
+    if a.info:
+        print(f"{name}\t{mt}\t{meta.get('modifiedTime')}\t{','.join(o['emailAddress'] for o in meta.get('owners', []))}")
+        return
+    fmt = a.to or (a.out.suffix.lstrip(".") if a.out and a.out.suffix else None)
+    if mt in EXPORT:
+        fmt = fmt or DEFAULT[mt]
+        if fmt not in EXPORT[mt]:
+            sys.exit(f"gfetch: {mt} exports to {sorted(EXPORT[mt])}, not {fmt}")
+        req = svc.files().export_media(fileId=fid, mimeType=EXPORT[mt][fmt])
+    else:
+        req = svc.files().get_media(fileId=fid, supportsAllDrives=True)
+    from googleapiclient.http import MediaIoBaseDownload
+    buf = io.BytesIO()
+    dl = MediaIoBaseDownload(buf, req)
+    done = False
+    while not done:
+        _, done = dl.next_chunk()
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or fid
+    out = a.out or Path(safe + (f".{fmt}" if mt in EXPORT else ("" if "." in safe else "")))
+    out.write_bytes(buf.getvalue())
+    print(f"{out}\t{len(buf.getvalue())} bytes\t{name}\tas {who}")
+
+
+if __name__ == "__main__":
+    main()
