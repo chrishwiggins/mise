@@ -84,7 +84,9 @@ max=0
 for f in "$dir"/*.sh; do
     [ -e "$f" ] || continue
     base=$(basename "$f")
-    n=${base%%-*}
+    # Accept NN-slug and NN_slug: something renamed /tmp/cmd to underscores on 2026-10-10 and
+    # numbering silently restarted at 1.
+    n=${base%%[-_]*}
     if printf '%s' "$n" | grep -qE '^[0-9]+$'; then
         [ "$n" -gt "$max" ] && max=$n
     fi
