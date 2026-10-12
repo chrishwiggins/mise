@@ -54,11 +54,72 @@ notify() {
   /usr/bin/osascript -e "display notification \"$2\" with title \"cfg-history: $1\"" 2>/dev/null
 }
 
+# Serialize snapshots against each other.
+#
+# A snapshot takes git's index lock hundreds of times (one `add` per tracked
+# file), so a cron run overlapping a manual one loses the race and the whole
+# snapshot is dropped: ~/.claude-history.log held 3221 "Another git process
+# seems to be running in this repository" lines, with real gaps in the series
+# on a five-minute cron. That matters because this repo is the ONLY history for
+# ~/.claude/settings.json, so a dropped snapshot is a lost version.
+#
+# mkdir is the atomic primitive here. macOS ships no flock(1), verified
+# 2026-10-11 (`which flock` finds nothing), so do not reach for it.
+LOCKDIR="$GIT_DIR_.snapshot.lock"
+STALE_LOCK_SECS="${CFG_HISTORY_STALE_LOCK:-300}"
+
+acquire_lock() {  # wait briefly, then break a lock older than STALE_LOCK_SECS
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if /bin/mkdir "$LOCKDIR" 2>/dev/null; then return 0; fi
+        # A crashed run leaves the directory behind; age decides if it is dead.
+        if [ -d "$LOCKDIR" ]; then
+            local age
+            age=$(( $(/bin/date +%s) - $(/usr/bin/stat -f %m "$LOCKDIR" 2>/dev/null || echo 0) ))
+            if [ "$age" -gt "$STALE_LOCK_SECS" ]; then
+                echo "breaking stale lock (${age}s old)" >&2
+                /bin/rm -rf "$LOCKDIR"
+                continue
+            fi
+        fi
+        /bin/sleep 1
+    done
+    return 1
+}
+
+# Keep the cron log from growing without bound.
+#
+# The crontab owns the redirect (`>> ~/.claude-history.log`), so the script
+# cannot rotate the file properly, but it can cap it: truncating in place keeps
+# the appending shell's file descriptor valid. It had reached 596K over 9754
+# lines, a third of them the lock error this version fixes.
+LOGFILE="${CFG_HISTORY_LOG:-$HOME/.claude-history.log}"
+LOG_MAX_BYTES="${CFG_HISTORY_LOG_MAX:-262144}"
+
+trim_log() {
+    [ -f "$LOGFILE" ] || return 0
+    local size
+    size=$(/usr/bin/stat -f %z "$LOGFILE" 2>/dev/null || echo 0)
+    [ "$size" -le "$LOG_MAX_BYTES" ] && return 0
+    # Keep the tail: recent runs are what anyone reads. Truncate in place with
+    # `>` so the cron's open descriptor keeps appending to the same inode.
+    local keep
+    keep=$(/usr/bin/tail -c "$LOG_MAX_BYTES" "$LOGFILE")
+    printf '%s\n' "$keep" > "$LOGFILE"
+}
+
 cmd="${1:-snapshot}"; shift || true
 case "$cmd" in
   snapshot)
     init_if_needed
     /usr/bin/touch "$GIT_DIR_.last-run"   # heartbeat: proves cron fired even when nothing changed
+    trim_log
+    if ! acquire_lock; then
+        # Another snapshot is mid-flight; it will capture the same tree state,
+        # so skipping is correct and silent rather than an error.
+        exit 0
+    fi
+    trap '/bin/rm -rf "$LOCKDIR"' EXIT INT TERM
     cd "$TREE" || exit 1
     tracked_files | while IFS= read -r f; do g add -f -- "$f"; done
     g add -u
