@@ -207,6 +207,68 @@ def move_window(wid, target, verbose=False):
 LAST_DESTROY_FAILURES = []
 
 
+def sa_failure_hint():
+    """
+    Say WHICH scripting-addition failure this is, rather than guessing.
+
+    Two causes produce byte-identical symptoms, and the fix for one is useless
+    against the other, so a fixed hint is wrong half the time:
+
+      1. A Dock restart dropped the payload. yabai keeps running and never
+         reloads it, so `--load-sa` fixes it instantly. Caught 2026-09-07, six
+         failures from trim twelve minutes after a clean Dock restart.
+      2. macOS outran the payload. The addition patches byte patterns per macOS
+         POINT release, so a new one leaves `--load-sa` failing with no output
+         and NOTHING local to fix. Caught 2026-09-06 on 26.6.2 and again
+         2026-10-11 on 26.7, where the September hint told Chris to run
+         `--load-sa` (exits 1 silently) and to register a signal that was
+         already registered.
+
+    The two are distinguishable: if `--load-sa` cannot reload it, the payload
+    does not match this OS. Probe with the real command rather than inferring.
+    """
+    signal_live = False
+    try:
+        code, out, _ = yabai("signal", "--list")
+        signal_live = code == 0 and "dock_did_restart" in out
+    except Exception:
+        pass
+
+    # The decisive probe: a cause-1 outage reloads, a cause-2 outage cannot.
+    reload_works = False
+    try:
+        proc = subprocess.run(["sudo", "-n", "yabai", "--load-sa"],
+                              capture_output=True, text=True, timeout=15)
+        reload_works = proc.returncode == 0
+    except Exception:
+        pass
+
+    if reload_works:
+        return ("  the scripting addition had been dropped and has just been\n"
+                "  reloaded; rerun asplode and it should work.\n"
+                "  It lives inside Dock.app and dies when Dock restarts."
+                + ("" if signal_live else
+                   "\n  ~/.yabairc has no dock_did_restart signal, so this will\n"
+                   "  recur on the next Dock restart. Register it:\n"
+                   "    yabai -m signal --add event=dock_did_restart \\\n"
+                   "      action=\"sudo /opt/homebrew/bin/yabai --load-sa\""))
+
+    build = ""
+    try:
+        build = subprocess.run(["sw_vers", "-productVersion"],
+                               capture_output=True, text=True).stdout.strip()
+    except Exception:
+        pass
+    return ("  the scripting addition cannot be loaded at all, and reloading it\n"
+            "  just failed, so this is NOT a Dock restart and --load-sa will not\n"
+            f"  help. macOS {build} has almost certainly outrun the payload, which\n"
+            "  is built per macOS POINT release.\n"
+            "  Check upstream before rebuilding: a fix may exist only on master,\n"
+            "  or nowhere yet, in which case there is nothing local to do.\n"
+            "  Diagnose: ~/gd/local/seiton/tooling/yabai/yabai-sa-doctor\n"
+            "  Context:  ~/gd/local/seiton/tooling/yabai/doc/NEXT.md")
+
+
 def destroy_empty_spaces(dry_run, verbose, planned=()):
     """
     Remove spaces with no windows, highest index first.
@@ -250,14 +312,7 @@ def destroy_empty_spaces(dry_run, verbose, planned=()):
             print(f"  could not destroy space {idx}: {err}", file=sys.stderr)
             LAST_DESTROY_FAILURES.append((idx, err))
     if any("scripting-addition" in err for _, err in LAST_DESTROY_FAILURES):
-        # 2026-09-07: six of these in a row from trim, twelve minutes after a
-        # clean Dock restart, with every other yabai check green.
-            print("  the scripting addition is not loaded. It lives inside Dock.app\n"
-                  "  and dies when Dock restarts; yabai does not reload it unless\n"
-                  "  ~/.yabairc registers the dock_did_restart signal.\n"
-                  "  Fix now:  sudo /opt/homebrew/bin/yabai --load-sa\n"
-                  "  Diagnose: ~/gd/local/seiton/tooling/yabai/yabai-sa-doctor",
-                  file=sys.stderr)
+        print(sa_failure_hint(), file=sys.stderr)
     return removed
 
 
@@ -298,9 +353,7 @@ def main():
             print("asplode: cannot redistribute windows "
                   f"({msg}).\n"
                   "  Spaces cannot be created and window moves fail silently.\n"
-                  "  Fix with: sudo yabai --load-sa\n"
-                  "  (the addition dies with Dock unless ~/.yabairc registers the\n"
-                  "  dock_did_restart signal; yabai-sa-doctor checks the chain)\n"
+                  + sa_failure_hint() + "\n"
                   "  Continuing to close empty desktops anyway.",
                   file=sys.stderr)
             surplus = []
