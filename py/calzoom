@@ -1,9 +1,9 @@
 #!/Users/wiggins/mise/py/.venv/bin/python3
 """
-calzoom (also `zooms`) - Quick access to nearby Zoom / Meet / Hangout calls.
+calzoom (also `zooms`) - Quick access to nearby Zoom / Meet / Hangout / Teams calls.
 
 Looks across every calendar account with a token on disk (the same set
-`gcal-list --all` reads) for events carrying a Zoom or Google Meet link in the
+`gcal-list --all` reads) for events carrying a Zoom, Google Meet or Teams link in the
 window around now: 2 hours back (in case you are late) and 2 hours ahead.
 
 Always shows a menu, even for a single call; nothing opens until you choose.
@@ -67,6 +67,9 @@ def extract_zoom_urls(text):
         r'zoommtg://[^\s]+',
         r'https://meet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}',
         r'https://hangouts\.google\.com/[^\s"<>]+',
+        # Teams: personal (teams.live.com) and work (teams.microsoft.com)
+        r'https://teams\.live\.com/meet/[^\s"<>]+',
+        r'https://teams\.microsoft\.com/(?:l/meetup-join|meet)/[^\s"<>]+',
     ]
 
     urls = []
@@ -170,6 +173,15 @@ def format_time(dt):
     return dt.strftime("%-I:%M%p").lower()
 
 
+def meeting_kind(url):
+    """meet, teams, or zoom, from the call's URL."""
+    if "google.com" in url:
+        return "meet"
+    if "teams.live.com" in url or "teams.microsoft.com" in url:
+        return "teams"
+    return "zoom"
+
+
 def format_meeting(meeting, index=None):
     """Format meeting for display."""
     prefix = f"{index:2d}. " if index is not None else "    "
@@ -198,22 +210,47 @@ def format_meeting(meeting, index=None):
             timing = f"ended {mins}m ago"
 
     label = gcal_list.account_label(meeting["account"])
-    kind = "meet" if "google.com" in meeting["zoom_urls"][0] else "zoom"
-    return f"{prefix}{label} {kind} {time_range:17s} {meeting['summary']} ({timing})"
+    kind = meeting_kind(meeting["zoom_urls"][0])
+    return f"{prefix}{label} {kind:5s} {time_range:17s} {meeting['summary']} ({timing})"
+
+
+# Chrome profile signed in to each calendar account, so a Meet or an SSO Zoom
+# opens as the right identity. Directory names from `chrome-profile-open --list`.
+CHROME_PROFILE_FOR_ACCOUNT = {
+    "chris.wiggins@gmail.com": "Default",
+    "chw2@columbia.edu": "Profile 1",
+    "chris@hackny.org": "Profile 9",
+}
+
+CHROME_PROFILE_OPEN = Path(__file__).resolve().parent.parent / "bash" / "chrome-profile-open"
+
+
+def open_in_browser(url, account):
+    """Open url in the Chrome profile for account; default browser if unmapped."""
+    profile = CHROME_PROFILE_FOR_ACCOUNT.get(account)
+    if profile and CHROME_PROFILE_OPEN.exists():
+        # chrome-profile-open takes 0 for Default, N for "Profile N"
+        arg = "0" if profile == "Default" else profile.split()[-1]
+        subprocess.run([str(CHROME_PROFILE_OPEN), arg, url], check=True)
+        print(f"✓ Opened in Chrome {profile} ({account})")
+    else:
+        webbrowser.open(url)
+        print("✓ Opened in default browser (no Chrome profile mapped for this account)")
 
 
 def open_zoom_meeting(meeting):
     """Open a Zoom meeting in both app and browser."""
     zoom_url = meeting["zoom_urls"][0]  # Use first URL found
+    account = meeting["account"]
 
     print(f"Opening: {meeting['summary']}")
     print(f"Time: {format_time(meeting['start'])}-{format_time(meeting['end'])}")
     print(f"URL: {zoom_url}")
 
-    # Meet/Hangouts have no desktop app; the browser is the only route
-    if "google.com" in zoom_url:
-        webbrowser.open(zoom_url)
-        print("✓ Opened in browser")
+    # Meet/Hangouts have no desktop app; Teams' web page offers to hand off to
+    # the app itself, so the browser is the route for both
+    if meeting_kind(zoom_url) in ("meet", "teams"):
+        open_in_browser(zoom_url, account)
         return
 
     # Open in Zoom app (try zoommtg:// protocol first)
@@ -235,8 +272,7 @@ def open_zoom_meeting(meeting):
             browser_url = zoom_url.replace("zoommtg://", "https://")
         else:
             browser_url = zoom_url
-        webbrowser.open(browser_url)
-        print("✓ Opened in browser")
+        open_in_browser(browser_url, account)
     except Exception as e:
         print(f"⚠ Could not open browser: {e}")
 
@@ -276,11 +312,11 @@ def main():
     footer = f"(read: {labels}; not read: CNN Outlook)"
 
     if not meetings:
-        print(f"No Zoom/Meet calls within {args.window/2:g}h either side of now. {footer}")
+        print(f"No Zoom/Meet/Teams calls within {args.window/2:g}h either side of now. {footer}")
         return
 
     if args.list:
-        print(f"Zoom/Meet calls, {args.window/2:g}h either side of now {footer}:")
+        print(f"Zoom/Meet/Teams calls, {args.window/2:g}h either side of now {footer}:")
         print()
         for i, meeting in enumerate(meetings, 1):
             print(format_meeting(meeting, i))
@@ -288,7 +324,7 @@ def main():
         return
 
     # Always show the menu, even for one call: never open without a choice
-    print(f"Found {len(meetings)} Zoom/Meet calls {footer}:")
+    print(f"Found {len(meetings)} Zoom/Meet/Teams calls {footer}:")
     print()
     for i, meeting in enumerate(meetings, 1):
         print(format_meeting(meeting, i))
