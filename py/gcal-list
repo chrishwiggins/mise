@@ -501,6 +501,34 @@ def show_event(events, event_num):
         print("  (no attendees, place, url, or description)")
 
 
+# Words that, after an event number, mean "open its url" (U is the listing flag).
+OPEN_WORDS = ("open", "o", "U", "u", "url", "join")
+
+
+def open_event(events, event_num):
+    """Open event #N's meeting/URL in the default handler (macOS `open`).
+
+    GCAL_LIST_OPENER overrides the opener, so tests can use `echo` instead of
+    joining a live meeting.
+    """
+    import os
+    import shlex
+    import subprocess
+
+    if event_num < 1 or event_num > len(events):
+        print(f"Error: event {event_num} out of range (1-{len(events)})", file=sys.stderr)
+        sys.exit(1)
+    event = events[event_num - 1]
+    url = _event_url(event)
+    if not url:
+        print(f"gcal-list: event {event_num} '{event.get('summary', '(no title)')}' has no url",
+              file=sys.stderr)
+        sys.exit(1)
+    opener = shlex.split(os.environ.get("GCAL_LIST_OPENER", "open"))
+    print(f"Opening: {url}", flush=True)
+    sys.exit(subprocess.call(opener + [url]))
+
+
 USAGE = """\
 usage: gcal-list [offset] [command]
 
@@ -509,6 +537,7 @@ List Google Calendar events for a given day, or modify an event.
 commands:
   (none)                    List events (default: today)
   N                         Show full details of event #N (attendees, place, url, desc)
+  N open | N U | open N     Open event #N's url (meeting link) in the browser/app
   move N TIME               Move event #N to TIME (e.g., 2pm, noon, 14:00)
   delete N [-y]             Delete event #N (asks for confirmation unless -y)
   desc N                    Show event #N's description
@@ -560,8 +589,15 @@ def main():
         # Whatever remains is [command, ...args], or empty (list mode).
         # A bare integer here means "show details of event #N".
         if argv and re.match(r"^\d+$", argv[0]):
-            cmd = "show"
-            rest = argv
+            if len(argv) == 2 and argv[1] in OPEN_WORDS:
+                cmd, rest = "open", argv[:1]
+            elif len(argv) > 1:
+                print(f"gcal-list: unexpected argument(s) after event #{argv[0]}: "
+                      f"{' '.join(argv[1:])} (did you mean '{argv[0]} open'?)", file=sys.stderr)
+                sys.exit(1)
+            else:
+                cmd = "show"
+                rest = argv
         else:
             cmd = argv[0] if argv else None
             rest = argv[1:] if argv else []
@@ -614,7 +650,14 @@ def main():
         except ValueError:
             print(f"gcal-list: error: event# must be integer, got '{rest[0]}'", file=sys.stderr)
             sys.exit(1)
-        skip_confirm = "-y" in rest[1:] or "--yes" in rest[1:]
+        extra = [a for a in rest[1:] if a not in ("-y", "--yes")]
+        if extra:
+            # Never drop an argument on a destructive path: "delete 3 4" must
+            # not quietly delete only #3, and "delete 3 y" is not "-y".
+            print(f"gcal-list: delete takes one event# and optional -y; "
+                  f"unexpected: {' '.join(extra)}", file=sys.stderr)
+            sys.exit(1)
+        skip_confirm = len(rest) > 1
         delete_event(service, events, event_num, skip_confirm)
 
     elif cmd == "desc":
@@ -648,6 +691,12 @@ def main():
             print(f"gcal-list: error: event# must be integer, got '{rest[0] if rest else ''}'", file=sys.stderr)
             sys.exit(1)
         show_event(events, event_num)
+
+    elif cmd == "open":
+        if len(rest) != 1 or not re.match(r"^\d+$", rest[0]):
+            print("usage: gcal-list [offset] open <event#>   (or: gcal-list N open)", file=sys.stderr)
+            sys.exit(1)
+        open_event(events, int(rest[0]))
 
     elif cmd is None:
         display_events(events, target_date)
