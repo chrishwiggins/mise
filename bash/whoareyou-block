@@ -1,0 +1,46 @@
+#!/bin/bash
+# whoareyou-block NAME [REF]
+# Print and copy to the clipboard the identity block another Claude session needs to reach this one.
+# NAME and REF come from ListAgents' first line ("This session is NAME [REF]"); everything else is
+# computed here by walking this shell's parent chain to the claude process. Read-only except pbcopy.
+name=${1:-UNKNOWN}; ref=${2:-UNKNOWN}
+
+pid= tty= sid= start=
+p=$$
+while [ -n "$p" ] && [ "$p" != "1" ]; do
+  x=$(/bin/ps -p "$p" -o comm= 2>/dev/null)
+  case "$x" in *claude)
+    pid=$p
+    tty=$(/bin/ps -p "$p" -o tty= 2>/dev/null | /usr/bin/tr -d ' ')
+    sid=$(/bin/ps -p "$p" -o command= 2>/dev/null | /usr/bin/grep -oE '[0-9a-f]{8}-[0-9a-f-]{27}' | head -1)
+    start=$(/bin/ps -p "$p" -o lstart= 2>/dev/null | /usr/bin/sed 's/ *$//')
+    break;;
+  esac
+  p=$(/bin/ps -p "$p" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
+done
+
+if [ -z "$pid" ]; then
+  handle="UNKNOWN (no claude process in the parent chain)"
+elif [ -z "$tty" ] || [ "$tty" = "??" ]; then
+  handle="pid$pid@?? (background job, no tty; no iTerm window for tc to find)"
+else
+  handle="pid$pid@$tty (iTerm window on $tty; tc can find it)"
+fi
+
+block="Claude session to contact:
+  roster name: $name
+  ref: $ref (append \" [$ref]\" to the name only if ListAgents shows two rows with that name)
+  handle: $handle
+  started: ${start:-UNKNOWN}
+  cwd: $(/bin/pwd)
+  session id: ${sid:-none on the command line}
+To reach it: SendMessage({to: \"$name\", message: \"From pid<YOUR PID>@<YOUR TTY>: ...\"})
+Sign your own messages with your handle, from your own parent-chain walk (see /dedup step 2)."
+
+printf '%s\n' "$block" | /usr/bin/pbcopy
+if [ "$(/usr/bin/pbpaste | /usr/bin/head -1)" = "Claude session to contact:" ]; then
+  clip="ON CLIPBOARD (read back OK)"
+else
+  clip="CLIPBOARD CHECK FAILED"
+fi
+printf '%s\n%s\n' "$block" "$clip"
