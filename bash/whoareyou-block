@@ -1,9 +1,11 @@
 #!/bin/bash
-# whoareyou-block NAME [REF]
+# whoareyou-block [NAME [REF]]
 # Print and copy to the clipboard the identity block another Claude session needs to reach this one.
-# NAME and REF come from ListAgents' first line ("This session is NAME [REF]"); everything else is
-# computed here by walking this shell's parent chain to the claude process. Read-only except pbcopy.
-name=${1:-UNKNOWN}; ref=${2:-UNKNOWN}
+# Walks this shell's parent chain to the claude process, then reads the roster name and session id
+# from ~/.claude/sessions/<pid>.json, so no ListAgents call is needed. NAME and REF override (REF is
+# only on ListAgents' first line, and only matters when two live sessions share a name).
+# Read-only except pbcopy. Run as `! whoareyou-block` from the prompt for a zero-turn answer.
+name=$1; ref=${2:-}
 
 pid= tty= sid= start=
 p=$$
@@ -19,6 +21,31 @@ while [ -n "$p" ] && [ "$p" != "1" ]; do
   p=$(/bin/ps -p "$p" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
 done
 
+# The session file holds the roster name ListAgents prints, and the session id the command line lacks.
+sdir=$HOME/.claude/sessions
+sfile=$sdir/$pid.json
+if [ -n "$pid" ] && [ -f "$sfile" ]; then
+  [ -z "$name" ] && name=$(/usr/bin/plutil -extract name raw -o - "$sfile" 2>/dev/null)
+  [ -z "$sid" ] && sid=$(/usr/bin/plutil -extract sessionId raw -o - "$sfile" 2>/dev/null)
+fi
+name=${name:-UNKNOWN}
+
+# Count OTHER live sessions with the same name; only then is the ref needed.
+dups=0
+for f in "$sdir"/*.json; do
+  op=${f##*/}; op=${op%.json}
+  [ "$op" = "$pid" ] && continue
+  /bin/ps -p "$op" >/dev/null 2>&1 || continue
+  [ "$(/usr/bin/plutil -extract name raw -o - "$f" 2>/dev/null)" = "$name" ] && dups=$((dups+1))
+done
+if [ -n "$ref" ]; then
+  refline="ref: $ref (append \" [$ref]\" to the name only if two sessions share it; $dups other live session(s) do)"
+elif [ "$dups" -gt 0 ]; then
+  refline="ref: NEEDED, $dups other live session(s) share this name; read it off ListAgents' first line"
+else
+  refline="ref: not needed (no other live session has this name)"
+fi
+
 if [ -z "$pid" ]; then
   handle="UNKNOWN (no claude process in the parent chain)"
 elif [ -z "$tty" ] || [ "$tty" = "??" ]; then
@@ -29,11 +56,11 @@ fi
 
 block="Claude session to contact:
   roster name: $name
-  ref: $ref (append \" [$ref]\" to the name only if ListAgents shows two rows with that name)
+  $refline
   handle: $handle
   started: ${start:-UNKNOWN}
   cwd: $(/bin/pwd)
-  session id: ${sid:-none on the command line}
+  session id: ${sid:-UNKNOWN}
 To reach it: SendMessage({to: \"$name\", message: \"From pid<YOUR PID>@<YOUR TTY>: ...\"})
 Sign your own messages with your handle, from your own parent-chain walk (see /dedup step 2)."
 
