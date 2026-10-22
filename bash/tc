@@ -4,6 +4,7 @@
 #        tc 0 <color>            - color window 1.1 (your home shell)
 #        tc list                 - show windows + ttys
 #        tc list <target> <color> - color specific window
+#        tc list <win.tab>       - same as tc focus <win.tab>
 #        tc -t <target> <color>  - same as above
 #          target: 1.2           - win.tab number
 #                  012           - tty number (short)
@@ -240,6 +241,10 @@ print(colors[0]['name'] if colors else '')
       # Re-invoke with the color (shift to make $color become $1 for case)
       shift 2
       exec "$0" ${TARGET:+-t "$TARGET"} "$@"
+    fi
+    # A lone win.tab (tc list 2.3) means focus it
+    if [[ -n "$2" && -z "$3" ]]; then
+      exec "$0" focus "$2"
     fi
     # No args - show window list
     echo "iTerm2 windows:"
@@ -867,6 +872,189 @@ for i in range(n):
     done <<< "$sessions"
     ;;
 
+  which|w)
+    # Crosswalk between a prj/Claude session identity and a `tc list` row.
+    #
+    #   tc which acb74eaa            session UUID (any unique prefix)
+    #   tc which seminar             prj slug
+    #   tc which                     every claude tab, with its launch UUID
+    #
+    # The join is argv -> pid -> tty -> win.tab, which is exact by
+    # construction: it is the same evidence `prj` itself uses when it says
+    # "session <uuid> is already running" (pgrep -f "claude --resume <uuid>").
+    # Claude Code renames its tab as soon as it starts, so the session TITLE
+    # is not a usable key; the launch argv is.
+    #
+    # win.tab is resolved at query time and never cached: iTerm2 window
+    # indices reorder by recency of focus.
+    query="$2"
+
+    # One ps snapshot, parsed in awk. Never `ps | grep <uuid>`: the grep's
+    # own argv contains the pattern and self-matches.
+    snapshot=$(/bin/ps -A -o tty=,pid=,command= 2>/dev/null)
+
+    # tty -> "uuid" for every live claude process. `--resume <uuid>` gives the
+    # launch id; a tab started with -c or bare has no id in argv.
+    claude_procs=$(printf '%s\n' "$snapshot" | /usr/bin/awk '
+      {
+        tty = $1; pid = $2
+        if (tty == "??" || tty == "-") next
+        # The EXECUTABLE must be claude, not merely a command line that
+        # mentions it. A `grep --resume <uuid>` hunting for sessions carries
+        # both the word and the UUID in its argv, and matching anywhere in
+        # the line reports that grep as a session of its own.
+        exe = $3
+        n = split(exe, parts, "/")
+        if (parts[n] != "claude") next
+        uuid = "-"
+        for (i = 4; i <= NF; i++) if ($i == "--resume" && (i+1) <= NF) uuid = $(i+1)
+        print tty, pid, uuid
+      }')
+
+    # iTerm2 rows: win.tab, tty (normalized to the bare ttysNNN that ps
+    # prints), and the session name. Skipping this normalization makes the
+    # join come back silently empty.
+    iterm_rows=$(osascript -e '
+    tell application "iTerm2"
+      set output to ""
+      set winIdx to 1
+      repeat with w in windows
+        set tabIdx to 1
+        repeat with t in tabs of w
+          set s to current session of t
+          set output to output & winIdx & "." & tabIdx & " " & (tty of s) & " " & (name of s) & linefeed
+          set tabIdx to tabIdx + 1
+        end repeat
+        set winIdx to winIdx + 1
+      end repeat
+      return output
+    end tell
+    ' 2>/dev/null)
+
+    # prj stamps "prj:<slug> [shellN]" on the shell tabs and only names tab 1
+    # "prj:<slug> [claude]" until Claude renames it. So a window's slug is
+    # recovered from whichever of its tabs still carries the stamp.
+    win_slug=$(printf '%s\n' "$iterm_rows" | /usr/bin/awk '
+      { n = index($0, "prj:")
+        if (n == 0) next
+        rest = substr($0, n + 4)
+        b = index(rest, " [")
+        if (b < 2) next
+        split($1, wt, ".")
+        print wt[1], substr(rest, 1, b - 1) }' | /usr/bin/sort -u)
+
+    emit_row() {
+      # $1=win.tab $2=tty $3=uuid ; title looked up from iterm_rows
+      local wt="$1" tty="$2" uuid="$3" title slug win
+      title=$(printf '%s\n' "$iterm_rows" | /usr/bin/awk -v k="$wt" '$1==k { $1=""; $2=""; sub(/^  /,""); print; exit }')
+      win="${wt%%.*}"
+      slug=$(printf '%s\n' "$win_slug" | /usr/bin/awk -v w="$win" '$1==w { print $2; exit }')
+      printf '  %-6s %-12s %-10s %s\n' "$wt" "$tty" "${slug:--}" "$title"
+      if [[ "$uuid" != "-" ]]; then
+        printf '         launched --resume %s\n' "$uuid"
+      fi
+    }
+
+    if [[ -z "$query" ]]; then
+      echo "claude tabs:"
+      echo "  win.tab  tty          prj slug   title"
+      found=0
+      while read -r tty pid uuid; do
+        [[ -z "$tty" ]] && continue
+        wt=$(printf '%s\n' "$iterm_rows" | /usr/bin/awk -v t="/dev/$tty" '$2==t { print $1; exit }')
+        if [[ -n "$wt" ]]; then
+          emit_row "$wt" "$tty" "$uuid"
+          found=$((found+1))
+        fi
+      done <<< "$claude_procs"
+      [[ "$found" -eq 0 ]] && echo "  (none)"
+      exit 0
+    fi
+
+    # Resolve the query to one or more ttys. A UUID prefix matches argv; a
+    # slug matches the window stamp.
+    matches=$(printf '%s\n' "$claude_procs" | /usr/bin/awk -v q="$query" '$3 != "-" && index($3, q) == 1 { print $1, $3 }')
+
+    if [[ -z "$matches" ]]; then
+      # Try it as a prj slug: find the windows stamped with it, then any
+      # claude tab in those windows.
+      wins=$(printf '%s\n' "$win_slug" | /usr/bin/awk -v q="$query" '$2==q { print $1 }')
+      if [[ -n "$wins" ]]; then
+        for win in $wins; do
+          while read -r wt tty rest; do
+            [[ "${wt%%.*}" == "$win" ]] || continue
+            bare="${tty#/dev/}"
+            uuid=$(printf '%s\n' "$claude_procs" | /usr/bin/awk -v t="$bare" '$1==t { print $3; exit }')
+            [[ -n "$uuid" ]] && emit_row "$wt" "$bare" "$uuid"
+          done <<< "$iterm_rows"
+        done
+        exit 0
+      fi
+      # Last resort, and the one that works after Claude has renamed the
+      # tab AND prj's shell tab has been closed (so no title carries the
+      # slug): resolve the slug through prj's own db to a directory, mangle
+      # it the way Claude Code does, and match the UUIDs of the transcripts
+      # living there against the --resume argv of live processes.
+      uuids=$(PRJ_SLUG="$query" /usr/local/bin/python3.11 -c '
+import json, os, re, glob
+db_path = os.path.expanduser("~/.config/prj/projects.json")
+try:
+    with open(db_path) as f:
+        db = json.load(f)
+except Exception:
+    raise SystemExit(0)
+entry = db.get(os.environ["PRJ_SLUG"])
+if not entry:
+    raise SystemExit(0)
+d = entry.get("dir", "")
+if not d:
+    raise SystemExit(0)
+mangled = re.sub(r"[^a-zA-Z0-9]", "-", d)
+pdir = os.path.join(os.path.expanduser("~/.claude/projects"), mangled)
+for f in glob.glob(os.path.join(pdir, "*.jsonl")):
+    print(os.path.basename(f)[:-6])
+' 2>/dev/null)
+      if [[ -n "$uuids" ]]; then
+        hit=0
+        while read -r u; do
+          [[ -z "$u" ]] && continue
+          while read -r tty pid puuid; do
+            [[ "$puuid" == "$u" ]] || continue
+            wt=$(printf '%s\n' "$iterm_rows" | /usr/bin/awk -v t="/dev/$tty" '$2==t { print $1; exit }')
+            if [[ -n "$wt" ]]; then
+              emit_row "$wt" "$tty" "$puuid"
+            else
+              printf '  %-6s %-12s running on %s, not an iTerm2 tab\n' "-" "$tty" "$tty"
+              printf '         launched --resume %s\n' "$puuid"
+            fi
+            hit=$((hit+1))
+          done <<< "$claude_procs"
+        done <<< "$uuids"
+        if [[ "$hit" -gt 0 ]]; then
+          printf '  (matched via prj db: %s)\n' "$query"
+          exit 0
+        fi
+      fi
+      echo "No live claude session matches '$query'." >&2
+      echo "Tried: --resume argv prefix, prj:<slug> window stamp, and prj db." >&2
+      echo "Run 'tc which' with no argument to list every claude tab." >&2
+      exit 1
+    fi
+
+    while read -r tty uuid; do
+      [[ -z "$tty" ]] && continue
+      wt=$(printf '%s\n' "$iterm_rows" | /usr/bin/awk -v t="/dev/$tty" '$2==t { print $1; exit }')
+      if [[ -n "$wt" ]]; then
+        emit_row "$wt" "$tty" "$uuid"
+      else
+        # The advisor's second case: running, but not in an iTerm tab
+        # (tmux pane, detached, another terminal). Say so rather than
+        # printing nothing.
+        printf '  %-6s %-12s running on %s, not an iTerm2 tab\n' "-" "$tty" "$tty"
+        printf '         launched --resume %s\n' "$uuid"
+      fi
+    done <<< "$matches"
+    ;;
   help|-h|--help|"")
     cat <<'EOF'
 tc - iTerm2 titlebar color and window control
@@ -875,6 +1063,7 @@ Usage: tc <color>                 # current window
        tc 0 <color>               # color window 1.1 (home shell)
        tc list                    # show windows + ttys
        tc list 1.1 <color>        # color by win.tab number
+       tc list 1.1                # same as tc focus 1.1
        tc -t 1.1 <color>          # same as above
        tc -t 012 <color>          # by tty number
        tc -t /dev/ttys012 <color> # by full path
@@ -883,6 +1072,7 @@ Usage: tc <color>                 # current window
        tc badge [target] <text>   # watermark a pane; survives Claude repaints ('clear' removes)
        tc join <w.t> <w.t> [...]  # tile windows side by side
        tc hanabi [<win>|all]      # random distinct color per tab
+       tc which [<uuid>|<slug>]   # which win.tab is a prj/claude session
        tc rgb <r> <g> <b>         # custom RGB (0-255)
        tc set <name> <r> <g> <b>     # save a custom color
        tc saved                      # list saved custom colors
@@ -905,6 +1095,9 @@ Examples:
   tc join 3.1 8.1       # tile two windows left/right
   tc join 1.1 3.1 5.1   # tile three windows in thirds
   tc hanabi             # fireworks: every tab in this window a different color
+  tc which seminar      # the win.tab running prj's 'seminar' session
+  tc which acb74eaa     # same, by session UUID prefix (as prj reports it)
+  tc which              # every claude tab, with its launch UUID
   tc hanabi all         # every tab of every window
 
 # blingbling (Color Name API - api.color.pizza)
