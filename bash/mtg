@@ -1,0 +1,294 @@
+#!/bin/bash
+# mtg - live meeting notes in tmux
+# Usage: mtg [name]     start (or reattach to) today's meeting session
+#        mtg -e [name]  end it from outside (same as typing ciao inside)
+#        mtg -l         list meeting dirs
+# Opens one tmux window split into three side-by-side columns, left to right:
+#   1 stream  vim on stream.txt; Enter in insert mode starts a timestamped
+#             line, and the file autosaves so the other two always see it
+#   2 ask     interactive claude that reads stream.txt as context; approved
+#             edits to the notes are appended to directives.md
+#   3 notes   loop that rereads stream.txt, a capture of window 2, and
+#             directives.md, then rewrites notes.md (shown in this window)
+# To end the meeting, type ciao (or bai) alone on a line in any column: in
+# the stream as its own line then Enter, in the notes column then Enter, or
+# as a message to the ask column. Ending writes the final notes.md from
+# scratch, deletes the scratch files, closes tmux, and prints the notes path.
+# Files live in $MTG_HOME/yyyy-mm-dd-name/ (default ~/mtg): stream.txt,
+# notes.md, directives.md (only if used); scratch files sit in .mtg/ until
+# the end. Env: MTG_HOME, MTG_MODEL (notes agent, default sonnet),
+# MTG_INTERVAL (seconds between notes passes, default 45).
+# The columns re-enter this script as: mtg --stream DIR | --ask DIR | --notes DIR ASKPANE
+# and each notes pass as: mtg --pass DIR [ASKPANE] [final]
+# (every pane command goes through bash: tmux runs commands with the login
+# shell, and tcsh cannot parse the $(...) the ask command needs)
+
+MTG_HOME=${MTG_HOME:-$HOME/mtg}
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+ENDWORD='^[[:space:]]*(ciao|bai)[[:space:]]*$'
+
+stream_role() {
+    dir=$1
+    {
+        printf "let g:mtg_self = '%s'\nlet g:mtg_dir = '%s'\n" "$SELF" "$dir"
+        cat <<'VIM'
+set updatetime=1000 autoread nowrap
+" Enter starts a timestamped line; a line that is only ciao or bai ends the meeting
+function! MtgEnter()
+    let l = getline('.')
+    if l =~? '^\(\d\d:\d\d:\d\d\)\?\s*\(ciao\|bai\)\s*$'
+        delete _
+        silent! update
+        call system('bash ' . shellescape(g:mtg_self) . ' -e ' . shellescape(g:mtg_dir))
+        echo 'mtg: ending; final notes being written'
+        return
+    endif
+    let c = col('.') - 1
+    call setline('.', strpart(l, 0, c))
+    call append('.', strftime('%H:%M:%S ') . strpart(l, c))
+    call cursor(line('.') + 1, 10)
+endfunction
+inoremap <buffer> <CR> <C-\><C-O>:call MtgEnter()<CR>
+autocmd TextChanged,TextChangedI,CursorHold,InsertLeave <buffer> silent! update
+autocmd FocusLost <buffer> silent! update
+if line('$') == 1 && getline(1) == ''
+    call setline(1, strftime('%H:%M:%S '))
+elseif getline('$') !~ '^\d\d:\d\d:\d\d '
+    call append('$', strftime('%H:%M:%S '))
+endif
+normal! G$
+startinsert!
+VIM
+    } > "$dir/.mtg/stream.vim"
+    cd "$dir" || exit 1
+    exec vim -S .mtg/stream.vim stream.txt
+}
+
+ask_role() {
+    dir=$1
+    cd "$dir" || exit 1
+    exec claude --append-system-prompt "$(cat "$dir/.mtg/system.txt")"
+}
+
+# One notes pass. Several can be started at once (the loop, its exit trap,
+# the end): a mkdir lock runs them one at a time, and the checksum of the
+# inputs behind notes.md is kept, so a pass with nothing new exits without
+# calling claude. The final pass always runs and writes notes.md from scratch.
+pass_role() {
+    dir=$1
+    askpane=$2
+    final=$3
+    model=${MTG_MODEL:-sonnet}
+    # claude -p must not run from $HOME (block-home-dir hook exits 0 with a refusal)
+    cd "$dir" || exit 1
+    [ -d .mtg ] || exit 0                         # meeting already cleaned up
+    [ -z "$final" ] && [ -e .mtg/ending ] && exit 0
+    until mkdir .mtg/pass.lock 2>/dev/null; do
+        [ -d .mtg ] || exit 0
+        pid=$(cat .mtg/pass.lock/pid 2>/dev/null)
+        if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+            rm -rf .mtg/pass.lock
+        else
+            sleep 2
+        fi
+    done
+    echo $$ > .mtg/pass.lock/pid
+    trap 'rm -rf "$dir/.mtg/pass.lock"' EXIT
+    # replace chat.txt only from a capture that worked: once the session is
+    # killed the capture fails, and an empty chat.txt would drop the chat
+    if [ -n "$askpane" ] && tmux capture-pane -p -S - -t "$askpane" > .mtg/chat.tmp 2>/dev/null; then
+        mv .mtg/chat.tmp .mtg/chat.txt
+    else
+        rm -f .mtg/chat.tmp
+    fi
+    sum=$(cat stream.txt .mtg/chat.txt directives.md 2>/dev/null | cksum)
+    [ -z "$final" ] && [ "$sum" = "$(cat .mtg/notes.sum 2>/dev/null)" ] && exit 0
+    if [ -n "$final" ]; then
+        stage="This is the FINAL pass: the meeting is over. Write the notes fresh
+from the inputs (there is no CURRENT NOTES), as the version that goes to
+attendees. Drop anything that only made sense mid-meeting."
+    else
+        stage="The meeting is in progress. Keep the structure and wording of
+CURRENT NOTES stable unless new material changes it."
+    fi
+    out=$(
+        {
+            cat <<EOF
+You maintain the notes of a meeting held on ${dir##*/} (date, then slug).
+Output ONLY the complete notes document in Markdown, nothing before or after
+it, no code fence.
+
+$stage
+
+Inputs below, each between marker lines:
+- CURRENT NOTES: your previous output.
+- STREAM: the user's timestamped raw thoughts and meeting transcript, typed
+  fast, with typos. Read through the typos.
+- CHAT: a capture of the user's side conversation with an assistant. Use it
+  for context. Suggestions in the chat are NOT edits until they are in
+  DIRECTIVES.
+- DIRECTIVES: edits the user approved. Treat them as authoritative.
+
+Notes format: a specific title from the content, the date, then sections
+Decisions, Action items (owner, task, date if stated), Open questions,
+Discussion summary; leave out a section with nothing in it. Write terse
+bullets in plain language. Never invent names, dates, or numbers; when a
+name, spelling, or meaning is uncertain, add "(?)" after it and nothing else.
+Never describe the inputs: no "the stream says", no quoting the stream as
+evidence, no notes about what was or was not recorded.
+EOF
+            if [ -z "$final" ]; then
+                echo '=== CURRENT NOTES ==='; cat notes.md 2>/dev/null
+            fi
+            echo '=== STREAM ===';        cat stream.txt 2>/dev/null
+            echo '=== CHAT ===';          cat .mtg/chat.txt 2>/dev/null
+            echo '=== DIRECTIVES ===';    cat directives.md 2>/dev/null
+        } | claude -p --model "$model" 2>.mtg/claude.err
+    )
+    if [ -n "$out" ] && ! printf '%s' "$out" | grep -q 'blocked by hook'; then
+        printf '%s\n' "$out" > .mtg/notes.tmp && mv .mtg/notes.tmp notes.md
+        echo "$sum" > .mtg/notes.sum
+        echo "$(date +%H:%M:%S) notes updated${final:+ (final)}"
+    else
+        echo "$(date +%H:%M:%S) notes pass failed; see $dir/.mtg/claude.err"
+        exit 1
+    fi
+}
+
+# Start a pass in its own process group with SIGHUP ignored, so neither Ctrl-C
+# in the notes pane nor tmux kill-session reaches the notes agent mid-pass.
+detached_pass() {
+    nohup perl -e 'setpgrp(0, 0); exec @ARGV' bash "$SELF" --pass "$@" \
+        < /dev/null >> "$1/.mtg/pass.log" 2>&1 &
+}
+
+notes_role() {
+    dir=$1
+    askpane=$2
+    interval=${MTG_INTERVAL:-45}
+    shown=
+    cd "$dir" || exit 1
+    # Ctrl-C here, or killing the session, ends this loop but not the notes
+    # agent: a pass already running finishes, and one more picks up the rest
+    trap 'detached_pass "$dir" "$askpane"; exit 0' INT TERM HUP
+    while true; do
+        detached_pass "$dir" "$askpane"
+        if ! wait $!; then
+            tail -1 .mtg/pass.log
+        elif [ -f notes.md ] && [ "$(stat -f %m notes.md)" != "$shown" ]; then
+            shown=$(stat -f %m notes.md)
+            clear
+            echo "NOTES (updated $(date -r "$shown" +%H:%M:%S)); file: $dir/notes.md"
+            echo "To end the meeting, type ciao here (or in either other column) and Enter."
+            echo
+            cat notes.md
+        fi
+        if read -r -t "$interval" line && printf '%s\n' "$line" | grep -qiE "$ENDWORD"; then
+            echo "ending; final notes being written..."
+            exec bash "$SELF" -e "$dir"
+        fi
+    done
+}
+
+# End a meeting: stop the columns, let a running pass finish, write the final
+# notes from scratch, delete the scratch files, close the session. Run from
+# inside the session it hands itself to tmux run-shell, which outlives the
+# session; a background job of a pane dies with the pane (vim's system()
+# took one down with it).
+end_role() {
+    dir=$1
+    sess=mtg-${dir##*/}
+    cd "$dir" || exit 1
+    mkdir -p .mtg
+    # meetings from before .mtg/ kept these at the top level
+    [ -f chat.txt ] && [ ! -f .mtg/chat.txt ] && mv chat.txt .mtg/chat.txt
+    rm -rf stream.vim system.txt chat.txt claude.err pass.log .notes.sum .pass.lock
+    if [ -n "$TMUX" ] && [ "$(tmux display -p '#{session_name}' 2>/dev/null)" = "$sess" ] && [ -z "$MTG_DETACHED" ]; then
+        tmux run-shell -b "MTG_DETACHED=1 bash '$SELF' -e '$dir' > /dev/null 2>&1"
+        exit 0
+    fi
+    touch .mtg/ending
+    askpane=$(tmux list-panes -t "$sess" -F '#{pane_id} #{pane_start_command}' 2>/dev/null | awk '/--ask/ {print $1}')
+    if [ -n "$askpane" ] && tmux capture-pane -p -S - -t "$askpane" > .mtg/chat.tmp 2>/dev/null; then
+        mv .mtg/chat.tmp .mtg/chat.txt
+    fi
+    tmux kill-session -t "$sess" 2>/dev/null
+    echo "final notes pass (waits for any pass already running)..."
+    if bash "$SELF" --pass "$dir" "" final >> .mtg/pass.log 2>&1; then
+        [ -s directives.md ] || rm -f directives.md
+        # vim's swap file, left because the session was killed under it
+        rm -rf .mtg .stream.txt.sw?
+        echo "notes: $dir/notes.md"
+    else
+        rm -f .mtg/ending
+        touch .mtg/failed
+        echo "final notes pass failed; see $dir/.mtg/claude.err" >&2
+        return 1
+    fi
+}
+
+case $1 in
+    --stream) stream_role "$2"; exit ;;
+    --ask)    ask_role "$2"; exit ;;
+    --notes)  notes_role "$2" "$3"; exit ;;
+    --pass)   pass_role "$2" "$3" "$4"; exit ;;
+    -l)       ls -1 "$MTG_HOME"; exit ;;
+esac
+
+command -v tmux > /dev/null || { echo "mtg: tmux not found" >&2; exit 1; }
+command -v claude > /dev/null || { echo "mtg: claude not found" >&2; exit 1; }
+
+end=
+[ "$1" = -e ] && { end=1; shift; }
+case $1 in
+    /*) dir=${1%/} ;;                                   # absolute meeting dir
+    *)  if [ -n "$1" ] && [ -d "$MTG_HOME/$1" ]; then
+            dir=$MTG_HOME/$1                            # full dir name
+        else
+            slug=$(printf '%s' "${1:-meeting}" | tr 'A-Z ' 'a-z-' | tr -cd 'a-z0-9-')
+            dir=$MTG_HOME/$(date +%Y-%m-%d)-$slug
+        fi ;;
+esac
+sess=mtg-${dir##*/}
+
+if [ -n "$end" ]; then
+    [ -d "$dir" ] || { echo "mtg: no meeting dir $dir" >&2; exit 1; }
+    end_role "$dir"
+    exit
+fi
+
+# a session whose columns have all exited is leftover; start it fresh
+if tmux has-session -t "$sess" 2>/dev/null &&
+   ! tmux list-panes -t "$sess" -F '#{pane_dead}' | grep -q 0; then
+    tmux kill-session -t "$sess"
+fi
+
+if ! tmux has-session -t "$sess" 2>/dev/null; then
+    mkdir -p "$dir/.mtg" && touch "$dir/stream.txt" "$dir/directives.md" || exit 1
+    rm -f "$dir/.mtg/ending" "$dir/.mtg/failed"
+    sysprompt="You are the user's assistant during a live meeting. The file $dir/stream.txt is their timestamped raw stream of consciousness and meeting transcript; it keeps growing. Before answering each message, read it again (tail it if long) and use it as context. A separate agent maintains the meeting notes in $dir/notes.md from the stream, this conversation, and $dir/directives.md. You do not edit notes.md. When the user asks about the notes or you see a gap or error in them, read notes.md and suggest concrete edits as short before/after items. Only when the user approves an edit, append it to $dir/directives.md as one plain-language instruction per line, then say it was recorded. If a message is only the word ciao or bai, the meeting is over: run this command with the Bash tool and do nothing else: bash '$SELF' -e '$dir'. Keep answers short; the user is in a meeting."
+    printf '%s\n' "$sysprompt" > "$dir/.mtg/system.txt"
+    streampane=$(tmux new-session -d -P -F '#{pane_id}' -s "$sess" -n mtg -c "$dir" "bash '$SELF' --stream '$dir'")
+    # notes pane needs the ask pane id, so create ask first, then fill notes
+    askpane=$(tmux split-window -h -P -F '#{pane_id}' -t "$sess:mtg" -c "$dir" "bash '$SELF' --ask '$dir'")
+    tmux split-window -h -t "$sess:mtg" -c "$dir" "bash '$SELF' --notes '$dir' '$askpane'"
+    tmux set-option -t "$sess" remain-on-exit on
+    tmux select-layout -t "$sess:mtg" even-horizontal
+    tmux select-pane -t "$streampane"
+fi
+
+if [ -n "$TMUX" ]; then
+    tmux switch-client -t "$sess"
+    exit
+fi
+tmux attach -t "$sess"
+# back in the terminal: if the meeting was ended, wait for the final notes
+if ! tmux has-session -t "$sess" 2>/dev/null && [ -e "$dir/.mtg/ending" ]; then
+    echo "mtg: writing final notes..."
+    for _ in $(seq 300); do [ -e "$dir/.mtg/ending" ] || break; sleep 1; done
+fi
+if [ -e "$dir/.mtg/failed" ]; then
+    echo "mtg: final notes pass failed; see $dir/.mtg/claude.err" >&2
+elif ! tmux has-session -t "$sess" 2>/dev/null; then
+    echo "mtg: meeting ended; notes: $dir/notes.md"
+fi
