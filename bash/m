@@ -4186,19 +4186,31 @@ case "$action" in
         else
             _sq=("${scope_qargs[@]+"${scope_qargs[@]}"}")
         fi
-        # Special handling for reply/fwd actions: default to message #1 if no index provided
-        if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all)$ ]] && [[ ${#rest[@]} -eq 0 ]]; then
-            log_warn "No message index provided, assuming message #1"
-            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$page_size" "$action" "1"
-        else
-            # Same -n as the inbox listing the index came from, so the
-            # backend's index cache hits instead of re-fetching (2026-09-29).
-            _act_count="$page_size"
-            if [[ -n "$page_offset" ]]; then
-                _act_count=$(( ( page_offset / page_size + 1 ) * page_size ))
+        # Missing index defaults to message #1, with a warning. Checked over the
+        # WHOLE of rest, not just "rest is empty": `m gv fwd addr` used to pass
+        # `fwd addr`, the backend took addr as the index, and died with its
+        # usage line (2026-10-22). The backend reads the first positional as
+        # INDEX, so prepending 1 is exact. trash is left out on purpose (with
+        # --always it purges the sender), and draft takes no index here (it is
+        # the compose-a-new-draft path).
+        if [[ "$action" =~ ^(reply|reply-all|fwd|sfwd|sreply|sreply-all|open|thread|archive|unarchive|read|unread)$ ]]; then
+            _has_index=0
+            for _mn in "${rest[@]+"${rest[@]}"}"; do
+                [[ "$_mn" =~ ^[0-9]+([,-][0-9]+)*$ ]] && { _has_index=1; break; }
+            done
+            if (( ! _has_index )); then
+                log_warn "no index given for '$action'; assuming message #1"
+                rest=("1" "${rest[@]+"${rest[@]}"}")
             fi
-            exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$_act_count" "${_sq[@]+"${_sq[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
+            unset _has_index _mn
         fi
+        # Same -n as the inbox listing the index came from, so the
+        # backend's index cache hits instead of re-fetching (2026-09-29).
+        _act_count="$page_size"
+        if [[ -n "$page_offset" ]]; then
+            _act_count=$(( ( page_offset / page_size + 1 ) * page_size ))
+        fi
+        exec gmail-api-rw "${gmail_acct[@]+"${gmail_acct[@]}"}" -n "$_act_count" "${_sq[@]+"${_sq[@]}"}" "$action" "${rest[@]+"${rest[@]}"}"
         ;;
     urls)
         # Extract URLs from message
