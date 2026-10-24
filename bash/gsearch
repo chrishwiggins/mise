@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# gsearch: old name for g, kept for the site:... aliases that call it.
+exec g "$@"
