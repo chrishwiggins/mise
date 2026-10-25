@@ -1792,7 +1792,9 @@ def _mguard_or_exit(service, raw_b64=None, draft_id=None):
     if not recipients:
         return
     mguard = Path(__file__).resolve().parent / "mguard"
-    cmd = [str(mguard), "check", "--from", sender]
+    # Run mguard under this interpreter, not its shebang: launchd's PATH has no
+    # python3.11, so `env python3.11` failed and every scheduled send was refused.
+    cmd = [sys.executable, str(mguard), "check", "--from", sender]
     for r in recipients:
         cmd += ["--to", r]
     try:
