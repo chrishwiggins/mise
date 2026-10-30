@@ -7,11 +7,13 @@
 #        tc list <win.tab>       - same as tc focus <win.tab>
 #        tc -t <target> <color>  - same as above
 #          target: 1.2           - win.tab number
-#                  012           - tty number (short)
+#                  1             - window 1, tab 1 (same as 1.1)
+#                  012           - tty number (3+ digits)
 #                  /dev/ttys012  - full tty path
 #        tc title <text>         - save window title
 #        tc focus <win.tab>      - bring window to front
 #        tc badge [target] <text> - pane watermark (\n = newline, 'clear' removes)
+#        tc banner ...           - synonym for tc badge
 
 # Color Name API base URL (https://api.color.pizza)
 COLOR_API="https://api.color.pizza/v1"
@@ -60,6 +62,42 @@ resolve_color() {
   esac
 }
 
+# resolve_target <spec> - turn a user-typed target into a tty path.
+#   1.2        win.tab, resolved through iTerm2
+#   1          BARE N IS A WINDOW, tab 1 (so `tc list 1 badge x` == `tc list 1.1 badge x`),
+#              matching how `tc focus` reads a bare N. It is NOT tty number N:
+#              /dev/ttys1 exists and is owned by root, so writing to it HANGS
+#              rather than failing, which is how this was found.
+#   012        tty number, zero-padded as ps and iTerm print it (3+ digits)
+#   anything else passes through (ttysNNN, /dev/ttysNNN, or a file when testing)
+resolve_target() {
+  local spec="$1" win tab
+  if [[ "$spec" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    win="${spec%%.*}"
+    tab="${spec##*.}"
+  elif [[ "$spec" =~ ^[0-9]{3,}$ ]]; then
+    printf '/dev/ttys%s' "$spec"
+    return 0
+  elif [[ "$spec" =~ ^[0-9]+$ ]]; then
+    win="$spec"
+    tab=1
+  elif [[ "$spec" =~ ^ttys[0-9]+$ ]]; then
+    # the form `ps -o tty=` prints
+    printf '/dev/%s' "$spec"
+    return 0
+  else
+    printf '%s' "$spec"
+    return 0
+  fi
+  osascript -e "
+    tell application \"iTerm2\"
+      set t to tab $tab of window $win
+      set s to current session of t
+      return tty of s
+    end tell
+  " 2>/dev/null
+}
+
 # Shorthand: tc 01 <color> -> tc 0 <color> ; tc <color>
 # "01" means "color both window 1.1 (home shell) AND the current window"
 if [[ "$1" == "01" ]]; then
@@ -76,36 +114,16 @@ else
 fi
 
 # Parse -t option for target tty
-# Accepts: win.tab (1.2), tty number (012), or full path (/dev/ttys012)
+# Accepts: win.tab (1.2), bare window (1 = 1.1), tty number (012),
+# ps's ttys012 form, or a full path. See resolve_target above.
 TARGET=""
 if [[ "$1" == "-t" ]]; then
   spec="$2"
   shift 2
-
-  if [[ "$spec" =~ ^[0-9]+\.[0-9]+$ ]]; then
-    # win.tab format - look up tty via AppleScript
-    win="${spec%%.*}"
-    tab="${spec##*.}"
-    TARGET=$(osascript -e "
-      tell application \"iTerm2\"
-        set t to tab $tab of window $win
-        set s to current session of t
-        return tty of s
-      end tell
-    " 2>/dev/null)
-    if [[ -z "$TARGET" ]]; then
-      echo "Error: Cannot find window $spec" >&2
-      exit 1
-    fi
-  elif [[ "$spec" =~ ^[0-9]+$ ]]; then
-    # tty number - prepend /dev/ttys
-    TARGET="/dev/ttys$spec"
-  elif [[ "$spec" =~ ^ttys[0-9]+$ ]]; then
-    # ps -o tty= form (ttys012) - prepend /dev/
-    TARGET="/dev/$spec"
-  else
-    # full path - use as-is
-    TARGET="$spec"
+  TARGET=$(resolve_target "$spec")
+  if [[ -z "$TARGET" ]]; then
+    echo "Error: Cannot find window $spec" >&2
+    exit 1
   fi
 fi
 
@@ -218,25 +236,10 @@ print(colors[0]['name'] if colors else '')
     # If given target + color args, act like -t (e.g., tc list 1.1 harvard)
     if [[ -n "$2" && -n "$3" ]]; then
       spec="$2"
-      color="$3"
-      if [[ "$spec" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        win="${spec%%.*}"
-        tab="${spec##*.}"
-        TARGET=$(osascript -e "
-          tell application \"iTerm2\"
-            set t to tab $tab of window $win
-            set s to current session of t
-            return tty of s
-          end tell
-        " 2>/dev/null)
-        if [[ -z "$TARGET" ]]; then
-          echo "Error: Cannot find window $spec" >&2
-          exit 1
-        fi
-      elif [[ "$spec" =~ ^[0-9]+$ ]]; then
-        TARGET="/dev/ttys$spec"
-      else
-        TARGET="$spec"
+      TARGET=$(resolve_target "$spec")
+      if [[ -z "$TARGET" ]]; then
+        echo "Error: Cannot find window $spec" >&2
+        exit 1
       fi
       # Re-invoke with the color (shift to make $color become $1 for case)
       shift 2
@@ -281,7 +284,7 @@ print(colors[0]['name'] if colors else '')
     printf '\033]0;%s\007' "$*"
     ;;
 
-  badge)
+  badge|banner)
     # tc badge [target] <text>  - iTerm2 badge: big translucent watermark text
     # in a pane's upper right. Unlike the titlebar color, it is pane state, so
     # a full-screen TUI (a Claude session) repainting does not erase it; this
@@ -289,13 +292,16 @@ print(colors[0]['name'] if colors else '')
     # starts a new line. `clear` removes the badge.
     #   tc badge "build box"            # this pane
     #   tc badge 012 'm-97\npid38379'   # tty ttys012 (also ttys012, /dev/ttys012 or 1.2)
+    #   tc badge 1 "foo"                # window 1 tab 1; `tc banner` works the same
     #   tc badge 012 clear
     if [[ -z "$TARGET" && $# -ge 3 && ( "$2" =~ ^[0-9]+(\.[0-9]+)?$ || "$2" =~ ^ttys[0-9]+$ || "$2" == /dev/tty* ) ]]; then
-      exec "$0" -t "$2" badge "${@:3}"
+      # Keep the verb as typed, so `banner` stays `banner` in any error text.
+      exec "$0" -t "$(resolve_target "$2")" "$1" "${@:3}"
     fi
     shift
     if [[ $# -eq 0 ]]; then
-      echo "Usage: tc badge [target] <text>   (target: 012, /dev/ttys012 or 1.2; text 'clear' removes)" >&2
+      echo "Usage: tc badge [target] <text>   (target: 1.1, 1, 012, ttys012 or /dev/ttys012; text 'clear' removes)" >&2
+      echo "       tc banner is a synonym for tc badge" >&2
       exit 1
     fi
     text="$*"
@@ -1070,6 +1076,8 @@ Usage: tc <color>                 # current window
        tc title <text>            # set window title
        tc focus <win.tab>         # bring window to front
        tc badge [target] <text>   # watermark a pane; survives Claude repaints ('clear' removes)
+       tc banner [target] <text>  # synonym for badge
+                                  # target: 1.1, or bare 1 meaning window 1 tab 1
        tc join <w.t> <w.t> [...]  # tile windows side by side
        tc hanabi [<win>|all]      # random distinct color per tab
        tc which [<uuid>|<slug>]   # which win.tab is a prj/claude session
