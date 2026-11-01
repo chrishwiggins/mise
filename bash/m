@@ -93,6 +93,21 @@ MAIL_TOOLS_CONFIG="${MAIL_TOOLS_CONFIG:-$HOME/.config/mail-tools/accounts.json}"
 M_LIST_CACHE_TTL="${M_LIST_CACHE_TTL:-30}" # NOTE: declared, not yet used; gmail-api-rw caches by (count, query, account) without TTL
 M_QUIET_MODE="${M_QUIET_MODE:-0}"
 
+# --- tunable numbers (each overridable from the environment) ---
+# Messages per listing page; ppN pages in steps of this. Exported so the
+# backend's own -n default is the same number (gmail-api-rw DEFAULT_COUNT
+# reads it), even on the calls below that pass no -n.
+M_PAGE_SIZE="${M_PAGE_SIZE:-20}"; export M_PAGE_SIZE
+# Creating a draft is one API round trip; past this something is hung.
+M_DRAFT_TIMEOUT="${M_DRAFT_TIMEOUT:-30s}"
+# Loading a scheduled-send launchd job is local and should be instant.
+M_LAUNCHCTL_TIMEOUT="${M_LAUNCHCTL_TIMEOUT:-10s}"
+# Where m remembers the previous invocation's argv, to spot a tcsh !! that
+# pasted that command into a --text body (see _warn_history_expansion).
+M_LAST_CMD_FILE="${M_LAST_CMD_FILE:-$HOME/.cache/m/last-cmd}"
+# Shorter previous commands (`m 3`) are too common as substrings to flag.
+M_LAST_CMD_MIN_LEN=4
+
 # Source optional user config
 if [[ -f "$HOME/.config/m/config" ]]; then
     source "$HOME/.config/m/config"
@@ -785,7 +800,7 @@ _schedule_send() {
 
     # Create the draft on the SAME account the scheduled wrapper will send it from
     local draft_output
-    if ! draft_output=$(timeout 30s gmail-api-rw ${account:+-e "$account"} draft -H "$temp_eml" \
+    if ! draft_output=$(timeout "$M_DRAFT_TIMEOUT" gmail-api-rw ${account:+-e "$account"} draft -H "$temp_eml" \
             "${attach_list[@]+"${attach_list[@]}"}" 2>&1); then
         log_error "Failed to create draft (may have timed out after 30s)"
         echo "$draft_output" >&2
@@ -916,7 +931,7 @@ EOF
     fi
 
     # Load the job with timeout
-    if ! timeout 10s launchctl load "$plist_file" 2>/dev/null; then
+    if ! timeout "$M_LAUNCHCTL_TIMEOUT" launchctl load "$plist_file" 2>/dev/null; then
         log_error "Failed to load launchd job: $plist_file"
         rm -f "$plist_file"
         return 1
@@ -1833,6 +1848,36 @@ log_ok() { (( M_QUIET_MODE )) || echo -e "\033[0;32m✅\033[0m $*" >&2; }
 log_warn() { echo -e "\033[0;33m⚠️\033[0m $*" >&2; }
 log_error() { echo -e "\033[0;31m❌\033[0m $*" >&2; }
 
+# tcsh expands !! even inside single or double quotes, before m ever runs, so
+# `--text="thanks!!! see you"` arrives with the previous command spliced in
+# (2026-11-01, a reply-all). m cannot see the substitution itself, only
+# its residue, so warn when a body contains the previous m invocation or an
+# `m <word>` command shape. Warn only: the backend's send prompt still gates.
+# Then record this invocation for the next run.
+_warn_history_expansion() {
+    local prev="" body hit=""
+    [[ -r "$M_LAST_CMD_FILE" ]] && prev="$(<"$M_LAST_CMD_FILE")"
+    local a
+    for a in "$@"; do
+        case "$a" in
+            --text=*) body="${a#--text=}" ;;
+            text=*)   body="${a#text=}" ;;
+            *) continue ;;
+        esac
+        if (( ${#prev} >= M_LAST_CMD_MIN_LEN )) && [[ "$body" == *"$prev"* ]]; then
+            hit="your previous command (m $prev)"
+        elif [[ "$body" =~ (^|[[:space:]])m\ [[:alnum:]-]+ ]]; then
+            hit="something that looks like an m command"
+        fi
+        if [[ -n "$hit" ]]; then
+            log_warn "the body contains $hit; tcsh expands !! even inside quotes. Escape each ! as \\! and check the text below before answering y."
+            break
+        fi
+    done
+    mkdir -p "$(dirname "$M_LAST_CMD_FILE")" 2>/dev/null
+    printf '%s' "$*" > "$M_LAST_CMD_FILE" 2>/dev/null || true
+}
+
 log_command() {
     if [[ -n "${M_ANALYTICS_ENABLED:-}" ]] && (( M_ANALYTICS_ENABLED )); then
         # Silent background logging if possible
@@ -2538,6 +2583,7 @@ EOF
 #      sets $account
 #   5. Anything else accumulates in `rest`
 # After the loop, the action router (case "$action") consumes `rest`.
+_warn_history_expansion "$@"
 web=0; dry_run=0; no_cache=0; important_filter=0; spam_mail_flag=0; all_mail_flag=0
 action=""; account=""; rest=()
 # Every --long flag this loop recognizes. Used ONLY to turn a dropped-dash typo
@@ -2904,7 +2950,7 @@ fi
 # attachment savers, -S/--save; read action words: the compose/read verbs.
 _pg_read_flags=" -p --peek -x --headers -A --save-attachments-only --open-attachments -S --save -t --text "
 _pg_read_actions=" reply reply-all fwd forward draft open trash archive unarchive thread read unread sfwd sreply sreply-all urls unsub otp otp-add pdf grep peek "
-page_offset=""; page_size=10; filtered_rest=(); index_after_page=0; _seen_pp=0
+page_offset=""; page_size="$M_PAGE_SIZE"; filtered_rest=(); index_after_page=0; _seen_pp=0
 for r in "${rest[@]+"${rest[@]}"}"; do
     if [[ "$r" =~ ^pp([0-9]+)$ ]]; then
         _seen_pp=1
