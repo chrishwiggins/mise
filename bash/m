@@ -2251,7 +2251,7 @@ parse_action_args() {
         if _is_single_target_action "$PA_ACTION_WORD" && (( ${#PA_MESSAGE_NUMBERS[@]} > 1 )); then
             local _all_bare_single=1 _mn
             for _mn in "${PA_MESSAGE_NUMBERS[@]}"; do
-                if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                if [[ ! "$_mn" =~ ^[0-9]{1,3}(,[0-9]{1,3})*$ ]]; then
                     _all_bare_single=0
                     break
                 fi
@@ -3396,7 +3396,12 @@ case "$action" in
             if [[ -n "$page_offset" && ${#message_numbers[@]} -gt 0 && "$index_after_page" == "0" ]]; then
                 _pg_all_bare_single=1
                 for _mn in "${message_numbers[@]}"; do
-                    if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                    # With -p a trailing ppN also overrides a range (3-5 -p pp2),
+                    # else the peek ran on global 3-5; without -p ranges still list.
+                    if [[ "$_mn" =~ ^[0-9]{1,3}(,[0-9]{1,3})*$ ]] \
+                       || { (( peek_flag )) && [[ "$_mn" =~ ^[0-9]{1,3}-[0-9]{1,3}$ ]]; }; then
+                        :
+                    else
                         _pg_all_bare_single=0
                         break
                     fi
@@ -3504,7 +3509,7 @@ case "$action" in
                     if (( ${#message_numbers[@]} > 1 )); then
                         _all_bare_single=1
                         for _mn in "${message_numbers[@]}"; do
-                            if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                            if [[ ! "$_mn" =~ ^[0-9]{1,3}(,[0-9]{1,3})*$ ]]; then
                                 _all_bare_single=0
                                 break
                             fi
@@ -3776,7 +3781,7 @@ case "$action" in
             if (( ${#message_numbers[@]} > 1 )); then
                 _all_bare_single=1
                 for _mn in "${message_numbers[@]}"; do
-                    if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                    if [[ ! "$_mn" =~ ^[0-9]{1,3}(,[0-9]{1,3})*$ ]]; then
                         _all_bare_single=0
                         break
                     fi
@@ -4189,7 +4194,7 @@ case "$action" in
         if _is_single_target_action "$action" && (( ${#rest[@]} > 1 )); then
             _all_bare_single=1
             for _mn in "${rest[@]}"; do
-                if [[ "$_mn" != [0-9] && "$_mn" != [0-9][0-9] && "$_mn" != [0-9][0-9][0-9] ]]; then
+                if [[ ! "$_mn" =~ ^[0-9]{1,3}(,[0-9]{1,3})*$ ]]; then
                     _all_bare_single=0
                     break
                 fi
