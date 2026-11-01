@@ -3662,6 +3662,20 @@ case "$action" in
             action_word="$PA_ACTION_WORD"
             message_numbers=("${PA_MESSAGE_NUMBERS[@]+"${PA_MESSAGE_NUMBERS[@]}"}")
             rest=("${PA_REMAINING[@]+"${PA_REMAINING[@]}"}")
+            # --all used to be dropped here, so `m out --all` listed only
+            # in:sent (2026-11-01). Fold in:anywhere (the backend prepends
+            # in:sent, giving sent mail including trash and spam) for listing
+            # and reading. With a compose verb, refuse: N would resolve
+            # against a scope the user may not have listed, and replying to
+            # the wrong message is worse than retyping.
+            if (( all_mail_flag )); then
+                case "$action_word" in
+                    reply|reply-all|fwd|forward|draft)
+                        log_error "--all is not supported with '$action_word' from out; list with 'm out --all', then run '$action_word' without --all on a message from 'm out'"
+                        exit 2 ;;
+                esac
+                query_string="in:anywhere${query_string:+ $query_string}"
+            fi
             peek_flag=0
             save_flag=0
             save_file=""
