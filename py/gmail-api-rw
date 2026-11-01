@@ -2700,14 +2700,14 @@ def do_reply(service, index, count, query, args, as_draft=False, account=None,
             print(_format_attachment_line(getattr(args, 'attach', None)), file=sys.stderr)
 
             try:
-                answer = input("Send this reply? [y/n/e/a] ")
+                answer = input("Send this reply? [Y/n/e/a] ")
             except (EOFError, KeyboardInterrupt):
                 answer = "n"
 
             answer = answer.strip().lower()
-            if answer in ('y', 'yes'):
+            if answer in ('y', 'yes', ''):
                 break
-            elif answer in ('n', 'no', ''):
+            elif answer in ('n', 'no'):
                 print("Aborted.", file=sys.stderr)
                 sys.exit(1)
             elif answer in ('a', 'att', 'attach'):
