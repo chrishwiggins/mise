@@ -2792,15 +2792,30 @@ done
 # untouched.
 :  # (out/sent send-typo confirm gate removed 2026-08-27; see note above)
 
-# Infer 'send' if no action was given but rest contains an email recipient.
-# This is the m-is-forgiving layer doing its job: `m foo@bar.com -c baz@qux.com`
-# is unambiguously a send (no other action takes a bare email positional), so
-# we save the user typing 'send' and announce the inference with a yellow ⚠️.
+# No action word, but rest holds an email recipient: `m foo@bar.com` reads as a
+# send. Since 2026-11-01 (Chris) that guess is ASKED, not taken: a mistyped
+# action word that leaves a stray address in rest used to arm a send silently,
+# and Enter now means yes at the reply and forward prompts. On a terminal the
+# question defaults to No; with no terminal it stops (exit 2) and names the
+# verb. --dry-run still infers, since nothing can go out.
 if [[ -z "$action" ]] && (( ${#rest[@]} > 0 )); then
     for _r in "${rest[@]}"; do
         if [[ "$_r" =~ ^[^[:space:]]+@[^[:space:]]+\.[^[:space:]]+$ ]]; then
+            if (( dry_run )); then
+                log_warn "no action given; inferring 'send' from recipient '$_r' (dry run)"
+            elif [[ -t 0 && -r /dev/tty ]]; then
+                log_warn "no action given, but '$_r' looks like a recipient"
+                _ans=""
+                read -r -p "Compose a send to $_r? [y/N] " _ans </dev/tty || _ans=""
+                if [[ ! "$_ans" =~ ^[Yy] ]]; then
+                    log_error "Aborted. To send, type the verb: m send $_r ..."
+                    exit 1
+                fi
+            else
+                log_error "no action given and '$_r' looks like a recipient; type the verb: m send $_r ..."
+                exit 2
+            fi
             action="send"
-            log_warn "no action given; inferring 'send' from recipient '$_r'"
             break
         fi
     done

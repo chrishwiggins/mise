@@ -2910,10 +2910,10 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
 
     # Summarize attachments carried over from the original (read-only here:
     # forward re-attaches the original's parts, it does not take -a).
-    carried = []
-    for part in orig.walk():
-        if "attachment" in (part.get("Content-Disposition", "") or ""):
-            carried.append(part.get_filename() or "attachment.bin")
+    # Names are the fname_norm ones the recipient will see (same as -A saves),
+    # from the same part definition the carry loop below uses.
+    carried = [disk for _p, _f, disk in
+               attachment_disk_names(iter_attachment_parts(orig))]
 
     # Confirm before sending (skip for drafts)
     if not as_draft and sys.stdin.isatty():
@@ -2931,14 +2931,16 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
             else:
                 print("Attachments: none", file=sys.stderr)
             try:
-                answer = input("Send this forward? [y/n/e] ")
+                answer = input("Send this forward? [Y/n/e] ")
             except (EOFError, KeyboardInterrupt):
                 answer = "n"
 
+            # Enter means yes, as at the reply prompt (Chris, 2026-11-01).
+            # EOF and ^C still abort: they set "n" above, never "".
             answer = answer.strip().lower()
-            if answer in ('y', 'yes'):
+            if answer in ('y', 'yes', ''):
                 break
-            elif answer in ('n', 'no', ''):
+            elif answer in ('n', 'no'):
                 print("Aborted.", file=sys.stderr)
                 sys.exit(1)
             elif answer in ('e', 'edit'):
@@ -2985,7 +2987,10 @@ def do_forward(service, index, count, query, recipient, subject_override=None,
     # pasted into the body -- Content-Disposition: inline with a cid: --
     # forwards with those images instead of silently dropping them. Filtering
     # on "attachment" here meant a forwarded screenshot email arrived empty.
-    for part, filename in iter_attachment_parts(orig):
+    # The recipient sees the fname_norm name (Chris, 2026-11-01), the same
+    # one -A would save, not the sender's spaces and punctuation.
+    for part, _orig_name, filename in attachment_disk_names(
+            iter_attachment_parts(orig)):
         payload = part.get_payload(decode=True)
         if not payload:
             # message/rfc822 (an attached email) has no decoded payload: its
