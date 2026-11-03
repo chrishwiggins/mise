@@ -287,6 +287,12 @@ cmd_new() {
     exit 1
   fi
 
+  # Slugs are embedded in AppleScript strings (tab titles, window matching)
+  if [[ ! "$slug" =~ ^[A-Za-z0-9._@-]+$ ]]; then
+    echo "Error: slug '$slug' must match [A-Za-z0-9._@-]+" >&2
+    exit 1
+  fi
+
   # Resolve dir to absolute path
   dir=$(cd "$dir" 2>/dev/null && pwd -P)
   if [[ -z "$dir" ]]; then
@@ -498,6 +504,14 @@ if matches:
     if [[ -n "$session_id_check" ]]; then
       # Check if claude --resume <session_id> is actually running right now
       if /usr/bin/pgrep -f "claude --resume $session_id_check" > /dev/null 2>&1; then
+        # Find the tty this session is running on and focus that window
+        local focus_tty
+        focus_tty=$(tc which "$session_id_check" 2>/dev/null | awk '{print $1; exit}')
+        if [[ -n "$focus_tty" ]]; then
+          tc focus "$focus_tty" 2>/dev/null
+          exit 0
+        fi
+        # Fallback if tc which fails: show the message and let user handle it
         echo "** '$slug' session $session_id_check is already running (may be hidden) **" >&2
         echo "Bring it to focus, or use 'prj -0 $slug' to start fresh." >&2
         exit 1
@@ -566,6 +580,14 @@ if matches:
     claude_cmd="$claude_cmd '$escaped_prompt'"
     echo "Initial prompt: $initial_prompt"
   fi
+  # claude_cmd is embedded in AppleScript double-quoted strings below, where
+  # backslash and double quote are escapes; the '\'' above is a syntax error there.
+  local as_cmd="${claude_cmd//\\/\\\\}"
+  as_cmd="${as_cmd//\"/\\\"}"
+  # Same for the cd line: shell-quote $dir, then AppleScript-escape it.
+  local as_cd="cd '${dir//\'/\'\\\'\'}'"
+  as_cd="${as_cd//\\/\\\\}"
+  as_cd="${as_cd//\"/\\\"}"
 
   # ── reopen claude tab in the surviving window ──────────────────
   if [[ -n "$reopen_win_id" ]]; then
@@ -579,8 +601,8 @@ if matches:
         set ns to current session of newTab
         tell ns
           set name to \"prj:$slug [claude]\"
-          write text \"cd '$dir'\"
-          write text \"$claude_cmd\"
+          write text \"$as_cd\"
+          write text \"$as_cmd\"
         end tell
         return tty of ns
       end tell
@@ -618,14 +640,14 @@ if matches:
   ascript+="
   tell sess1
     set name to \"prj:$slug [claude]\"
-    write text \"cd '$dir'\"
+    write text \"$as_cd\"
   end tell
 "
   for (( t=2; t<=num_tabs; t++ )); do
     ascript+="
   tell sess${t}
     set name to \"prj:$slug [shell${t}]\"
-    write text \"cd '$dir'\"
+    write text \"$as_cd\"
   end tell
 "
   done
@@ -636,7 +658,7 @@ if matches:
     select tab 1
   end tell
   tell sess1
-    write text \"$claude_cmd\"
+    write text \"$as_cmd\"
   end tell
   return id of newWin
 end tell
