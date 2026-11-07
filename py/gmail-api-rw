@@ -125,11 +125,15 @@ from pathlib import Path
 # Defaults chosen here; Gmail API hard limits are marked as such.
 # Messages listed when no -n is given. bash/m exports M_PAGE_SIZE so a call
 # that reaches us without -n still agrees with m's page size.
-DEFAULT_COUNT = int(os.environ.get("M_PAGE_SIZE") or 20)
+DEFAULT_COUNT = int(os.environ.get("M_PAGE_SIZE") or 10)
 # `inbox` subcommand: how far back a team-member sweep looks.
 DEFAULT_LOOKBACK_DAYS = 7
 # Fallback when no terminal width can be detected.
 DEFAULT_TERM_WIDTH = 80
+# Compose files: short names shown on vim's status line, e.g.
+# /tmp/m/re-lunch-friday.eml. The cap is on the slug, not the whole path.
+EDITOR_TMP_DIR = "/tmp/m"
+EDITOR_TMP_SLUG_MAX = 40
 # Gmail API limit: a batch request rejects more than 100 inner calls (HTTP 400).
 GMAIL_BATCH_GET_MAX = 100
 # Gmail API limit: messages.batchModify accepts at most 1000 ids per request.
@@ -1736,11 +1740,45 @@ def _save_draft_recovery(src_path, kind):
     shutil.copy(src_path, spool / f"last-draft-{kind}.eml")
 
 
+def _editor_tmpfile(hint, suffix, text=""):
+    """Create a private compose file named after hint; return its path.
+
+    NamedTemporaryFile gave /private/var/folders/.../T/tmp00204x_s.eml, which
+    vim then prints in full. O_EXCL keeps the 0600 and no-clobber guarantees
+    mkstemp gave, and a -2, -3 counter lets two composes share a subject.
+    /tmp is shared, so a directory we do not own falls back to mkstemp.
+    """
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", hint or "").strip("-").lower()
+    slug = slug[:EDITOR_TMP_SLUG_MAX].rstrip("-") or "draft"
+    try:
+        os.makedirs(EDITOR_TMP_DIR, mode=0o700, exist_ok=True)
+        usable = (not os.path.islink(EDITOR_TMP_DIR)
+                  and os.stat(EDITOR_TMP_DIR).st_uid == os.getuid())
+        if usable:
+            os.chmod(EDITOR_TMP_DIR, 0o700)
+    except OSError:
+        usable = False
+    if not usable:
+        fd, path = tempfile.mkstemp(prefix=f"{slug}-", suffix=suffix)
+    else:
+        n = 1
+        while True:
+            name = f"{slug}{suffix}" if n == 1 else f"{slug}-{n}{suffix}"
+            path = os.path.join(EDITOR_TMP_DIR, name)
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                break
+            except FileExistsError:
+                n += 1
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    return path
+
+
 def get_body_interactive(recipient, subject):
     """Open $EDITOR and return the body text."""
     editor = os.environ.get("EDITOR", "vim")
-    with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
-        tmpfile = f.name
+    tmpfile = _editor_tmpfile(subject or recipient, ".txt")
     try:
         # For vim/nvim/vi, start in insert mode (empty file, so line 1)
         if "vim" in editor.lower() or "vi" in editor.lower():
@@ -1942,9 +1980,9 @@ def edit_headers_and_body(initial_headers, body_template, current_account, max_r
             header_block = f"# ERROR: Invalid From: address on attempt {attempt}. Please choose from available accounts above.\n" + header_block
 
         # Create temp file and open editor
-        with tempfile.NamedTemporaryFile(suffix=".eml", mode="w", delete=False) as f:
-            f.write(header_block + "\n" + body_template)
-            tmpfile = f.name
+        tmpfile = _editor_tmpfile(
+            initial_headers.get("Subject") or initial_headers.get("To"),
+            ".eml", header_block + "\n" + body_template)
 
         try:
             # For vim/nvim/vi, go to line 16 and start in insert mode (body area)
@@ -5585,7 +5623,7 @@ The !! workflow (list, then act on a result):
   % !! 3 reply.eml              # re-runs: gmail-api-rw -n 5 -q "from:alice" 3 reply.eml
 
 List/download options:
-  -n, --count N         Number of messages to list (default: 20)
+  -n, --count N         Number of messages to list (default: 10)
   -q, --query QUERY     Gmail search query (same syntax as the Gmail search bar)
 
 Send/draft options:

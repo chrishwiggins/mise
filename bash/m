@@ -97,7 +97,10 @@ M_QUIET_MODE="${M_QUIET_MODE:-0}"
 # Messages per listing page; ppN pages in steps of this. Exported so the
 # backend's own -n default is the same number (gmail-api-rw DEFAULT_COUNT
 # reads it), even on the calls below that pass no -n.
-M_PAGE_SIZE="${M_PAGE_SIZE:-20}"; export M_PAGE_SIZE
+M_PAGE_SIZE="${M_PAGE_SIZE:-10}"; export M_PAGE_SIZE
+# Short home for compose files, so vim's status line stays readable. The
+# backend's EDITOR_TMP_DIR is the same directory.
+M_TMP_DIR="/tmp/m"
 # Creating a draft is one API round trip; past this something is hung.
 M_DRAFT_TIMEOUT="${M_DRAFT_TIMEOUT:-30s}"
 # Loading a scheduled-send launchd job is local and should be instant.
@@ -757,7 +760,12 @@ _schedule_send() {
 
     # Handle stdin body - create temporary .eml file for draft creation
     local temp_eml
-    temp_eml=$(mktemp /tmp/m-scheduled-XXXXXX.eml)
+    # BSD mktemp only fills trailing Xs: with .eml after them the name came out
+    # literally m-scheduled-XXXXXX.eml, so a leftover or a second scheduled send
+    # collided. Fill the name first, then add the suffix.
+    temp_eml=$(mktemp /tmp/m-scheduled.XXXXXX) || return 1
+    mv "$temp_eml" "$temp_eml.eml" || return 1
+    temp_eml+=".eml"
 
     # Split draft_args (built by the caller as -e ACCT -s SUBJ -c CC... -b BCC...
     # -a FILE... then recipients) into its parts. Before 2026-10-06 only the
@@ -1223,7 +1231,13 @@ _attachment_prompt() {
                 ;;
             e|E|edit)
                 local tmp
-                tmp=$(mktemp -t m-attach.XXXXXX)
+                # Same home as the backend's compose files. BSD mktemp only
+                # fills trailing Xs, so no .txt suffix after them.
+                tmp=""
+                if _m_tmp_dir_ok; then
+                    tmp=$(mktemp "$M_TMP_DIR/attachments.XXXXXX" 2>/dev/null)
+                fi
+                [[ -n "$tmp" ]] || tmp=$(mktemp -t m-attach.XXXXXX)
                 {
                     echo "# One attachment path per line. Lines starting with # are ignored."
                     echo "# Save and quit to apply; quit without saving to keep current list."
@@ -1267,6 +1281,14 @@ _attachment_prompt() {
 # startinsert is a no-op if the buffer is empty. gmail-smtp-w does the same;
 # direct_send calls neomutt directly (no wrapper), so it needs its own copy.
 M_NEOMUTT_EDITOR="set editor=\"vim -c 'call cursor(10,1)' -c startinsert\""
+
+# True when M_TMP_DIR is ours to write to. /tmp is world-writable, so a
+# directory or symlink planted there by another user must not hold mail text.
+# Callers fall back to their old location on false.
+_m_tmp_dir_ok() {
+    mkdir -p -m 700 "$M_TMP_DIR" 2>/dev/null
+    [[ -O "$M_TMP_DIR" && ! -L "$M_TMP_DIR" ]]
+}
 
 # ========================================================================
 # § SENT CLIP: after a real send, hand Claude the /sent command
@@ -1349,6 +1371,18 @@ _is_send_file() {
     [[ "$_f" == *.eml ]] && return 0
     [[ -f "$_f" ]] || return 1
     grep -qiE '^(To|From):[[:space:]]*[^[:space:]]' "$_f"
+}
+
+# Is this bare send argument a draft path with a typo, not a recipient? A path
+# that does not exist has no To: to sniff, so _is_send_file says no and it would
+# reach neomutt as an address. Refuse: anything with a slash that is not there,
+# and a bare word whose .eml sibling exists (`m send draft` for draft.eml), unless
+# that word is an m-alias. Addresses, flags and existing files are never refused.
+_is_mistyped_path() {
+    local _a="$1"
+    [[ "$_a" == -* || "$_a" == *@* || -e "$_a" ]] && return 1
+    [[ "$_a" == */* ]] && return 0
+    [[ -e "$_a.eml" && "$(_resolve_alias "$_a")" == "$_a" ]]
 }
 
 direct_send() {
@@ -1484,6 +1518,17 @@ direct_send() {
             break
         fi
     done
+
+    for arg in "${args[@]+"${args[@]}"}"; do
+        if _is_mistyped_path "$arg"; then
+            log_error "file not found: $arg"
+            return 1
+        fi
+    done
+
+    # Short neomutt compose name, same directory as the backend's. Appended
+    # here, not at the definition, so listing mail never touches /tmp/m.
+    _m_tmp_dir_ok && M_NEOMUTT_EDITOR+="; set tmp_dir=$M_TMP_DIR"
 
     # Route to appropriate backend
     if (( file_mode )); then
@@ -2291,7 +2336,7 @@ USAGE
     m --help=TOPIC    Show detailed help for specific topic
 
 BASIC ACTIONS
-    m                 Default inbox (first 20 messages)
+    m                 Default inbox (first 10 messages)
     m pp2             Page 2 inbox (messages 21-40)
     m out             Your outgoing messages (the old name `m sent` is blocked)
 EOF
@@ -4153,6 +4198,11 @@ case "$action" in
                     for (( _ci=0; _ci<${#fixed_args[@]}-1; _ci++ )); do
                         [[ "${fixed_args[_ci]}" == -H ]] || continue
                         _hf="${fixed_args[_ci+1]}"
+                        # A missing file used to fall through to the Subject
+                        # check and report "no Subject: header" (2026-11-03).
+                        if [[ ! -f "$_hf" ]]; then
+                            log_error "file not found: $_hf"; exit 1
+                        fi
                         case "$(_header_subject_state "$_hf")" in
                             misplaced) log_error "$_hf: Subject: is below the first blank line, so it would go out as body text with no subject. Remove the blank line inside the headers."; exit 1 ;;
                             missing)   log_error "$_hf: no Subject: header. Add one first."; exit 1 ;;
