@@ -2,11 +2,8 @@
 """
 trim - remove every desktop that has no windows in it.
 
-The same job cleandesks (close-empty-spaces) was reached for, done the way
-asplode does it: one yabai query for spaces, one for windows, one destroy per
-empty desktop, no Mission Control, no AppleScript, no per-desktop Swift
-compile, no fixed sleeps. Roughly 1-3 s where the AppleScript version takes
-30-40 s on sixteen desktops.
+Works the way asplode does: one yabai query for spaces, one for windows, one
+destroy per empty desktop, no Mission Control, no AppleScript, no fixed sleeps.
 
 Usage:
     trim                 destroy every empty desktop
