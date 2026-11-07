@@ -264,9 +264,7 @@ def sa_failure_hint():
             f"  help. macOS {build} has almost certainly outrun the payload, which\n"
             "  is built per macOS POINT release.\n"
             "  Check upstream before rebuilding: a fix may exist only on master,\n"
-            "  or nowhere yet, in which case there is nothing local to do.\n"
-            "  Diagnose: ~/gd/local/private/tooling/yabai/yabai-sa-doctor\n"
-            "  Context:  ~/gd/local/private/tooling/yabai/doc/NEXT.md")
+            "  or nowhere yet, in which case there is nothing local to do.")
 
 
 def destroy_empty_spaces(dry_run, verbose, planned=()):

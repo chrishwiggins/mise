@@ -352,9 +352,6 @@ alias wiktionary open "https://en.wiktionary.org/wiki/\!:*"
 alias cwnotes 'head `ls -1t $ndir/cwnote_2026_*T*_*_*.md | normalize` | more'
 
 
-# MOVED 2026-09-06 to the private alias file: it reads a private data file,
-# and this public file must name no path outside this repo. Original text:
-# alias no-wiml "cat $mise/aux/no-wiml.txt $home/gd/local/private/aux/wiml.tsv | pbcopy"
 unalias no-wiml
 alias rand 'echo `jot -r 1 0 1000`/1000 | bc -l| cut -c 1-4'
 #alias vi-null vim -u NONE
@@ -513,7 +510,7 @@ alias tool-crypto "sudo install_name_tool -change \!:1 /usr/local/Cellar/openssl
 alias tool-ssl    "sudo install_name_tool -change \!:1 /usr/local/Cellar/openssl@1.1/1.1.1h/lib/libssl.1.1.dylib    \!:2"
 alias tables "echo (┛ಠ_ಠ)┛彡┻━┻ | pbcopy"
 alias fly "open 'https://www.youtube.com/watch?v=maNe-tCqrJ8'"
-alias next "shuf ~/mise/doc/strategies.txt | head -1"
+alias next "shuf ~/mise/aux/strategies.txt | head -1"
 alias hunters "echo 'We are not open to utilizing agency support for this or any other Data Science role at this time. Thank you for reaching out. '|pbcopy"
 #alias txt open /Applications/TextEdit.app/
 alias txt open /System/Applications/TextEdit.app
@@ -521,7 +518,7 @@ alias txtify "pbpaste|pbcopy"
 alias prp "pbpaste|reply|pbcopy"
 #alias ifind open -a safari https://www.icloud.com/#find
 #alias ifind open /System/Applications/FindMy.app/
-alias curse "grep -v -e '^#' ~/mise/doc/curses.txt | sed -e 's/^- //' | /opt/homebrew/bin/shuf | head -1| tr '\\' '\n'"
+alias curse "grep -v -e '^#' ~/mise/aux/curses.txt | sed -e 's/^- //' | /opt/homebrew/bin/shuf | head -1| tr '\\' '\n'"
 #alias cu-covid https://covid19.columbia.edu/content/covid-19-testing-program-fall-2021
 #alias cu-covid http://secure.health.columbia.edu/
 #alias cu-covid https://secure.health.columbia.edu/confirm.aspx
@@ -588,7 +585,7 @@ alias hideme-start echo i think you mean vpn start
 alias hideme-stop echo i think you mean vpn stop
 alias hideme-status echo i think you mean vpn status
 alias hideme-check echo i think you mean vpn check
-alias claw 'echo "RIP claw (2026-03-15 to 2026-05-26): VPS cancelled, IP reassigned to a stranger. Do NOT ssh. See private/tooling/claw/RIP.md"'
+alias claw 'echo "RIP claw (2026-03-15 to 2026-05-26): VPS cancelled, IP reassigned to a stranger. Do NOT ssh."'
 alias lostdmv "open 'https://eservices.dmv.ny.gov/TAP/eServices/?Link=MiscLinks.ReplaceCrd'"
 
 ## HEALTH LOGGING (oura-dashboard)

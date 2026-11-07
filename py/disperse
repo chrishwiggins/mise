@@ -113,9 +113,7 @@ def sa_failure_hint():
     return ("  the addition cannot be loaded at all, and reloading it just\n"
             "  failed, so this is NOT a Dock restart and --load-sa will not\n"
             f"  help. macOS {build} has almost certainly outrun the payload,\n"
-            "  which is built per macOS POINT release.\n"
-            "  Diagnose: ~/gd/local/private/tooling/yabai/yabai-sa-doctor\n"
-            "  Context:  ~/gd/local/private/tooling/yabai/doc/NEXT.md")
+            "  which is built per macOS POINT release.")
 
 
 def main():

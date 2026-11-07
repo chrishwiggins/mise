@@ -16,9 +16,6 @@ printf 'To: a\nSubject: TK note\n\nHi,\n\n> TK in a quote\n\nBest\n' > "$d/miss.
 printf 'To: a\nSubject: x\n\nThe Atkins diet and an outkick, and Tkachenko.\n' > "$d/miss2.eml"
 for f in hit hit2; do [ -n "$(filter "$d/$f.eml")" ] || { echo "FAIL: $f not caught"; fail=1; }; done
 for f in miss miss2; do [ -z "$(filter "$d/$f.eml")" ] || { echo "FAIL: $f falsely caught: $(filter "$d/$f.eml")"; fail=1; }; done
-# The incident draft itself, as sent, must be caught.
-inc=/Users/wiggins/gd/local/private/incident-draft.eml
-[ -f "$inc" ] && { [ -n "$(filter "$inc")" ] || { echo "FAIL: incident draft not caught"; fail=1; }; }
 /bin/rm -rf "$d"
-[ $fail -eq 0 ] && echo "PASS: TK guard catches 3 positives, passes 2 negatives"
+[ $fail -eq 0 ] && echo "PASS: TK guard catches 2 positives, passes 2 negatives"
 exit $fail
