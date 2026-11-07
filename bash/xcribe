@@ -2,6 +2,20 @@
 
 # Configuration
 VOICEMEMO_DIR="$HOME/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"
+# Every folder holding voice memo audio, one per line ('#' comments allowed).
+# Apple's folder alone if the file is missing. Other tools that pull memos
+# (e.g. over the USB cable) add their folder here.
+VOICEMEMO_DIRS_FILE="$HOME/.config/voicememos/dirs"
+VOICEMEMO_DIRS=()
+if [[ -f "$VOICEMEMO_DIRS_FILE" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        VOICEMEMO_DIRS+=("${line/#\~/$HOME}")
+    done < "$VOICEMEMO_DIRS_FILE"
+fi
+[[ ${#VOICEMEMO_DIRS[@]} -eq 0 ]] && VOICEMEMO_DIRS=("$VOICEMEMO_DIR")
 OUTPUT_DIR="$HOME/Documents/VoiceMemos"
 PROCESSED_LIST="$HOME/.voicememo_processed"
 LOG_FILE="$HOME/.voicememo_processing.log"
@@ -13,6 +27,7 @@ if [[ "$1" == "-help" ]] || [[ "$1" == "-h" ]]; then
     echo "Options:"
     echo "  -f <file>   Process a single audio file instead of the Voice Memos directory"
     echo "  -d <dir>    Process all audio files in a different directory"
+    echo "              (default: every folder listed in $VOICEMEMO_DIRS_FILE)"
     echo "  -l          Use Whisper large-v3 model"
     echo "  -small      Use Whisper small model (faster than base, good accuracy)"
     echo "  -tiny       Use Whisper tiny model (fastest, lower accuracy)"
@@ -40,7 +55,7 @@ fi
 
 # Handle -log flag: show directories and log, then exit
 if [[ "$1" == "-log" ]]; then
-    echo "Voicememos dir: $VOICEMEMO_DIR"
+    for d in "${VOICEMEMO_DIRS[@]}"; do echo "Voicememos dir: $d"; done
     echo "Transcripts dir: $OUTPUT_DIR"
     echo ""
     if [[ -f "$LOG_FILE" ]]; then
@@ -116,7 +131,7 @@ if [ -n "$CUSTOM_DIR" ]; then
         echo "Error: Directory not found: $CUSTOM_DIR"
         exit 1
     fi
-    VOICEMEMO_DIR="$CUSTOM_DIR"
+    VOICEMEMO_DIRS=("$CUSTOM_DIR")
 fi
 
 # Create output directory if it doesn't exist
@@ -274,8 +289,15 @@ process_file() {
 
     log_message "  -> Processing new file with ${whisper_model} model..."
 
-    # Generate timestamp from file modification time
+    # Recording time: from the file name when it has one (Voice Memos names
+    # files "YYYYMMDD HHMMSS-XXXX.m4a" in local time), since iCloud downloads
+    # and copies reset the modification time. Otherwise the modification time.
     local file_mod_time=$(stat -f "%m" "$voice_file")
+    local name_date_re='^([0-9]{8}) ([0-9]{6})'
+    if [[ "$file_basename" =~ $name_date_re ]]; then
+        local name_time
+        name_time=$(date -j -f "%Y%m%d %H%M%S" "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}" +%s 2>/dev/null) && file_mod_time="$name_time"
+    fi
     local timestamp=$(date -r "$file_mod_time" +%Y_%m_%dT%Hh%Mm%Ss)
 
     log_message "  -> Running Whisper transcription (progress below)..."
@@ -299,10 +321,14 @@ process_file() {
         # Use whisper.cpp (most memory-efficient, fast on Apple Silicon)
         # whisper-cli requires WAV input; convert m4a/other formats first
         local wav_input="/tmp/${file_basename%.*}_$$.wav"
-        ffmpeg -i "$voice_file" -ar 16000 -ac 1 -c:a pcm_s16le "$wav_input" -y -loglevel warning 2>&1
+        # -nostdin: ffmpeg otherwise reads stdin, which here is the caller's
+        # file list, and eats the start of the next path.
+        ffmpeg -nostdin -i "$voice_file" -ar 16000 -ac 1 -c:a pcm_s16le "$wav_input" -y -loglevel warning 2>&1
+        local ffmpeg_exit=$?
         local srt_output="/tmp/${file_basename%.*}"
         whisper-cli -m "$cpp_model_file" -l en -osrt -of "$srt_output" "$wav_input" 2>&1 | grep -v "^$"
-        local whisper_exit=$?
+        local whisper_exit=${PIPESTATUS[0]}  # whisper's status, not grep's
+        [ "$ffmpeg_exit" -ne 0 ] && whisper_exit=$ffmpeg_exit
         rm -f "$wav_input"
         # Convert SRT to timestamped text format matching Python output
         if [ -f "${srt_output}.srt" ]; then
@@ -459,30 +485,41 @@ if [ -n "$SINGLE_FILE" ]; then
     process_file "$SINGLE_FILE" 1 1 "$WHISPER_MODEL"
 else
     # Directory mode: process all voice memos
-    log_message "Scanning directory: $VOICEMEMO_DIR"
+    SCAN_DIRS=()
+    for d in "${VOICEMEMO_DIRS[@]}"; do
+        if [ -d "$d" ]; then
+            log_message "Scanning directory: $d"
+            SCAN_DIRS+=("$d")
+        else
+            log_message "WARNING: listed directory missing, skipped: $d"
+        fi
+    done
+    if [ ${#SCAN_DIRS[@]} -eq 0 ]; then
+        log_message "No voice memo directories found"
+        exit 1
+    fi
 
     # Define supported audio file types
     AUDIO_EXTENSIONS="m4a"
     log_message "Looking for file types: $AUDIO_EXTENSIONS"
 
-    # Census: count files by type
-    m4a_count=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f 2>/dev/null | wc -l | tr -d ' ')
+    # Find all audio files in all directories, sorted by modification time
+    # Default: newest first (-t), with -r flag: oldest first (-tr).
+    # A memo in two folders under the same file name (pulled by cable, then
+    # synced by iCloud) is kept once, so it is not transcribed twice.
+    if [ "$REVERSE_ORDER" = true ]; then LS_ORDER="-tr"; else LS_ORDER="-t"; fi
+    file_list=$(find "${SCAN_DIRS[@]}" -name "*.m4a" -type f -print0 | xargs -0 ls $LS_ORDER 2>/dev/null | awk -F/ '!seen[$NF]++')
+
+    # Census: count files by type (after removing duplicates across folders)
+    m4a_count=$(printf '%s' "$file_list" | grep -c .)
     log_message "Census: .m4a=$m4a_count"
 
     total_files=$m4a_count
     if [ "$total_files" -eq 0 ]; then
-        log_message "No audio files found in $VOICEMEMO_DIR"
+        log_message "No audio files found in ${SCAN_DIRS[*]}"
         exit 0
     fi
     log_message "Total files to check: $total_files"
-
-    # Find all audio files in directory, sorted by modification time
-    # Default: newest first (-t), with -r flag: oldest first (-tr)
-    if [ "$REVERSE_ORDER" = true ]; then
-        file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -tr 2>/dev/null)
-    else
-        file_list=$(find "$VOICEMEMO_DIR" -name "*.m4a" -type f -print0 | xargs -0 ls -t 2>/dev/null)
-    fi
 
     # Process files in parallel
     file_counter=0
@@ -493,7 +530,9 @@ else
         file_counter=$((file_counter + 1))
 
         # Launch job in background
-        process_file "$voice_file" "$file_counter" "$total_files" "$WHISPER_MODEL" &
+        # < /dev/null: a background job here inherits the loop's stdin (the
+        # file list); any child that reads stdin would eat paths from it.
+        process_file "$voice_file" "$file_counter" "$total_files" "$WHISPER_MODEL" < /dev/null &
         job_count=$((job_count + 1))
 
         # If parallel limit set, wait when we hit the limit
