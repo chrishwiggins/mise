@@ -251,9 +251,21 @@ PROMPT
     unset ELECTRON_RUN_AS_NODE
 
     local claude_tmp=$(mktemp /tmp/xcribe-claude-XXXXXX)
-    claude --print < "$temp_file" > "$claude_tmp" 2>/dev/null
-    topic=$(cat "$claude_tmp" | head -n 1 | tr ' ' '_' | tr -cd '[:alnum:]_-' | tr '[:upper:]' '[:lower:]')
+    # Run from /tmp: a hook can refuse some folders, and claude reports that
+    # as ordinary output with exit status 0.
+    local claude_status=0
+    (cd /tmp && claude --print < "$temp_file" > "$claude_tmp" 2>/dev/null) || claude_status=$?
+    local raw_topic=$(head -n 1 "$claude_tmp")
     rm -f "$claude_tmp"
+    # A topic is 1-2 words as requested, so allow up to 4. Anything longer is
+    # a sentence, which means an error message or a refusal.
+    local raw_words=$(echo "$raw_topic" | wc -w | tr -d ' ')
+    if [ "$claude_status" -ne 0 ] || [ "$raw_words" -gt 4 ] || \
+        echo "$raw_topic" | grep -qiE 'not logged in|please run|blocked by|api error|invalid api|credit balance|limit reached'; then
+        echo "  -> DEBUG: Rejected Claude output (status $claude_status): '$raw_topic'" >> "$LOG_FILE"
+        raw_topic=""
+    fi
+    topic=$(echo "$raw_topic" | tr ' ' '_' | tr -cd '[:alnum:]_-' | tr '[:upper:]' '[:lower:]')
 
     # Debug: log raw Claude output
     echo "  -> DEBUG: Raw Claude output: '$topic'" >> "$LOG_FILE"
