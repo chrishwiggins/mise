@@ -346,7 +346,12 @@ process_file() {
         ffmpeg -nostdin -i "$voice_file" -ar 16000 -ac 1 -c:a pcm_s16le "$wav_input" -y -loglevel warning 2>&1
         local ffmpeg_exit=$?
         local srt_output="/tmp/${file_basename%.*}"
-        whisper-cli -m "$cpp_model_file" -l en -osrt -of "$srt_output" "$wav_input" 2>&1 | grep -v "^$"
+        # -mc 0 and VAD stop the repetition loops: on a 20-min clip turbo
+        # repeated one phrase 279 times by default, 7 with -mc 0, 2 with both.
+        local loop_opts=(-mc 0)
+        local vad_model="$cpp_model_dir/ggml-silero-v5.1.2.bin"
+        [ -f "$vad_model" ] && loop_opts+=(--vad -vm "$vad_model")
+        whisper-cli -m "$cpp_model_file" -l en "${loop_opts[@]}" -osrt -of "$srt_output" "$wav_input" 2>&1 | grep -v "^$"
         local whisper_exit=${PIPESTATUS[0]}  # whisper's status, not grep's
         [ "$ffmpeg_exit" -ne 0 ] && whisper_exit=$ffmpeg_exit
         rm -f "$wav_input"
