@@ -28,10 +28,16 @@ if [[ "$1" == "-help" ]] || [[ "$1" == "-h" ]]; then
     echo "  -f <file>   Process a single audio file instead of the Voice Memos directory"
     echo "  -d <dir>    Process all audio files in a different directory"
     echo "              (default: every folder listed in $VOICEMEMO_DIRS_FILE)"
-    echo "  -l          Use Whisper large-v3 model"
-    echo "  -small      Use Whisper small model (faster than base, good accuracy)"
+    echo "              (default model: large-v3-turbo; about 3x realtime on an M2)"
+    echo "  --quick     New memos only, with the base model (about 15x realtime): for a hurry"
+    echo "  -l          Use Whisper large-v3 model (slowest, about 1.5x realtime)"
+    echo "  -turbo      Use large-v3-turbo"
+    echo "  -base       Use Whisper base model"
+    echo "  -small      Use Whisper small model"
     echo "  -tiny       Use Whisper tiny model (fastest, lower accuracy)"
-    echo "              (default: base model)"
+    echo "              A plain run or --quick skips memos already transcribed with ANY"
+    echo "              model. Naming a model (-l, -turbo, -base, -small, -tiny) skips only"
+    echo "              memos already done with that model, so it re-transcribes the rest."
     echo "  -parallel N Limit to N parallel jobs (default: unlimited)"
     echo "  -r          Process files in reverse order (oldest first)"
     echo "  -dry        Dry run: show what would be processed without transcribing"
@@ -41,6 +47,7 @@ if [[ "$1" == "-help" ]] || [[ "$1" == "-h" ]]; then
     echo ""
     echo "Examples:"
     echo "  xcribe                    # Process all new Voice Memos"
+    echo "  xcribe --quick            # New memos with the fast base model"
     echo "  xcribe -l                 # Process with large model"
     echo "  xcribe -tiny              # Process with tiny model (fastest)"
     echo "  xcribe -small -parallel 2 # Small model, 2 jobs at a time"
@@ -85,7 +92,8 @@ fi
 
 # Parse command line arguments
 REVERSE_ORDER=false
-WHISPER_MODEL="base"
+WHISPER_MODEL="turbo"
+MODEL_EXPLICIT=false  # true when a flag names the model
 DRY_RUN=false
 SINGLE_FILE=""
 CUSTOM_DIR=""
@@ -93,9 +101,12 @@ PARALLEL_JOBS=0  # 0 = unlimited
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -r) REVERSE_ORDER=true; shift ;;
-        -l) WHISPER_MODEL="large-v3"; shift ;;
-        -small) WHISPER_MODEL="small"; shift ;;
-        -tiny) WHISPER_MODEL="tiny"; shift ;;
+        -l) WHISPER_MODEL="large-v3"; MODEL_EXPLICIT=true; shift ;;
+        -turbo) WHISPER_MODEL="turbo"; MODEL_EXPLICIT=true; shift ;;
+        --quick|-quick) WHISPER_MODEL="base"; shift ;;  # new memos only, fast
+        -base) WHISPER_MODEL="base"; MODEL_EXPLICIT=true; shift ;;
+        -small) WHISPER_MODEL="small"; MODEL_EXPLICIT=true; shift ;;
+        -tiny) WHISPER_MODEL="tiny"; MODEL_EXPLICIT=true; shift ;;
         -dry) DRY_RUN=true; shift ;;
         -parallel)
             if [[ -z "$2" ]] || [[ "$2" == -* ]]; then
@@ -274,10 +285,18 @@ process_file() {
 
     log_message "[$file_num/$total_num] Checking file: $file_basename (${file_size})"
 
-    # Check if already processed with this model (format: hash:model)
+    # Check if already processed (format: hash:model; very old lines are a
+    # bare hash). A plain run skips a memo done with any model, so changing
+    # the default model does not re-transcribe the library; a run that names
+    # a model skips only memos done with that model.
     local processed_key="${file_hash}:${whisper_model}"
-    if grep -q "^${processed_key}$" "$PROCESSED_LIST"; then
-        log_message "  -> Skipping: already processed with ${whisper_model} model"
+    if [ "$MODEL_EXPLICIT" = true ]; then
+        if grep -q "^${processed_key}$" "$PROCESSED_LIST"; then
+            log_message "  -> Skipping: already processed with ${whisper_model} model"
+            return 0
+        fi
+    elif grep -qE "^${file_hash}(:|$)" "$PROCESSED_LIST"; then
+        log_message "  -> Skipping: already transcribed"
         return 0
     fi
 
@@ -310,6 +329,7 @@ process_file() {
     local cpp_model_dir="$HOME/.local/share/whisper-cpp/models"
     local cpp_model_file=""
     case "$whisper_model" in
+        turbo)          cpp_model_file="$cpp_model_dir/ggml-large-v3-turbo.bin" ;;
         large-v3|large) cpp_model_file="$cpp_model_dir/ggml-large-v3.bin" ;;
         medium)         cpp_model_file="$cpp_model_dir/ggml-medium.bin" ;;
         small)          cpp_model_file="$cpp_model_dir/ggml-small.bin" ;;
@@ -460,7 +480,7 @@ PYTHON_FALLBACK
 
 # Export functions and variables for parallel subshells
 export -f process_file log_message get_topic_from_claude get_simple_topic acquire_lock release_lock
-export WHISPER_MODEL DRY_RUN OUTPUT_DIR PROCESSED_LIST LOG_FILE LOCK_DIR
+export WHISPER_MODEL MODEL_EXPLICIT DRY_RUN OUTPUT_DIR PROCESSED_LIST LOG_FILE LOCK_DIR
 
 # Process voice memos
 log_message "Starting voice memo processing"
