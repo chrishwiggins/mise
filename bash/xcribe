@@ -523,12 +523,20 @@ else
     AUDIO_EXTENSIONS="m4a"
     log_message "Looking for file types: $AUDIO_EXTENSIONS"
 
-    # Find all audio files in all directories, sorted by modification time
-    # Default: newest first (-t), with -r flag: oldest first (-tr).
+    # Find all audio files in all directories, sorted by recording time.
+    # Default: newest first, with -r flag: oldest first. The recording time
+    # comes from the Voice Memos file name ("YYYYMMDD HHMMSS..."), since an
+    # iCloud download resets the modification time; other names fall back
+    # to the modification time.
     # A memo in two folders under the same file name (pulled by cable, then
     # synced by iCloud) is kept once, so it is not transcribed twice.
-    if [ "$REVERSE_ORDER" = true ]; then LS_ORDER="-tr"; else LS_ORDER="-t"; fi
-    file_list=$(find "${SCAN_DIRS[@]}" -name "*.m4a" -type f -print0 | xargs -0 ls $LS_ORDER 2>/dev/null | awk -F/ '!seen[$NF]++')
+    if [ "$REVERSE_ORDER" = true ]; then SORT_ORDER=""; else SORT_ORDER="-r"; fi
+    file_list=$(find "${SCAN_DIRS[@]}" -name "*.m4a" -type f -print0 \
+        | xargs -0 stat -f '%Sm%t%N' -t '%Y%m%d %H%M%S' 2>/dev/null \
+        | awk -F'\t' '{ n = $2; sub(/.*\//, "", n); k = $1
+              if (n ~ /^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] [0-9][0-9][0-9][0-9][0-9][0-9]/) k = substr(n, 1, 15)
+              print k "\t" $2 }' \
+        | sort $SORT_ORDER | cut -f2- | awk -F/ '!seen[$NF]++')
 
     # Census: count files by type (after removing duplicates across folders)
     m4a_count=$(printf '%s' "$file_list" | grep -c .)
