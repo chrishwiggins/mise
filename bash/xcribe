@@ -533,7 +533,7 @@ PYTHON_FALLBACK
 
         local output_size=$(ls -lh "$output_file" | awk '{print $5}')
         local word_count=$(wc -w < "$output_file" | tr -d ' ')
-        log_message "$(basename "$output_file")\tsz:${output_size}\twc:${word_count}"
+        log_message "$(basename "$output_file")\tsz:${output_size}\twc:${word_count}\tloop:${loop_check}"
 
         # Clean up temporary transcript
         rm -f "$whisper_output"
