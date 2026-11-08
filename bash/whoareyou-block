@@ -1,11 +1,15 @@
 #!/bin/bash
-# whoareyou-block [NAME [REF]]
-# Print and copy to the clipboard the identity block another Claude session needs to reach this one.
+# whoareyou-block SLUG [NAME [REF]]
+# Write /tmp/cs-SLUG.pmt: a prompt to paste into ANOTHER Claude session, telling it how to reach this one.
 # Walks this shell's parent chain to the claude process, then reads the roster name and session id
 # from ~/.claude/sessions/<pid>.json, so no ListAgents call is needed. NAME and REF override (REF is
 # only on ListAgents' first line, and only matters when two live sessions share a name).
-# Read-only except pbcopy. Run as `! whoareyou-block` from the prompt for a zero-turn answer.
-name=$1; ref=${2:-}
+# Read-only except the .pmt file and pbcopy. Run as `! whoareyou-block SLUG` from the prompt.
+slug=$1; name=$2; ref=${3:-}
+if [ -z "$slug" ] || [ "${slug#-}" != "$slug" ]; then
+  echo "usage: whoareyou-block SLUG [NAME [REF]]   (writes /tmp/cs-SLUG.pmt)" >&2; exit 2
+fi
+out=/tmp/cs-$slug.pmt
 
 pid= tty= sid= start=
 p=$$
@@ -54,20 +58,25 @@ else
   handle="pid$pid@$tty (iTerm window on $tty; tc can find it)"
 fi
 
-block="Claude session to contact:
+block="You are being introduced to another Claude session so you can message it.
+
+Session to contact:
   roster name: $name
   $refline
   handle: $handle
   started: ${start:-UNKNOWN}
   cwd: $(/bin/pwd)
   session id: ${sid:-UNKNOWN}
-To reach it: SendMessage({to: \"$name\", message: \"From pid<YOUR PID>@<YOUR TTY>: ...\"})
-Sign your own messages with your handle, from your own parent-chain walk (see /dedup step 2)."
 
+To reach it: SendMessage({to: \"$name\", message: \"From pid<YOUR PID>@<YOUR TTY>: ...\"})
+Sign your own messages with your handle, from your own parent-chain walk (see /dedup step 2).
+Do nothing else until Chris says what to send."
+
+printf '%s\n' "$block" > "$out"
 printf '%s\n' "$block" | /usr/bin/pbcopy
-if [ "$(/usr/bin/pbpaste | /usr/bin/head -1)" = "Claude session to contact:" ]; then
+if [ "$(/usr/bin/pbpaste | /usr/bin/head -1)" = "You are being introduced to another Claude session so you can message it." ]; then
   clip="ON CLIPBOARD (read back OK)"
 else
   clip="CLIPBOARD CHECK FAILED"
 fi
-printf '%s\n%s\n' "$block" "$clip"
+printf '%s\n%s\nwrote %s\n' "$block" "$clip" "$out"
