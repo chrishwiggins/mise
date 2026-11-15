@@ -256,6 +256,8 @@ if [[ -f "$config_file" ]] && command -v jq >/dev/null 2>&1; then
     accounts=$(jq -r '.accounts | to_entries[] | "\(.key)|\(.value.email)|\(.value.chrome_profile)|\(.value.label // "")|\(.value.gmail_flag // "")"' "$config_file" 2>/dev/null)
 
     if [[ -n "$accounts" ]]; then
+        local _config_keys
+        _config_keys=$(jq -r '.accounts | keys[]' "$config_file" 2>/dev/null | tr '\n' ' ')
         # ============================================
         # STEP 1A: Parse JSON data into arrays
         # ============================================
@@ -294,6 +296,13 @@ if [[ -f "$config_file" ]] && command -v jq >/dev/null 2>&1; then
                         l|lake)  short_name="lake" ;;
                         h|hNY)   short_name="hNY" ;;
                     esac
+                    # A legacy name counts only while the config keeps it
+                    # as a key: on 2026-11-11 "cu" and "hNY" were dropped
+                    # for single letters, and `m u send` died with
+                    # "unknown account 'cu'". Fall back to the alias.
+                    if [[ " $_config_keys " != *" $short_name "* ]]; then
+                        short_name="$alias"
+                    fi
                     ACCTS["$alias"]="$short_name:$chrome_profile"
                 fi
             done <<< "$accounts"
@@ -309,6 +318,32 @@ if [[ -f "$config_file" ]] && command -v jq >/dev/null 2>&1; then
 }
 
 load_mail_config
+
+# Account aliases in display order: the everyday accounts first, in the
+# order Chris reads them, then every other configured alias sorted.
+# Used by `m all` and the --all scope so the listing and its indices
+# agree. Chris, 2026-11-15: "g,u,h,j,code,gv,l,others".
+M_ACCOUNT_ORDER="g u h j code gv l"
+# With --unique, an alias whose address an earlier alias already covers
+# is skipped (j and joint are both the joint mailbox), so `m all` does
+# not search one mailbox twice.
+_ordered_accounts() {
+    local a e unique="" seen=" "
+    [[ "${1:-}" == "--unique" ]] && unique=1
+    for a in $M_ACCOUNT_ORDER $(printf '%s\n' "${!ACCTS[@]}" | sort); do
+        [[ -n "${ACCTS[$a]:-}" ]] || continue
+        [[ "$seen" == *" $a "* ]] && continue
+        seen+="$a "
+        if [[ -n "$unique" ]]; then
+            e="${EMAILS[$a]:-}"
+            if [[ -n "$e" ]]; then
+                [[ "$seen" == *" @$e "* ]] && continue
+                seen+="@$e "
+            fi
+        fi
+        printf '%s\n' "$a"
+    done
+}
 
 # ========================================================================
 # § ROUTING HELPERS — core API-vs-SMTP decision
@@ -2781,6 +2816,16 @@ while (( i < ${#args[@]} )); do
         [[ "$action" == "e" ]] && action="archive"
     elif [[ "$arg" == "m" ]] && [[ -z "$action" ]]; then
         action="archive"
+    elif [[ -z "$account" ]] && (( i == 0 )) && [[ "$arg" == "all" ]] && [[ -z "${ACCTS[all]:-}" ]]; then
+        # `m all q foo`: every known account, via the same fan-out as the
+        # comma list. Only as the FIRST argv token, so `all` stays usable as
+        # a query word elsewhere (`m q all`). Mutating verbs are refused by
+        # the fan-out guard below.
+        multi_accounts=()
+        while IFS= read -r _ma; do multi_accounts+=("$_ma"); done \
+            < <(_ordered_accounts --unique)
+        unset _ma
+        multi_account_index=$i
     elif [[ -z "$account" ]] && [[ "$arg" == *,* ]] && [[ -n "${ACCTS[${arg%%,*}]:-}" ]]; then
         # Multi-account syntax: `m h,g,cu i` runs the same command once per
         # alias. Validate every comma-separated piece up front (all-or-
@@ -3385,7 +3430,7 @@ case "$action" in
                         # are excluded by the plain-word shape, so they still pass
                         # through untouched.
                         if [[ "$arg" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] && [[ -z "${ACCTS[$arg]:-}" ]]; then
-                            _acct_list="$(printf '%s ' "${!ACCTS[@]}" | tr ' ' '\n' | sort | tr '\n' ' ')"
+                            _acct_list="$(_ordered_accounts | tr '\n' ' ')"
                             _acct_list="${_acct_list% }"
                             log_error "'$arg' is not a valid index or known account (accounts: ${_acct_list})"
                             exit 1
