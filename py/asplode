@@ -655,11 +655,10 @@ def main():
             # This comment used to say the sweep does not need the scripting
             # addition. It does: on 2026-09-07 the addition died with Dock and
             # trim failed to destroy 12 desktops with "cannot destroy space due
-            # to an error with the scripting-addition" (seiton
-            # tooling/yabai/CONTEXT_LETTER.md). Running it anyway is still
-            # right, because destroy_empty_spaces() reports each failure and
-            # names the cause, so a doomed sweep tells the reader what is wrong
-            # instead of leaving them with a silent bail-out.
+            # to an error with the scripting-addition". Running it anyway is
+            # still right, because destroy_empty_spaces() reports each failure
+            # and names the cause, so a doomed sweep tells the reader what is
+            # wrong instead of leaving them with a silent bail-out.
             print("asplode: cannot redistribute windows "
                   f"({msg}).\n"
                   "  Spaces cannot be created and window moves fail silently.\n"
