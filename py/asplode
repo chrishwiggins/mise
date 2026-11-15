@@ -140,6 +140,62 @@ def is_mission_control_error(err):
     return "mission-control" in low or "mission control" in low
 
 
+def create_space(verbose=False):
+    """
+    Create a space and return (space_id, error), identifying it by ID.
+
+    The obvious reading of `space --create` is that the new desktop is appended,
+    so the newest one is last. It is not. Observed 2026-11-15 on a machine with
+    eight desktops: the created space landed at index 4 of 9, ahead of five
+    native-fullscreen desktops, not at index 9.
+
+    That assumption was wrong in both places it was made, and it failed loudly
+    in one and silently in the other:
+
+      - The move loop sent windows to the last index, which was a fullscreen
+        desktop, so every move died on "can not move window to a macOS
+        fullscreen space!" and asplode reported "moved 0 of 2".
+
+      - The scripting-addition probe DESTROYED the last index to clean up after
+        itself, which is a different desktop than the one it made. It got away
+        with it only because the last desktop happened to be fullscreen and
+        yabai refused. With a normal desktop last, the probe destroys a desktop
+        holding real windows.
+
+    An ID is stable across the renumbering a create or destroy causes; an index
+    is not. So the caller gets an ID back and re-resolves it to an index at the
+    moment it is used.
+    """
+    before = {s["id"] for s in (query("spaces") or [])}
+    code, _, err = yabai("space", "--create")
+    if code != 0 and is_mission_control_error(err):
+        # Mission Control can open mid-run (a probe, a stray hot corner).
+        # Clear it and retry rather than abandoning the remaining work.
+        dismiss_mission_control(verbose)
+        before = {s["id"] for s in (query("spaces") or [])}
+        code, _, err = yabai("space", "--create")
+    if code != 0:
+        return None, err or "space --create failed"
+
+    new = [s["id"] for s in (query("spaces") or []) if s["id"] not in before]
+    if len(new) == 1:
+        return new[0], ""
+    if not new:
+        return None, "space --create reported success but no space appeared"
+    # Another agent (a second asplode, Mission Control, the user) created a
+    # space in the same instant. Guessing which one is ours risks destroying
+    # or filling someone else's desktop, so refuse instead.
+    return None, f"space --create raced: {len(new)} new spaces appeared"
+
+
+def space_index(space_id):
+    """Current index of a space ID, or None if it is gone."""
+    for s in query("spaces") or []:
+        if s["id"] == space_id:
+            return s["index"]
+    return None
+
+
 def check_scripting_addition(verbose=False):
     """
     Verify yabai can actually create spaces.
@@ -151,23 +207,15 @@ def check_scripting_addition(verbose=False):
     desktop it was supposed to close. Now a Mission Control refusal is treated as
     the transient it is: clear it and retry once.
     """
-    spaces_before = query("spaces") or []
-    code, _, err = yabai("space", "--create")
+    probe_id, err = create_space(verbose)
+    if probe_id is None:
+        return False, err
 
-    if code != 0 and is_mission_control_error(err):
-        dismiss_mission_control(verbose)
-        spaces_before = query("spaces") or []
-        code, _, err = yabai("space", "--create")
-
-    if code != 0:
-        return False, err or "space --create failed"
-
-    spaces_after = query("spaces") or []
-    if len(spaces_after) <= len(spaces_before):
-        return False, "space --create reported success but no space appeared"
-
-    # Clean up the probe space. It is the newest one, so it is last.
-    yabai("space", str(spaces_after[-1]["index"]), "--destroy")
+    # Clean up the probe space BY ID. Re-resolve its index here rather than
+    # reusing one read earlier: creating the probe renumbered the desktops.
+    idx = space_index(probe_id)
+    if idx is not None:
+        yabai("space", str(idx), "--destroy")
     return True, "ok"
 
 
@@ -631,17 +679,17 @@ def main():
             continue
 
         if target is None:
-            code, _, err = yabai("space", "--create")
-            if code != 0 and is_mission_control_error(err):
-                # Mission Control can open mid-run (a probe, a stray hot corner).
-                # Clear it and retry rather than abandoning the remaining moves.
-                dismiss_mission_control(args.verbose)
-                code, _, err = yabai("space", "--create")
-            if code != 0:
+            new_id, err = create_space(args.verbose)
+            if new_id is None:
                 print(f"  could not create space: {err}", file=sys.stderr)
                 break
-            fresh = query("spaces") or []
-            target = fresh[-1]["index"]
+            # Resolve the ID to an index now, right before the move: the create
+            # renumbered every desktop after the insertion point.
+            target = space_index(new_id)
+            if target is None:
+                print("  created space vanished before the move",
+                      file=sys.stderr)
+                break
 
         ok, err = move_window(w["id"], target, args.verbose)
         if ok:
