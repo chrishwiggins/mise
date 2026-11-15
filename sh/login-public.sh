@@ -66,7 +66,11 @@ source $paliases
 
 # remap capslock to esc:
 # h/t https://stackoverflow.com/questions/127591/using-caps-lock-as-esc-in-mac-os-x
-hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x700000029}]}' > /dev/null
+# 2026-11-15: the mapping lasts until reboot and /tmp is cleared at boot, so
+# a stamp file there makes this run once per boot instead of once per shell.
+if ( ! -e /tmp/.hidutil-capslock-esc ) then
+  hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x700000029}]}' > /dev/null && touch /tmp/.hidutil-capslock-esc
+endif
 
 # generate random curse
 curse
