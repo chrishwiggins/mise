@@ -15,8 +15,10 @@ window on it other than minimized or sticky ones, and not pinned. macOS
 keeps at least one desktop, and native-fullscreen desktops are skipped.
 
 Needs yabai's scripting addition (sudo yabai --load-sa). If this exits 0 and
-the desktop count does not drop, either the addition is dead (run
-yabai-sa-doctor) or yabai is listing windows no app is showing: Electron apps
+the desktop count does not drop, either the addition is dead or yabai is
+listing windows no app is showing. To tell which, run `asplode -v`: its
+scripting-addition check distinguishes a Dock restart (reloadable) from a
+payload outrun by a macOS point release, and prints what to do. Electron apps
 (Slack, Bitwarden) hide their window on close rather than destroying it, and
 tooltips (AXHelpTag) count too. 2026-09-07: two visibly empty desktops survived
 for exactly that reason. Check with
