@@ -6,10 +6,14 @@ Spaces accumulate lopsidedly: one desktop ends up with seven windows on it
 while a dozen others sit empty. asplode redistributes them so the mapping is
 one window <-> one space, then removes any space left with nothing on it.
 
+Finally it sorts the desktops so every iTerm2 window running Claude sits to the
+LEFT of everything else, keeping the relative order within each group.
+
 Usage:
     asplode              plan and apply
     asplode -n           dry run: print the plan, change nothing
     asplode -v           verbose (show per-move detail)
+    asplode --no-sort    skip the Claude-left reordering
 
 Native-fullscreen windows are left alone: macOS already gives each one its own
 space, and yabai refuses to move windows into or out of them.
@@ -26,6 +30,7 @@ the addition up front and refuses to run a partial redistribution without it.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -61,6 +66,19 @@ def window_space(wid):
     return data.get("space") if isinstance(data, dict) else None
 
 
+def is_phantom(w):
+    """
+    A window yabai lists but no app is showing.
+
+    2026-11-10: Signal and Bitwarden (Electron) keep a hidden window after
+    close; yabai reports it with empty role and subrole, not visible, and
+    System Events lists no window for the process. Real windows on other
+    desktops are also not visible but carry role AXWindow.
+    """
+    return (not w.get("role") and not w.get("subrole")
+            and not w.get("is-visible") and not w.get("has-ax-reference"))
+
+
 def real_windows():
     """User windows worth placing, newest-space-first ordering left to caller."""
     wins = query("windows") or []
@@ -72,6 +90,8 @@ def real_windows():
             continue          # minimized windows occupy no space visually
         if w.get("is-sticky"):
             continue          # sticky windows are on every space by design
+        if is_phantom(w):
+            continue          # hidden Electron window no app is showing
         keep.append(w)
     return keep
 
@@ -267,6 +287,171 @@ def sa_failure_hint():
             "  or nowhere yet, in which case there is nothing local to do.")
 
 
+ITERM_WINDOW_TTYS = '''
+tell application "iTerm2"
+  set output to ""
+  repeat with w in windows
+    repeat with t in tabs of w
+      set s to current session of t
+      set output to output & (id of w) & " " & (tty of s) & linefeed
+    end repeat
+  end repeat
+  return output
+end tell
+'''
+
+
+def claude_window_ids():
+    """
+    yabai window ids of the iTerm2 windows running Claude.
+
+    The join is tty -> iTerm window id -> yabai window id, and every leg is
+    exact rather than heuristic:
+
+      - A process counts as Claude only when the BASENAME OF ITS EXECUTABLE is
+        `claude`. Matching the word anywhere in the command line reports a
+        `grep claude` as a session of its own; this is the same test `tc which`
+        makes, for the same reason.
+      - iTerm2's `id of window` IS the yabai window id. Verified 2026-11-15:
+        all 14 ids matched exactly. Titles are NOT a usable key, because
+        `Default (-tcsh)` appears on several windows at once.
+      - A window counts as Claude if ANY of its tabs runs Claude. One iTerm
+        window here holds three Claude tabs, and the desktop it sits on cannot
+        be half-sorted.
+
+    Returns an empty set when iTerm2 is not running or AppleScript is refused,
+    which makes the caller skip the sort rather than guess at an order.
+    """
+    try:
+        ps = subprocess.run(["/bin/ps", "-A", "-o", "tty=,pid=,command="],
+                            capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return set()
+
+    claude_ttys = set()
+    for line in ps.splitlines():
+        fields = line.split()
+        if len(fields) < 3 or fields[0] in ("??", "-"):
+            continue          # no controlling terminal: not an iTerm tab
+        if os.path.basename(fields[2]) == "claude":
+            claude_ttys.add(fields[0])
+
+    if not claude_ttys:
+        return set()
+
+    try:
+        rows = subprocess.run(["osascript", "-e", ITERM_WINDOW_TTYS],
+                              capture_output=True, text=True, timeout=20).stdout
+    except Exception:
+        return set()
+
+    ids = set()
+    for line in rows.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        wid, tty = fields[0], fields[1].replace("/dev/", "")
+        if tty in claude_ttys and wid.isdigit():
+            ids.add(int(wid))
+    return ids
+
+
+def claude_spaces(claude_ids):
+    """Space indices holding at least one Claude window."""
+    spaces = set()
+    for w in query("windows") or []:
+        if w["id"] in claude_ids:
+            spaces.add(w["space"])
+    return spaces
+
+
+def sort_claude_left(dry_run, verbose):
+    """
+    Reorder desktops so Claude ones come first, stable within each group.
+
+    `yabai -m space N --move M` moves space N to position M and shifts the rest
+    along, so repeated insertion builds any permutation. Selection-sort style:
+    walk the target order and pull each desktop forward to where it belongs,
+    re-querying after every step because every move renumbers the ones it
+    passed.
+
+    Native-fullscreen desktops are sorted like any other. They were first
+    treated as immovable walls, which was a GUESS and a wrong one: probed live
+    2026-11-15, `space <fullscreen> --move 1` exits 0 and actually reorders,
+    and a normal desktop moves across fullscreen ones freely. On this machine
+    seven of twenty-six desktops are fullscreen and scattered from index 2
+    onward, so the wall rule reduced the sortable range to one desktop and made
+    the whole feature a no-op. A fullscreen desktop holding a Claude window
+    sorts left with the rest.
+    """
+    claude_ids = claude_window_ids()
+    if not claude_ids:
+        print("  no Claude windows found (iTerm2 not running, or none open);"
+              " leaving desktop order alone")
+        return 0
+
+    sortable = query("spaces") or []
+    if len(sortable) < 2:
+        return 0
+
+    on_claude = claude_spaces(claude_ids)
+    current = [s["index"] for s in sortable]
+    desired = ([i for i in current if i in on_claude]
+               + [i for i in current if i not in on_claude])
+
+    if current == desired:
+        print(f"  desktop order already has Claude first "
+              f"({len(on_claude & set(current))} Claude, "
+              f"{len(current) - len(on_claude & set(current))} other)")
+        return 0
+
+    if dry_run:
+        # A dry run has moved nothing and closed nothing, so these indices are
+        # NOT the ones the real run will sort: the sweep renumbers everything
+        # above each destroyed desktop. Report the plan by window label, which
+        # survives renumbering, and say plainly that the numbers will differ.
+        # (Printing stale indices as if they were the plan is the same bug
+        # `planned` fixes in destroy_empty_spaces.)
+        titles = {}
+        for w in query("windows") or []:
+            titles.setdefault(w["space"], f"{w['app']}: {w.get('title','')[:38]}")
+        print("  would sort these to the left, in this order:")
+        for idx in desired:
+            if idx in on_claude:
+                print(f"    {titles.get(idx, '(empty desktop)')}")
+        print("  then everything else, in its present order")
+        print("  (desktop numbers will differ: the sweep above renumbers them)")
+        return len(desired)
+
+    # `order` tracks where each original desktop currently sits. yabai renumbers
+    # on every move, so the identity of a desktop is its POSITION in this list,
+    # never the index it had when the plan was made.
+    order = list(current)
+    moves = 0
+    for target_pos, original in enumerate(desired):
+        here = order.index(original)
+        if here == target_pos:
+            continue
+        # Positions are 1-based desktop indices for the sortable prefix, which
+        # always starts at desktop 1.
+        code, _, err = yabai("space", str(here + 1), "--move",
+                             str(target_pos + 1))
+        if code != 0 and is_mission_control_error(err):
+            dismiss_mission_control(verbose)
+            code, _, err = yabai("space", str(here + 1), "--move",
+                                 str(target_pos + 1))
+        if code != 0:
+            print(f"  could not move desktop {here + 1} -> {target_pos + 1}:"
+                  f" {err}", file=sys.stderr)
+            return moves
+        order.insert(target_pos, order.pop(here))
+        moves += 1
+        if verbose:
+            print(f"  moved desktop {here + 1} -> {target_pos + 1}")
+
+    return moves
+
+
 def destroy_empty_spaces(dry_run, verbose, planned=()):
     """
     Remove spaces with no windows, highest index first.
@@ -321,6 +506,8 @@ def main():
                     help="print the plan without changing anything")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="show each move as it happens")
+    ap.add_argument("--no-sort", action="store_true",
+                    help="leave desktop order alone (skip Claude-left sorting)")
     args = ap.parse_args()
 
     if subprocess.run(["which", "yabai"], capture_output=True).returncode != 0:
@@ -401,6 +588,12 @@ def main():
     removed = destroy_empty_spaces(args.dry_run, args.verbose, planned)
     verb = "would remove" if args.dry_run else "removed"
     print(f"  {verb} {removed} empty desktop(s)")
+
+    # Sorting comes LAST because the sweep renumbers desktops: ordering them
+    # before empties are closed would sort indices that are about to change.
+    if not args.no_sort:
+        print("sorting Claude desktops to the left")
+        sort_claude_left(args.dry_run, args.verbose)
 
     if not args.dry_run:
         final = query("spaces") or []
