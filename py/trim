@@ -14,7 +14,13 @@ Windows are never touched. A desktop counts as empty by asplode's rule: no
 window on it other than minimized or sticky ones, and not pinned. macOS
 keeps at least one desktop, and native-fullscreen desktops are skipped.
 
-Needs yabai's scripting addition (sudo yabai --load-sa). If this exits 0 and
+Needs yabai's scripting addition (sudo yabai --load-sa), confirmed 2026-11-15:
+asplode's letter had claimed destroying a desktop does not need it, but on
+2026-09-07 the addition died with Dock and this tool failed to destroy 12
+desktops with "cannot destroy space due to an error with the
+scripting-addition". This docstring was the correct half; the letter is fixed.
+
+If this exits 0 and
 the desktop count does not drop, either the addition is dead or yabai is
 listing windows no app is showing. To tell which, run `asplode -v`: its
 scripting-addition check distinguishes a Dock restart (reloadable) from a
