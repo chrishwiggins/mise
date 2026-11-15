@@ -319,17 +319,32 @@ def claude_window_ids():
         window here holds three Claude tabs, and the desktop it sits on cannot
         be half-sorted.
 
-    Returns an empty set when iTerm2 is not running or AppleScript is refused,
-    which makes the caller skip the sort rather than guess at an order.
+    Returns `(ids, reason)`. An empty set makes the caller skip the sort rather
+    than guess at an order, and `reason` says WHY it is empty, because the
+    honest answers are not interchangeable:
+
+      - `None`             windows were found; `ids` is real.
+      - "none open"        the lookup worked and there are genuinely none.
+      - anything else      the lookup FAILED and this is the error.
+
+    Collapsing those into one empty set is a bug this function used to have.
+    Every failure returned the same value as a successful empty answer, so
+    asplode told Chris "no Claude windows found" while he was looking at
+    eleven of them. The case that matters is macOS refusing the AppleScript:
+    automation permission is granted per controlling app, and `killall Dock`,
+    which this feature's `mru-spaces` change requires, is the class of event
+    that can trigger a fresh prompt. A refusal is not an observation.
     """
     try:
         ps = subprocess.run(["/bin/ps", "-A", "-o", "tty=,pid=,command="],
-                            capture_output=True, text=True, timeout=10).stdout
-    except Exception:
-        return set()
+                            capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        return set(), f"could not list processes: {exc}"
+    if ps.returncode != 0:
+        return set(), f"ps failed: {(ps.stderr or '').strip()}"
 
     claude_ttys = set()
-    for line in ps.splitlines():
+    for line in ps.stdout.splitlines():
         fields = line.split()
         if len(fields) < 3 or fields[0] in ("??", "-"):
             continue          # no controlling terminal: not an iTerm tab
@@ -337,23 +352,70 @@ def claude_window_ids():
             claude_ttys.add(fields[0])
 
     if not claude_ttys:
-        return set()
+        return set(), "none open"
 
     try:
-        rows = subprocess.run(["osascript", "-e", ITERM_WINDOW_TTYS],
-                              capture_output=True, text=True, timeout=20).stdout
-    except Exception:
-        return set()
+        proc = subprocess.run(["osascript", "-e", ITERM_WINDOW_TTYS],
+                              capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        return set(), "iTerm2 did not answer within 20s"
+    except Exception as exc:
+        return set(), f"could not ask iTerm2: {exc}"
+    if proc.returncode != 0:
+        # The usual cause is TCC: "Not authorized to send Apple events to
+        # iTerm2" (-1743), fixed in System Settings > Privacy & Security >
+        # Automation. Pass yabai's own words along rather than paraphrasing.
+        return set(), f"iTerm2 refused the query: {(proc.stderr or '').strip()}"
 
     ids = set()
-    for line in rows.splitlines():
+    for line in proc.stdout.splitlines():
         fields = line.split()
         if len(fields) != 2:
             continue
         wid, tty = fields[0], fields[1].replace("/dev/", "")
         if tty in claude_ttys and wid.isdigit():
             ids.add(int(wid))
-    return ids
+    if not ids:
+        # Claude processes exist but none of their ttys matched an iTerm tab,
+        # so they are running somewhere else (tmux, ssh, Terminal.app).
+        return set(), "Claude is running, but not in an iTerm2 tab"
+    return ids, None
+
+
+def warn_if_macos_will_resort():
+    """
+    Warn when macOS is set to rearrange desktops on its own.
+
+    With "Automatically rearrange Spaces based on most recent use" ON
+    (`com.apple.dock mru-spaces` = 1), macOS reorders desktops by recency, so
+    any order this sort produces is undone the moment Chris switches desktops.
+    The sort still exits 0 and still reports the moves it made, which makes the
+    failure invisible: the tool says it worked and the desktops drift back.
+
+    Checked here rather than only documented, because a docstring helps whoever
+    reads the source and this helps whoever runs the tool and wonders why
+    nothing stuck. The read is one `defaults` call and cannot fail destructively;
+    an unreadable value is left alone rather than guessed at.
+    """
+    try:
+        proc = subprocess.run(["defaults", "read", "com.apple.dock",
+                               "mru-spaces"],
+                              capture_output=True, text=True, timeout=10)
+    except Exception:
+        return            # cannot read it: say nothing rather than guess
+    if proc.returncode != 0:
+        # The key is absent until it is set once, and macOS treats absent as
+        # ON. Worth saying, since that is the drift case, not the safe one.
+        print("  note: com.apple.dock mru-spaces is unset, which macOS treats"
+              " as ON, so it may undo this sort", file=sys.stderr)
+        print("  turn it off with: defaults write com.apple.dock mru-spaces"
+              " -bool false && killall Dock", file=sys.stderr)
+        return
+    if proc.stdout.strip() not in ("0", "false"):
+        print("  warning: macOS is set to rearrange desktops by most recent"
+              " use, so it will undo this sort", file=sys.stderr)
+        print("  turn it off with: defaults write com.apple.dock mru-spaces"
+              " -bool false && killall Dock", file=sys.stderr)
 
 
 def claude_spaces(claude_ids):
@@ -384,10 +446,18 @@ def sort_claude_left(dry_run, verbose):
     the whole feature a no-op. A fullscreen desktop holding a Claude window
     sorts left with the rest.
     """
-    claude_ids = claude_window_ids()
+    warn_if_macos_will_resort()
+    claude_ids, why = claude_window_ids()
     if not claude_ids:
-        print("  no Claude windows found (iTerm2 not running, or none open);"
-              " leaving desktop order alone")
+        if why == "none open":
+            print("  no Claude windows open; leaving desktop order alone")
+        else:
+            # A failed lookup is NOT the same as an empty one, so it goes to
+            # stderr and says what actually happened. Reporting it as "none
+            # open" would be a confidently wrong answer.
+            print(f"  could not identify Claude windows: {why}",
+                  file=sys.stderr)
+            print("  leaving desktop order alone", file=sys.stderr)
         return 0
 
     sortable = query("spaces") or []
