@@ -1,13 +1,13 @@
 #!/bin/bash
-# whoareyou-block SLUG [NAME [REF]]
+# wry [SLUG [NAME [REF]]]   (SLUG defaults to "self")
 # Write /tmp/cs-SLUG.pmt: a prompt to paste into ANOTHER Claude session, telling it how to reach this one.
 # Walks this shell's parent chain to the claude process, then reads the roster name and session id
 # from ~/.claude/sessions/<pid>.json, so no ListAgents call is needed. NAME and REF override (REF is
 # only on ListAgents' first line, and only matters when two live sessions share a name).
-# Read-only except the .pmt file and pbcopy. Run as `! whoareyou-block SLUG` from the prompt.
-slug=$1; name=$2; ref=${3:-}
-if [ -z "$slug" ] || [ "${slug#-}" != "$slug" ]; then
-  echo "usage: whoareyou-block SLUG [NAME [REF]]   (writes /tmp/cs-SLUG.pmt)" >&2; exit 2
+# Read-only except the .pmt file and pbcopy. Run as `! wry [SLUG]` from the prompt.
+slug=${1:-self}; name=$2; ref=${3:-}
+if [ "${slug#-}" != "$slug" ]; then
+  echo "usage: wry [SLUG [NAME [REF]]]   (writes /tmp/cs-SLUG.pmt; SLUG defaults to self)" >&2; exit 2
 fi
 out=/tmp/cs-$slug.pmt
 
@@ -15,7 +15,7 @@ pid= tty= sid= start=
 p=$$
 while [ -n "$p" ] && [ "$p" != "1" ]; do
   x=$(/bin/ps -p "$p" -o comm= 2>/dev/null)
-  case "$x" in *claude)
+  case "$x" in *claude|*/claude/versions/*)
     pid=$p
     tty=$(/bin/ps -p "$p" -o tty= 2>/dev/null | /usr/bin/tr -d ' ')
     sid=$(/bin/ps -p "$p" -o command= 2>/dev/null | /usr/bin/grep -oE '[0-9a-f]{8}-[0-9a-f-]{27}' | head -1)
