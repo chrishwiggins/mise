@@ -133,15 +133,39 @@ def dates_in(line, today):
     return out
 
 
+WEEKDAY_WORDS = re.compile(
+    r"\b(?:this|next|by|closes|due|before)\s+(?:(?:his|her|their|the|our|my)\s+)?"
+    r"(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.IGNORECASE)
+
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday",
+             "friday", "saturday", "sunday"]
+
+
 def relative_dates(line, anchor):
-    """Dates implied by relative words, resolved against the file's own anchor date."""
+    """Dates implied by relative words, resolved against the file's own anchor date.
+
+    Covers both "tonight/tomorrow" and NAMED WEEKDAYS ("closes this Friday").
+    The weekday case was a blind spot until 2026-10-15: an AP registration
+    deadline written as "closes this Friday" stayed invisible to this checker
+    for two consecutive sessions while the date approached, because only
+    today/tonight/tomorrow were recognized. A weekday resolves to the next
+    occurrence strictly after the anchor, which is what "this Friday" means
+    when written earlier in the same week.
+    """
     if anchor is None:
         return []
+    out = []
     w = TODAY_WORDS.search(line)
-    if not w:
-        return []
-    word = w.group(1).lower()
-    return [anchor + dt.timedelta(days=1 if word == "tomorrow" else 0)]
+    if w:
+        word = w.group(1).lower()
+        out.append(anchor + dt.timedelta(days=1 if word == "tomorrow" else 0))
+    d = WEEKDAY_WORDS.search(line)
+    if d:
+        target = _WEEKDAYS.index(d.group(1).lower())
+        ahead = (target - anchor.weekday()) % 7
+        out.append(anchor + dt.timedelta(days=ahead or 7))
+    return out
 
 
 def anchor_date(text):
@@ -247,13 +271,53 @@ def main():
     # not resurface forever.
     floor = today - dt.timedelta(days=max(1, a.overdue_days))
 
+    # The /ciao ritual caps doc/NEXT.md at 3-5 items and nothing checked it, so
+    # on 2026-11-15 the file reached 11 while this script reported a clean exit:
+    # it had only ever been asked about dates. An over-cap file is the failure
+    # the cap exists to prevent, because the nearest real deadline sinks into a
+    # list nobody can hold in mind. Reported whether or not anything is due,
+    # since a clean date report is exactly when the overflow goes unnoticed.
+    items = item_lines(text)
+    over_cap = len(items) > 5 and os.path.basename(a.file) == "NEXT.md"
+
+    # Absolute dates belong in doc/PENDING.md, never in BACKLOG.md, because
+    # BACKLOG rows are standing decisions with no clock and a date in their
+    # prose is provenance wearing a deadline's clothes. The /ciao retro of
+    # 2026-11-15 said so in prose, and the very next ritual wrote four more
+    # stamps into BACKLOG.md on 2026-11-18, which is how a prose rule fails
+    # twice. Same parser as the date report, so this flags exactly the lines a
+    # reader or a checker could misread as due dates. The Updated: stamp in the
+    # header is the file's own anchor and is exempt.
+    stamped = []
+    if os.path.basename(a.file) == "BACKLOG.md":
+        for line in items:
+            if dates_in(line, today):
+                stamped.append(line.strip())
+
     due = []
-    for line in item_lines(text):
+    for line in items:
         cands = dates_in(line, today) + relative_dates(line, anchor)
         ds = [d for d in cands if floor <= d <= horizon]
         if not ds:
             continue
         due.append((min(ds), line.strip(), survived(retro_text, line)))
+
+    if over_cap:
+        print(
+            f"OVER CAP: {a.file} holds {len(items)} items and the ritual allows 5. "
+            "Cut it, and move what survives to doc/BACKLOG.md."
+        )
+        print()
+
+    if stamped:
+        print(
+            f"DATED BACKLOG: {a.file} carries absolute dates in "
+            f"{len(stamped)} item(s). Move each timestamp to doc/PENDING.md and "
+            "have the row point there."
+        )
+        for line in stamped:
+            print(f"  {line[:110]}")
+        print()
 
     if not due:
         if not a.quiet:
@@ -261,7 +325,7 @@ def main():
                 f"Nothing in {a.file} is dated within {a.hours}h of {today}, "
                 f"and nothing is overdue in the last {a.overdue_days} days."
             )
-        return 0
+        return 2 if over_cap else 0
 
     due.sort()
     overdue = [x for x in due if x[0] < today]
