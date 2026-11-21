@@ -19,9 +19,9 @@ PW="97548 $APP --disable-field-trial-config --user-data-dir=/x/ms-playwright-mcp
 HL="38814 $APP --headless=new --user-data-dir=/tmp/h/profile --dump-dom http://127.0.0.1/x.html"
 HELPER="20001 $APP Helper --type=renderer"
 
-run() {   # name expect_exit ps byname real
+run() {   # name expect_exit ps byname real [owners]
   local out rc
-  out=$(CHROME_SHADOW_PS="$3" CHROME_SHADOW_BYNAME="$4" CHROME_SHADOW_REAL="$5" "$H" 2>&1); rc=$?
+  out=$(CHROME_SHADOW_PS="$3" CHROME_SHADOW_BYNAME="$4" CHROME_SHADOW_REAL="$5" CHROME_SHADOW_OWNERS="${6-}" "$H" 2>&1); rc=$?
   if [ "$rc" = "$2" ]; then ok "$1"; else bad "$1 (exit $rc, want $2): $out"; fi
   LAST="$out"
 }
@@ -33,7 +33,9 @@ run "Playwright answering (launched first)"  1 "$PW"$'\n'"$REAL"         0   2
 case "$LAST" in *"kill 97548"*) ok "  names the Playwright pid";; *) bad "  names the Playwright pid: $LAST";; esac
 run "headless launched later, answering"     1 "$REAL"$'\n'"$HL"         0   2
 case "$LAST" in *"kill 38814"*) ok "  names the headless pid";; *) bad "  names the headless pid: $LAST";; esac
-run "only automation Chromes"                1 "$PW"                     0   ""
+run "Playwright MCP owns the shadow"          1 "$PW"$'\n'"$REAL"         1   2   " 26793 node /x/.bin/playwright-mcp --output-dir /y"
+case "$LAST" in *"kill "*) bad "  never advises killing an MCP browser: $LAST";; *"26793"*"browser_close"*) ok "  says close it from its session";; *) bad "  says close it from its session: $LAST";; esac
+run "only automation Chromes"               1 "$PW"                     0   ""
 run "helper processes are not instances"     0 "$REAL"$'\n'"$HELPER"     0   0
 
 [ "$fail" = 0 ] && echo "all passed" || echo "FAILURES"

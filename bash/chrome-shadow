@@ -44,5 +44,20 @@ JS
 byname=${CHROME_SHADOW_BYNAME-$(/usr/bin/osascript -e 'tell application "Google Chrome" to count windows' 2>/dev/null)}
 realcount=${CHROME_SHADOW_REAL-$(pid_window_count "$real")}
 [ "$byname" = "$realcount" ] && exit 0
-echo "chrome-shadow: AppleScript reaches the wrong Chrome (it sees ${byname:-?} windows, yours, pid $real, has ${realcount:-?}); another instance is answering: pid $others (Playwright/headless). Quit it (kill $others) and rerun" >&2
+msg="chrome-shadow: AppleScript reaches the wrong Chrome (it sees ${byname:-?} windows, yours, pid $real, has ${realcount:-?}); another instance is answering: pid $others (Playwright/headless)."
+# A Playwright MCP browser belongs to a live Claude session: killing it breaks that
+# session's browser tools (2026-11-21: this message said to kill a playwright-mcp Chrome).
+owners=""
+for p in $others; do
+  pp=$(/bin/ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+  [ -n "$pp" ] && owners+=" $pp $(/bin/ps -o command= -p "$pp" 2>/dev/null)"$'\n'
+done
+owners=${CHROME_SHADOW_OWNERS-$owners}
+mcp=$(printf '%s' "$owners" | /usr/bin/awk '/playwright-mcp|@playwright\/mcp/{print $1}' | tr '\n' ' ')
+mcp=${mcp% }
+if [ -n "$mcp" ]; then
+  echo "$msg It is a Claude session's Playwright MCP browser (server pid $mcp): close it from that session (browser_close) rather than killing it, then rerun" >&2
+else
+  echo "$msg Quit it (kill $others) and rerun" >&2
+fi
 exit 1
