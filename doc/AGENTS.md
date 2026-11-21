@@ -34,6 +34,9 @@ or scripts. Currently available:
 
 - agents/prj/EXAMPLES.md: usage examples
 
+- agents/ein/AGENTS.md: drop text, a URL or the clipboard into a
+  prj project's ein/ inbox
+
 ## Integration Pattern
 
 When an agent needs to use a mise tool:

@@ -1,0 +1,83 @@
+#!/opt/homebrew/bin/bash
+# ein - drop the clipboard, or text you type, into a prj project's ein/ inbox
+#
+# Usage:
+#   ein <slug>            write pbpaste to <project dir>/ein/<datestr>
+#   ein <slug> <text...>  write the text (a prompt, a URL) instead;
+#                         several words are joined with spaces
+#   ein                   pbpaste, for the prj project containing cwd
+#                         (else the git root)
+#   ein -h                this help
+#
+# The slug is resolved through prj's own registry
+# (~/.config/prj/projects.json), so any slug `prj` lists works here.
+# Files are named like datestr (2026-11-19T14h46m56s), the format the
+# /ein skill expects; /ein in that project files them later
+# (e.g. `prj <slug> /ein`).
+
+set -euo pipefail
+
+PRJ_DB="$HOME/.config/prj/projects.json"
+
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+esac
+slug=${1:-}
+[[ $# -gt 0 ]] && shift
+text="$*"   # empty: use the clipboard
+
+[[ -f "$PRJ_DB" ]] || { echo "ein: no prj registry at $PRJ_DB" >&2; exit 1; }
+
+# With a slug: that project's dir. Without: the deepest registered
+# project dir that is cwd or one of its parents.
+dir=$(PRJ_DB="$PRJ_DB" SLUG="$slug" python3 -c '
+import json, os
+db = json.load(open(os.environ["PRJ_DB"]))
+slug = os.environ["SLUG"]
+if slug:
+    print(db.get(slug, {}).get("dir", ""))
+else:
+    cwd = os.path.realpath(os.getcwd())
+    best = ""
+    for e in db.values():
+        d = e.get("dir", "")
+        r = os.path.realpath(d) if d else ""
+        if r and (cwd == r or cwd.startswith(r + os.sep)) and len(r) > len(best):
+            best = r
+    print(best)
+')
+if [[ -z "$dir" && -z "$slug" ]]; then
+  dir=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  if [[ -z "$dir" ]]; then
+    echo "ein: cwd is in no prj project or git repo; give a slug (run: prj)" >&2
+    exit 1
+  fi
+fi
+if [[ -z "$dir" ]]; then
+  echo "ein: unknown prj slug '$slug' (run: prj)" >&2
+  exit 1
+fi
+[[ -d "$dir" ]] || { echo "ein: project dir missing: $dir" >&2; exit 1; }
+
+if [[ -n "$text" ]]; then
+  clip=$text; src=text
+else
+  clip=$(pbpaste); src=clipboard
+fi
+if [[ -z "${clip//[[:space:]]/}" ]]; then
+  echo "ein: $src is empty; nothing written" >&2
+  exit 1
+fi
+
+inbox="$dir/ein"
+/bin/mkdir -p "$inbox"
+name=$(date +%Y-%m-%dT%Hh%Mm%Ss)
+out="$inbox/$name"
+n=2
+while [[ -e "$out" ]]; do out="$inbox/$name-$n"; n=$((n + 1)); done
+
+printf '%s\n' "$clip" > "$out"
+lines=$(wc -l < "$out" | tr -d ' ')
+echo "$out ($lines lines): $(head -c 70 "$out" | head -1)"
