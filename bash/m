@@ -2753,12 +2753,6 @@ raw_action_token=""
 multi_accounts=(); multi_account_index=-1
 i=0; args=("$@")
 
-# `open` is both a top-level action (open msg in web UI) and a trailing
-# modifier for `-A` (open the just-saved attachment). When `-A`/
-# `--save-attachments-only` is present, `open` must NOT be grabbed as the
-# top-level action — it has to fall through to the inbox handler where the
-# `-A open` special-case lives. Detect the attachment-save flag up front.
-attach_save_in_args=0
 # --queryfile short-circuits everything else (see _queryfile_run).
 _qf_file=""; _qf_rest=(); _qf_skip=0
 for (( _qf_i = 0; _qf_i < ${#args[@]}; _qf_i++ )); do
@@ -2777,6 +2771,12 @@ if [[ -n "$_qf_file" ]]; then
 fi
 unset _qf_i _qf_arg _qf_rest _qf_file _qf_skip
 
+# `open` is both a top-level action (open msg in web UI) and a trailing
+# modifier for `-A` (open the just-saved attachment). When `-A`/
+# `--save-attachments-only` is present, `open` must NOT be grabbed as the
+# top-level action — it has to fall through to the inbox handler where the
+# `-A open` special-case lives. Detect the attachment-save flag up front.
+attach_save_in_args=0
 for _a in "${args[@]+"${args[@]}"}"; do
     if [[ "$_a" == "-A" || "$_a" == "--save-attachments-only" ]]; then
         attach_save_in_args=1
