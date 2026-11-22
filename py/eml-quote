@@ -27,6 +27,7 @@ Exit codes:
 import argparse
 import email
 import email.policy
+from html.parser import HTMLParser
 import os
 import re
 import subprocess
@@ -72,7 +73,10 @@ def fetch_via_m(account, index, sent):
     head = [ln for ln in lines[:sep] if re.match(r"^[A-Za-z-]+:", ln)]
     if not head:
         die("unexpected output from m: no headers before the separator")
-    return "\n".join(head), "\n".join(lines[sep + 1:])
+    body = "\n".join(lines[sep + 1:])
+    if looks_like_html(body):
+        body = html_to_text(body)
+    return "\n".join(head), body
 
 
 def fetch_via_file(path):
@@ -85,14 +89,72 @@ def fetch_via_file(path):
         "%s: %s" % (k, msg.get(k, "")) for k in ("From", "To", "Date", "Subject") if msg.get(k)
     )
     body = ""
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == "text/plain":
-                body = part.get_content()
-                break
-    else:
-        body = msg.get_content()
+    html = ""
+    for part in msg.walk():
+        ctype = part.get_content_type()
+        if ctype == "text/plain" and not body:
+            body = part.get_content()
+        elif ctype == "text/html" and not html:
+            html = part.get_content()
+    if not body.strip() and html:
+        body = html_to_text(html)
     return hdr, body
+
+
+class _HTMLText(HTMLParser):
+    """Visible text of an HTML body, one block element per line.
+
+    Skips style/script/head, anything styled display:none (Outlook preheader
+    divs repeat the whole message), and Proofpoint banners (ids starting pfpt).
+    """
+
+    BLOCK = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "table"}
+    VOID = {"br", "img", "meta", "hr", "link", "input", "wbr"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.skip, self.stack = [], 0, []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        style = (a.get("style") or "").replace(" ", "").lower()
+        hide = (
+            "display:none" in style
+            or tag in ("style", "script", "head", "title")
+            or (a.get("id") or "").startswith("pfpt")
+        )
+        if tag not in self.VOID:
+            self.stack.append(hide)
+            if hide:
+                self.skip += 1
+        if tag in self.BLOCK and not self.skip:
+            self.out.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self.VOID:
+            return
+        if self.stack and self.stack.pop():
+            self.skip -= 1
+        if tag in self.BLOCK and not self.skip:
+            self.out.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(data)
+
+
+def html_to_text(html):
+    """Fallback for HTML-only mail (Outlook), so a quote carries words, not markup."""
+    p = _HTMLText()
+    p.feed(html)
+    p.close()
+    text = "".join(p.out).replace(chr(0x200A), "").replace(chr(0xA0), " ")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip() + "\n"
+
+
+def looks_like_html(body):
+    return bool(re.search(r"<(!DOCTYPE|html|body|div|p|table)\b", body[:2000], re.I))
 
 
 def header(text, name):
