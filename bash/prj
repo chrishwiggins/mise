@@ -8,6 +8,8 @@
 #   prj -rm <slug>               Remove a project
 #   prj -edit <slug> [field=val]  Update a project field
 #   prj -ls <slug>                List sessions for a project
+#   prj -alias <alias> <slug>     Create a short alias for a project
+#   prj -unalias <alias>          Remove an alias
 #   prj -h                        Show help
 #
 # Color spec: single color or hyphen-delimited per-tab colors.
@@ -30,6 +32,26 @@ if [[ ! -f "$PRJ_DB" ]]; then
 fi
 
 # ── helpers ────────────────────────────────────────────────────────
+
+_resolve_slug() {
+  # Resolve alias to slug. If arg is an alias, return its target.
+  # If arg is a project slug, return it unchanged.
+  # If not found, return empty string.
+  PRJ_DB="$PRJ_DB" INPUT_SLUG="$1" python3 -c "
+import json, os
+with open(os.environ['PRJ_DB']) as f:
+    db = json.load(f)
+input_slug = os.environ['INPUT_SLUG']
+# Check if it's a direct project slug
+if input_slug in db and 'dir' in db[input_slug]:
+    print(input_slug)
+else:
+    # Check aliases section
+    aliases = db.get('_aliases', {})
+    if input_slug in aliases:
+        print(aliases[input_slug])
+"
+}
 
 _read_field() {
   # _read_field <slug> <field>
@@ -137,7 +159,7 @@ else:
 
     items = sorted(db.items(), key=sort_key, reverse=True)
     print('{:<2s}{:<16s} {:<12s} {:<14s} {}'.format('', 'Slug', 'Color', 'Last used', 'Directory'))
-    print('-' * 80)
+    print('-' * 72)
     for slug, entry in items:
         d = entry.get('dir', '?')
         c = entry.get('color', '?')
@@ -348,9 +370,17 @@ with open(db_path, 'w') as f:
 }
 
 cmd_rm() {
-  local slug="$1"
-  if [[ -z "$slug" ]]; then
+  local orig_slug="$1"
+  if [[ -z "$orig_slug" ]]; then
     echo "Usage: prj -rm <slug>" >&2
+    exit 1
+  fi
+
+  # Resolve alias
+  local slug
+  slug=$(_resolve_slug "$orig_slug")
+  if [[ -z "$slug" ]]; then
+    echo "Unknown project: $orig_slug" >&2
     exit 1
   fi
 
@@ -375,11 +405,19 @@ with open(db_path, 'w') as f:
 }
 
 cmd_edit() {
-  local slug="$1"
+  local orig_slug="$1"
   shift
 
-  if [[ -z "$slug" ]]; then
+  if [[ -z "$orig_slug" ]]; then
     echo "Usage: prj -edit <slug> dir=/new/path color=newcolor slug=newslug" >&2
+    exit 1
+  fi
+
+  # Resolve alias
+  local slug
+  slug=$(_resolve_slug "$orig_slug")
+  if [[ -z "$slug" ]]; then
+    echo "Unknown project: $orig_slug" >&2
     exit 1
   fi
 
@@ -449,8 +487,67 @@ with open(db_path, 'w') as f:
   done
 }
 
+cmd_alias() {
+  local alias_name="$1" target_slug="$2"
+  if [[ -z "$alias_name" ]]; then
+    echo "Usage: prj -alias <alias> <slug>" >&2
+    echo "       prj -unalias <alias>" >&2
+    exit 1
+  fi
+
+  # Resolve target to ensure it's a real project
+  if [[ -n "$target_slug" ]]; then
+    local resolved
+    resolved=$(_resolve_slug "$target_slug")
+    if [[ -z "$resolved" ]]; then
+      echo "Error: target '$target_slug' is not a known project or alias" >&2
+      exit 1
+    fi
+    target_slug="$resolved"
+
+    PRJ_DB="$PRJ_DB" ALIAS_NAME="$alias_name" TARGET_SLUG="$target_slug" python3 -c "
+import json, os
+db_path = os.environ['PRJ_DB']
+with open(db_path) as f:
+    db = json.load(f)
+if '_aliases' not in db:
+    db['_aliases'] = {}
+db['_aliases'][os.environ['ALIAS_NAME']] = os.environ['TARGET_SLUG']
+with open(db_path, 'w') as f:
+    json.dump(db, f, indent=2)
+    f.write('\n')
+"
+    echo "Alias created: $alias_name -> $target_slug"
+  fi
+}
+
+cmd_unalias() {
+  local alias_name="$1"
+  if [[ -z "$alias_name" ]]; then
+    echo "Usage: prj -unalias <alias>" >&2
+    exit 1
+  fi
+
+  PRJ_DB="$PRJ_DB" ALIAS_NAME="$alias_name" python3 -c "
+import json, os
+db_path = os.environ['PRJ_DB']
+with open(db_path) as f:
+    db = json.load(f)
+aliases = db.get('_aliases', {})
+if os.environ['ALIAS_NAME'] in aliases:
+    del db['_aliases'][os.environ['ALIAS_NAME']]
+    with open(db_path, 'w') as f:
+        json.dump(db, f, indent=2)
+        f.write('\n')
+    print('Alias removed: ' + os.environ['ALIAS_NAME'])
+else:
+    print('Alias not found: ' + os.environ['ALIAS_NAME'], file=__import__('sys').stderr)
+    __import__('sys').exit(1)
+"
+}
+
 cmd_launch() {
-  local slug="$1"
+  local orig_slug="$1"
   shift
   local fresh=0
   # Strip -0 / --fresh from anywhere in remaining args (prompt or position 2)
@@ -465,30 +562,18 @@ cmd_launch() {
   set -- "${rest[@]}"
   local initial_prompt="$*"
 
+  # Resolve alias to slug
+  local slug
+  slug=$(_resolve_slug "$orig_slug")
+  if [[ -z "$slug" ]]; then
+    echo "Unknown project: $orig_slug" >&2
+    exit 1
+  fi
+
   # Look up project
   local dir color
   dir=$(_read_field "$slug" "dir")
   color=$(_read_field "$slug" "color")
-
-  if [[ -z "$dir" ]]; then
-    echo "Unknown project: $slug" >&2
-    local suggestions
-    suggestions=$(PRJ_DB="$PRJ_DB" PRJ_SLUG="$slug" python3 -c "
-import json, os, difflib
-with open(os.environ['PRJ_DB']) as f:
-    db = json.load(f)
-matches = difflib.get_close_matches(os.environ['PRJ_SLUG'], list(db.keys()), n=3, cutoff=0.4)
-if matches:
-    print('Did you mean: ' + ', '.join(matches) + '?')
-")
-    if [[ -n "$suggestions" ]]; then
-      echo "$suggestions" >&2
-    else
-      echo "Registered projects:" >&2
-      _list_projects >&2
-    fi
-    exit 1
-  fi
 
   if [[ ! -d "$dir" ]]; then
     echo "Error: directory '$dir' no longer exists" >&2
@@ -700,9 +785,17 @@ end tell
 }
 
 cmd_ls() {
-  local slug="$1"
-  if [[ -z "$slug" ]]; then
+  local orig_slug="$1"
+  if [[ -z "$orig_slug" ]]; then
     echo "Usage: prj -ls <slug>" >&2
+    exit 1
+  fi
+
+  # Resolve alias
+  local slug
+  slug=$(_resolve_slug "$orig_slug")
+  if [[ -z "$slug" ]]; then
+    echo "Unknown project: $orig_slug" >&2
     exit 1
   fi
 
@@ -767,14 +860,18 @@ if resumable_sid:
 }
 
 cmd_close() {
-  local slug="$1"
-  if [[ -z "$slug" ]]; then
+  local orig_slug="$1"
+  if [[ -z "$orig_slug" ]]; then
     echo "Usage: prj -close <slug>" >&2
     exit 1
   fi
 
-  # Don't require the slug to be registered - user may want to close
-  # windows for a project they already removed.
+  # Resolve alias (but don't require it to be registered)
+  local slug
+  slug=$(_resolve_slug "$orig_slug")
+  if [[ -z "$slug" ]]; then
+    slug="$orig_slug"
+  fi
   local closed
   closed=$(osascript -e "
     tell application \"iTerm2\"
@@ -831,15 +928,28 @@ case "$1" in
     shift
     cmd_close "$@"
     ;;
+  -alias|--alias)
+    shift
+    cmd_alias "$@"
+    ;;
+  -unalias|--unalias)
+    shift
+    cmd_unalias "$@"
+    ;;
   --cd-path)
     # Print the directory path for a slug (used by cd-prj alias)
     if [[ -z "$2" ]]; then
       echo "Usage: prj --cd-path <slug>" >&2
       exit 1
     fi
-    dir=$(_read_field "$2" "dir")
-    if [[ -z "$dir" ]]; then
+    slug=$(_resolve_slug "$2")
+    if [[ -z "$slug" ]]; then
       echo "Unknown project: $2" >&2
+      exit 1
+    fi
+    dir=$(_read_field "$slug" "dir")
+    if [[ -z "$dir" ]]; then
+      echo "Unknown project: $slug" >&2
       exit 1
     fi
     echo "$dir"
