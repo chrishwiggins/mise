@@ -10,7 +10,8 @@
 #   ein -h                this help
 #
 # The slug is resolved through prj's own registry
-# (~/.config/prj/projects.json), so any slug `prj` lists works here.
+# (~/.config/prj/projects.json), so any slug `prj` lists works here,
+# and so does any `prj -alias` name (hackNY -> hny).
 # Files are named like datestr (2026-11-19T14h46m56s), the format the
 # /ein skill expects; /ein in that project files them later
 # (e.g. `prj <slug> /ein`).
@@ -19,7 +20,7 @@ set -euo pipefail
 
 PRJ_DB="$HOME/.config/prj/projects.json"
 
-usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
@@ -37,6 +38,9 @@ import json, os
 db = json.load(open(os.environ["PRJ_DB"]))
 slug = os.environ["SLUG"]
 if slug:
+    # same order as prj _resolve_slug: a real slug wins, else an alias
+    if not (slug in db and "dir" in db[slug]):
+        slug = db.get("_aliases", {}).get(slug, slug)
     print(db.get(slug, {}).get("dir", ""))
 else:
     cwd = os.path.realpath(os.getcwd())

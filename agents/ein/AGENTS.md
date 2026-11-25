@@ -7,7 +7,9 @@ For agents: how to drop a note into a project's ein/ inbox.
 ein writes one new file into `<project dir>/ein/`, the inbox a
 later session triages. The content is either text given on the
 command line (a prompt, a URL) or the macOS clipboard. The project
-is named by a prj slug, so any slug `prj` lists works.
+is named by a prj slug, so any slug `prj` lists works. A prj alias
+also works (for example `hackNY` for `hny`); a real slug wins over an
+alias of the same name, as in prj.
 
 ## Entry Points
 

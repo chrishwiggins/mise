@@ -47,4 +47,14 @@ rm -rf "$T/t/ein"
 run "CLIPBOARD" t "   " 2>/dev/null; check $? 1 "whitespace text exits 1"
 check "$(ls "$T/t/ein" 2>/dev/null | wc -l | tr -d ' ')" 0 "whitespace text wrote nothing"
 run "CLIPBOARD" bogus "hello" 2>/dev/null; check $? 1 "text with unknown slug exits 1"
+
+# prj -alias entries (_aliases) resolve; a real slug beats a same-named alias.
+mkdir -p "$T/al" "$T/real"
+printf '{"al":{"dir":"%s"},"real":{"dir":"%s"},"_aliases":{"AL":"al","real":"al","dead":"nope"}}' \
+  "$T/al" "$T/real" > "$T/home/.config/prj/projects.json"
+run "x" AL "via alias" >/dev/null; check $? 0 "alias exits 0"
+check "$(cat "$T/al/ein/"* 2>/dev/null)" "via alias" "alias writes to target project"
+run "x" real "direct" >/dev/null
+check "$(cat "$T/real/ein/"* 2>/dev/null)" "direct" "real slug beats same-named alias"
+run "x" dead "y" 2>/dev/null; check $? 1 "alias to unknown slug exits 1"
 echo "$pass passed, $fail failed"; rm -rf "$T"; [ $fail -eq 0 ]
