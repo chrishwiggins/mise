@@ -47,10 +47,14 @@ def die(msg):
 
 
 def diff_for(path):
+    # Run git from the file's own directory, so an absolute path works from
+    # any cwd (a /tmp scratch dir is not a repo, and git diff then fails).
+    full = os.path.abspath(path)
     try:
         out = subprocess.run(
-            ["git", "diff", "--", path],
+            ["git", "diff", "--", os.path.basename(full)],
             capture_output=True, text=True, check=True,
+            cwd=os.path.dirname(full),
         )
     except FileNotFoundError:
         die("git not found on PATH")
