@@ -5,6 +5,7 @@
 # from ~/.claude/sessions/<pid>.json, so no ListAgents call is needed. NAME and REF override (REF is
 # only on ListAgents' first line, and only matters when two live sessions share a name).
 # Read-only except the .pmt file and pbcopy. Run as `! wry [SLUG]` from the prompt.
+# Outside a Claude session it fails (exit 1) and leaves the file and clipboard alone.
 slug=${1:-self}; name=$2; ref=${3:-}
 if [ "${slug#-}" != "$slug" ]; then
   echo "usage: wry [SLUG [NAME [REF]]]   (writes /tmp/cs-SLUG.pmt; SLUG defaults to self)" >&2; exit 2
@@ -25,10 +26,15 @@ while [ -n "$p" ] && [ "$p" != "1" ]; do
   p=$(/bin/ps -p "$p" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
 done
 
+if [ -z "$pid" ]; then
+  echo "wry: no claude process in the parent chain, so there is no session to describe; run it as \`! wry [SLUG]\` at a Claude prompt. Nothing written." >&2
+  exit 1
+fi
+
 # The session file holds the roster name ListAgents prints, and the session id the command line lacks.
 sdir=$HOME/.claude/sessions
 sfile=$sdir/$pid.json
-if [ -n "$pid" ] && [ -f "$sfile" ]; then
+if [ -f "$sfile" ]; then
   [ -z "$name" ] && name=$(/usr/bin/plutil -extract name raw -o - "$sfile" 2>/dev/null)
   [ -z "$sid" ] && sid=$(/usr/bin/plutil -extract sessionId raw -o - "$sfile" 2>/dev/null)
 fi
@@ -50,9 +56,7 @@ else
   refline="ref: not needed (no other live session has this name)"
 fi
 
-if [ -z "$pid" ]; then
-  handle="UNKNOWN (no claude process in the parent chain)"
-elif [ -z "$tty" ] || [ "$tty" = "??" ]; then
+if [ -z "$tty" ] || [ "$tty" = "??" ]; then
   handle="pid$pid@?? (background job, no tty; no iTerm window for tc to find)"
 else
   handle="pid$pid@$tty (iTerm window on $tty; tc can find it)"
