@@ -520,7 +520,7 @@ alias prp "pbpaste|reply|pbcopy"
 #alias ifind open /System/Applications/FindMy.app/
 #alias curse "grep -v -e '^#' ~/mise/aux/curses.txt | sed -e 's/^- //' | /opt/homebrew/bin/shuf | head -1| tr '\\' '\n'"
 # 2026-11-15: one awk instead of a 5-process pipe (login runs this)
-alias curse '/usr/bin/awk -f ~/mise/aux/curse.awk ~/mise/aux/curses.txt'
+#alias curse '/usr/bin/awk -f ~/mise/aux/curse.awk ~/mise/aux/curses.txt'
 #alias cu-covid https://covid19.columbia.edu/content/covid-19-testing-program-fall-2021
 #alias cu-covid http://secure.health.columbia.edu/
 #alias cu-covid https://secure.health.columbia.edu/confirm.aspx

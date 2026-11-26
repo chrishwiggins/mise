@@ -73,4 +73,4 @@ if ( ! -e /tmp/.hidutil-capslock-esc ) then
 endif
 
 # generate random curse
-curse
+# curse retired 2026-11-26
