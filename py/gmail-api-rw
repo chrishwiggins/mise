@@ -4610,11 +4610,23 @@ def _otp_emit(result, raw, internal_ms, account_email, copy_clip=True):
     return 2
 
 
+def _otp_account(service, account):
+    """The mailbox's own address when no -e named it, so the from-line and the
+    corpus labels say "g" instead of "?"."""
+    if account:
+        return account
+    try:
+        return service.users().getProfile(userId="me").execute()["emailAddress"]
+    except Exception:
+        return account
+
+
 def do_otp_index(service, index, count, query, account=None, copy_clip=True):
     """otp for one message by index."""
     msg_id = _resolve_message_id(service, index, count, query, account=account)
     raw, internal_ms = _otp_raw(service, msg_id)
     result, _ = _otp_extract(raw)
+    account = _otp_account(service, account)
     sys.exit(_otp_emit(result, raw, internal_ms, account, copy_clip))
 
 
@@ -4747,6 +4759,7 @@ def do_otp_add(service, index, count, query, account=None):
     msg_id = _resolve_message_id(service, index, count, query, account=account)
     raw, _ = _otp_raw(service, msg_id)
     result, subject = _otp_extract(raw)
+    account = _otp_account(service, account)
     print(f"From: {_otp_sender(raw)}\nSubject: {subject}", file=sys.stderr)
     if result.code:
         guess = f"extractor says {result.code} ({result.rule})"
