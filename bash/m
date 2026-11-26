@@ -391,6 +391,12 @@ _queryfile_run() {
     echo "queries (${#queries[@]}):"
     for q in "${queries[@]}"; do echo "  $q"; done
     echo "accounts (${#accts[@]}): ${accts[*]}"
+    # A count equal to the page size is a floor, not a total: show N+.
+    local cap="$M_PAGE_SIZE" capped="" i
+    for (( i=0; i<${#extra[@]}; i++ )); do
+        [[ "${extra[$i]}" == -n || "${extra[$i]}" == --count ]] \
+            && [[ "${extra[$((i+1))]:-}" =~ ^[0-9]+$ ]] && cap="${extra[$((i+1))]}"
+    done
     declare -A hits=()
     for a in "${accts[@]}"; do
         echo
@@ -398,6 +404,7 @@ _queryfile_run() {
         for q in "${queries[@]}"; do
             out="$("$m_bin" "$a" q "$q" ${extra[@]+"${extra[@]}"} 2>&1)" || true
             n=$(printf '%s\n' "$out" | grep -cE '^ *[0-9]+\.' || true)
+            (( n >= cap )) && { n="$n+"; capped=1; }
             hits["$a|$q"]=$n
             echo "== $a: $q  ($n shown)"
             printf '%s\n' "$out" | { grep -vE '^ *\(.*shown\)$|^No messages found\.$' || true; } | sed '/^$/d'
@@ -413,11 +420,13 @@ _queryfile_run() {
     for q in "${queries[@]}"; do
         printf "%-${w}.${w}s" "$q"
         for a in "${accts[@]}"; do
-            n=${hits["$a|$q"]}; (( n == 0 )) && n=.
+            n=${hits["$a|$q"]}; [[ "$n" == 0 ]] && n=.
             printf " %5s" "$n"
         done
         echo
     done
+    [[ -n "$capped" ]] && echo "N+ = a full page of $cap; rerun with -n 50 for more."
+    return 0
 }
 
 # ========================================================================
