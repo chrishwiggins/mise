@@ -146,7 +146,7 @@ Arguments:
 === PARSING RULES ===
 - Extract anything that looks like an event with a time
 - Use ISO dates (YYYY-MM-DD) for reliability
-- If no year specified, assume current year
+- If no year specified, use the nearest such date (in late November, "Jan 5" means next January)
 - If no date specified, assume TODAY
 - If no duration specified, assume 60 minutes
 - Preserve speaker names and details in titles

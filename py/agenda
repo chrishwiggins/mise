@@ -84,13 +84,22 @@ def parse_date(date_str):
         except ValueError:
             continue
 
-    # Try without year (use current year)
+    # Try without year: use the nearest occurrence, so "Jan 5" written
+    # in late November means next January, not last January.
     for fmt in year_optional_formats:
         try:
             parsed_date = datetime.strptime(date_str, fmt)
-            return parsed_date.replace(year=datetime.now().year).date()
         except ValueError:
             continue
+        today = datetime.now().date()
+        candidates = []
+        for y in (today.year - 1, today.year, today.year + 1):
+            try:
+                candidates.append(parsed_date.replace(year=y).date())
+            except ValueError:
+                pass
+        if candidates:
+            return min(candidates, key=lambda d: abs((d - today).days))
 
     # Handle typos in year (e.g., 245 instead of 2025, 2005 instead of 2025)
     # Check if it looks like m/d/yyy or m-d-yyy pattern
@@ -260,9 +269,9 @@ Date formats supported:
   - 24/09/2025 (day/month/year)
   - September 24, 2025
   - Sep 24, 2025
-  - 09/24 or 9/24 (current year assumed)
-  - Sep 24 (current year assumed)
-  
+  - 09/24 or 9/24 (nearest such date)
+  - Sep 24 (nearest such date)
+
 Examples:
   agenda today
   agenda tomorrow
