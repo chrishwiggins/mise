@@ -34,6 +34,13 @@ CASES = [
     ("Attaching the budget spreadsheet now.", True),
     ("The signed form is enclosed.", True),
     ("My report is attached.", True),
+    # Figurative "attach X to Y", caught 2026-11-26 on a correction note.
+    ("attached the zero margin to the wrong rule.", False),
+    ("I attached too much weight to that estimate.", False),
+    # ...but attaching a file to a message is still a promise.
+    ("I attached the PDF to the email.", True),
+    ("I have attached the budget to this message.", True),
+    ("Attached to this note is the signed form.", True),
 ]
 
 

@@ -141,11 +141,35 @@ OTHERS_ATTACHMENT = re.compile(
     r"|\battach(ed|ment|ments)?\b[^.\n]{0,40}\b(you|she|he|they)\s+sent\b",
     re.I)
 
+# "Attach X to Y" is figurative unless Y is the message itself. Caught
+# 2026-11-26: "I attached the zero margin to the wrong rule" warned on a
+# correction note that never promised a file. "attached the PDF to the email"
+# still warns, because its target is a mail noun.
+FIGURATIVE_ATTACH = re.compile(
+    r"\battach(ed|es|ing)?\s+(\w+\s+){1,4}?to\s+"
+    r"(the|a|an|this|that|my|his|her|its|our|their)\s+(\w+\s+)?(\w+)",
+    re.I)
+MAIL_NOUNS = {"email", "e-mail", "message", "note", "mail", "invite",
+              "invitation", "thread", "reply", "letter"}
+
+
+def figurative_only(line: str) -> bool:
+    """True when every attach-word on the line is 'attach X to <non-mail noun>'."""
+    m = FIGURATIVE_ATTACH.search(line)
+    if not m:
+        return False
+    nouns = {(m.group(4) or "").strip().lower(), m.group(5).lower()}
+    if nouns & MAIL_NOUNS:
+        return False
+    rest = line[:m.start()] + line[m.end():]
+    return not PROMISE_WORDS.search(rest)
+
 
 def promises_attachment(text: str) -> bool:
     """True only where the writer says THEY are attaching something."""
     for line in text.splitlines():
-        if PROMISE_WORDS.search(line) and not OTHERS_ATTACHMENT.search(line):
+        if (PROMISE_WORDS.search(line) and not OTHERS_ATTACHMENT.search(line)
+                and not figurative_only(line)):
             return True
     return False
 
